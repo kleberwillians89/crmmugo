@@ -1,5 +1,6 @@
 import { ArrowUpRight, Award, BarChart3, CalendarDays, Clock3, FileText, Users } from 'lucide-react'
 import { useState } from 'react'
+import { MetricCard } from './MetricCard'
 
 function formatCurrency(value) {
   const number = Number(value)
@@ -57,11 +58,22 @@ export function Dashboard({ proposals }) {
     }
   }
   const totalCount = proposals.length
-  const closedProposals = proposals.filter((item) => item.proposal_status === 'Fechada')
+  const totalSentProposals = proposals.filter((item) => item)
+  const closedProposals = proposals.filter((item) =>
+    ['Fechada', 'Aprovado', 'Contrato assinado', 'Projeto iniciado'].includes(item.proposal_status),
+  )
   const lostProposals = proposals.filter((item) => item.proposal_status === 'Perdida')
-  const signedContracts = proposals.filter((item) => item.contract_signed).length
+  const recurringProposals = proposals.filter((item) => Number(item.monthly_value) > 0)
+  const signedContracts = proposals.filter(
+    (item) => item.contract_signed === true || item.contract_signed === 'Sim' || item.contract_signed === 'sim',
+  ).length
   const pendingContracts = proposals.filter(
-    (item) => !item.contract_signed && item.proposal_status !== 'Perdida',
+    (item) =>
+      item.contract_signed === false ||
+      item.contract_signed === '' ||
+      item.contract_signed === 'Não' ||
+      item.contract_signed === 'nao' ||
+      item.contract_signed === 'não',
   ).length
 
   const totalSent = proposals.reduce(
@@ -80,8 +92,8 @@ export function Dashboard({ proposals }) {
   const averageTicket = closedProposals.length
     ? totalClosed / closedProposals.length
     : 0
-  const monthlyRecurring = proposals.reduce(
-    (sum, item) => sum + (item.proposal_status === 'Fechada' ? Number(item.monthly_value) || 0 : 0),
+  const monthlyRecurring = recurringProposals.reduce(
+    (sum, item) => sum + (Number(item.monthly_value) || 0),
     0,
   )
 
@@ -124,27 +136,40 @@ export function Dashboard({ proposals }) {
       </div>
 
       <div className="cards-grid">
-        <article className="card card-highlight">
-          <div>
-            <span>Total enviado</span>
-            <strong>{formatCurrency(totalSent)}</strong>
-          </div>
-          <FileText size={20} />
-        </article>
-        <article className="card">
-          <div>
-            <span>Fechadas</span>
-            <strong>{formatCurrency(totalClosed)}</strong>
-          </div>
-          <Award size={20} />
-        </article>
-        <article className="card">
-          <div>
-            <span>Perdidas</span>
-            <strong>{formatCurrency(totalLost)}</strong>
-          </div>
-          <Clock3 size={20} />
-        </article>
+        <MetricCard
+          title="Total enviado"
+          value={formatCurrency(totalSent)}
+          icon={FileText}
+          items={totalSentProposals.map((item) => ({
+            ...item,
+            status: item.proposal_status,
+            value: Number(item.setup_value) + Number(item.monthly_value),
+          }))}
+          itemValueKey="value"
+          highlight
+        />
+        <MetricCard
+          title="Fechadas"
+          value={formatCurrency(totalClosed)}
+          icon={Award}
+          items={closedProposals.map((item) => ({
+            ...item,
+            status: item.proposal_status,
+            value: Number(item.setup_value) + Number(item.monthly_value),
+          }))}
+          itemValueKey="value"
+        />
+        <MetricCard
+          title="Perdidas"
+          value={formatCurrency(totalLost)}
+          icon={Clock3}
+          items={lostProposals.map((item) => ({
+            ...item,
+            status: item.proposal_status,
+            value: Number(item.setup_value) + Number(item.monthly_value),
+          }))}
+          itemValueKey="value"
+        />
         <article className="card">
           <div>
             <span>Conversão</span>
@@ -159,27 +184,54 @@ export function Dashboard({ proposals }) {
           </div>
           <ArrowUpRight size={20} />
         </article>
-        <article className="card">
-          <div>
-            <span>Receita recorrente</span>
-            <strong>{formatCurrency(monthlyRecurring)}</strong>
-          </div>
-          <Users size={20} />
-        </article>
-        <article className="card">
-          <div>
-            <span>Contratos assinados</span>
-            <strong>{signedContracts}</strong>
-          </div>
-          <Award size={20} />
-        </article>
-        <article className="card">
-          <div>
-            <span>Contratos pendentes</span>
-            <strong>{pendingContracts}</strong>
-          </div>
-          <CalendarDays size={20} />
-        </article>
+        <MetricCard
+          title="Receita recorrente"
+          value={formatCurrency(monthlyRecurring)}
+          icon={Users}
+          items={recurringProposals.map((item) => ({
+            ...item,
+            status: item.proposal_status,
+            value: Number(item.monthly_value),
+          }))}
+          itemValueKey="value"
+        />
+        <MetricCard
+          title="Contratos assinados"
+          value={signedContracts}
+          icon={Award}
+          items={proposals
+            .filter((item) =>
+              item.contract_signed === true ||
+              item.contract_signed === 'Sim' ||
+              item.contract_signed === 'sim',
+            )
+            .map((item) => ({
+              ...item,
+              status: item.proposal_status,
+              value: Number(item.monthly_value) || 0,
+            }))}
+          itemValueKey="value"
+        />
+        <MetricCard
+          title="Contratos pendentes"
+          value={pendingContracts}
+          icon={CalendarDays}
+          items={proposals
+            .filter(
+              (item) =>
+                item.contract_signed === false ||
+                item.contract_signed === '' ||
+                item.contract_signed === 'Não' ||
+                item.contract_signed === 'nao' ||
+                item.contract_signed === 'não',
+            )
+            .map((item) => ({
+              ...item,
+              status: item.proposal_status,
+              value: Number(item.monthly_value) || 0,
+            }))}
+          itemValueKey="value"
+        />
       </div>
 
       <section className="dashboard-grid">

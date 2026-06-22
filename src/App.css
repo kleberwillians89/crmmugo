@@ -201,7 +201,8 @@ img {
 
 .card span,
 .contract-card span,
-.stat-list li span {
+.stat-list li span,
+.metric-card span {
   display: block;
   color: var(--muted);
   font-size: 0.95rem;
@@ -209,10 +210,117 @@ img {
 
 .card strong,
 .contract-card strong,
-.stat-list li strong {
+.stat-list li strong,
+.metric-card strong {
   display: block;
   margin-top: 8px;
   font-size: 1.45rem;
+}
+
+.metric-card {
+  position: relative;
+  padding: 22px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(0, 79, 110, 0.25);
+}
+
+.metric-card-highlight {
+  background: #f4f6f8;
+}
+
+.metric-card-tooltip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -12px;
+  transform: translateY(100%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid rgba(0, 79, 110, 0.12);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+  border-radius: 18px;
+  padding: 16px;
+  min-width: 280px;
+  z-index: 10;
+  transition: opacity 0.2s ease, visibility 0.2s ease, transform 0.2s ease;
+}
+
+.metric-card:hover .metric-card-tooltip {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(108%);
+}
+
+.metric-card-tooltip-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  gap: 12px;
+}
+
+.metric-card-tooltip-header strong {
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.metric-card-tooltip-header span {
+  color: var(--blue);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.metric-card-tooltip-list {
+  display: grid;
+  gap: 12px;
+}
+
+.metric-card-tooltip-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--surface-strong);
+}
+
+.metric-card-tooltip-item strong {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.metric-card-tooltip-item span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.metric-card-tooltip-item div:last-child {
+  text-align: right;
+  display: grid;
+  gap: 4px;
+}
+
+.metric-card-tooltip-excess,
+.metric-card-tooltip-empty {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.95rem;
+  text-align: center;
 }
 
 .dashboard-grid {
