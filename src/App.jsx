@@ -117,13 +117,21 @@ export default function App() {
       }
 
       if (editId) {
-        const data = await updateProposal(editId, record)
-        setProposals((current) => current.map((item) => (item.id === editId ? data : item)))
-        setMessage('Proposta atualizada com sucesso.')
+        const res = await updateProposal(editId, record)
+        if (res && res.success) {
+          setMessage('Proposta atualizada com sucesso.')
+          await loadProposals()
+        } else {
+          throw new Error('Falha ao atualizar')
+        }
       } else {
-        const data = await createProposal(record)
-        setProposals((current) => [data, ...current])
-        setMessage('Proposta criada com sucesso.')
+        const res = await createProposal(record)
+        if (res && res.success) {
+          setMessage('Proposta criada com sucesso.')
+          await loadProposals()
+        } else {
+          throw new Error('Falha ao criar')
+        }
       }
 
       resetForm()
@@ -169,8 +177,12 @@ export default function App() {
     setErrorMessage('')
 
     try {
-      const data = await updateProposal(id, { [field]: value })
-      setProposals((current) => current.map((item) => (item.id === id ? data : item)))
+      const res = await updateProposal(id, { [field]: value })
+      if (res && res.success) {
+        await loadProposals()
+      } else {
+        throw new Error('Falha ao atualizar')
+      }
     } catch (error) {
       console.error(error)
       setErrorMessage('Erro ao atualizar o registro.')
