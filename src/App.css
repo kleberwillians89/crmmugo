@@ -171,6 +171,7 @@ img {
   gap: 18px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-bottom: 24px;
+  overflow: visible;
 }
 
 .card,
@@ -179,7 +180,8 @@ img {
 .dashboard-panel,
 .proposal-form,
 .proposal-table-page,
-.contracts-page {
+.contracts-page,
+.metric-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -228,12 +230,13 @@ img {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  transition: transform 0.2s ease, border-color 0.2s ease;
+  transition: transform 0.2s ease, border-color 0.2s ease, z-index 0.2s ease;
 }
 
 .metric-card:hover {
   transform: translateY(-2px);
   border-color: rgba(0, 79, 110, 0.25);
+  z-index: 10000;
 }
 
 .metric-card-highlight {
@@ -255,7 +258,7 @@ img {
   border-radius: 18px;
   padding: 16px;
   min-width: 280px;
-  z-index: 10;
+  z-index: 9999;
   transition: opacity 0.2s ease, visibility 0.2s ease, transform 0.2s ease;
 }
 

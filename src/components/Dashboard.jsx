@@ -63,18 +63,31 @@ export function Dashboard({ proposals }) {
     ['Fechada', 'Aprovado', 'Contrato assinado', 'Projeto iniciado'].includes(item.proposal_status),
   )
   const lostProposals = proposals.filter((item) => item.proposal_status === 'Perdida')
-  const recurringProposals = proposals.filter((item) => Number(item.monthly_value) > 0)
   const signedContracts = proposals.filter(
-    (item) => item.contract_signed === true || item.contract_signed === 'Sim' || item.contract_signed === 'sim',
+    (item) =>
+      item.contract_signed === true ||
+      item.contract_signed === 'Sim' ||
+      item.contract_signed === 'sim' ||
+      item.contract_signed === 'SIM',
   ).length
   const pendingContracts = proposals.filter(
     (item) =>
-      item.contract_signed === false ||
-      item.contract_signed === '' ||
-      item.contract_signed === 'Não' ||
-      item.contract_signed === 'nao' ||
-      item.contract_signed === 'não',
+      item.proposal_status !== 'Perdida' &&
+      (item.contract_signed === false ||
+        item.contract_signed === '' ||
+        item.contract_signed === 'Não' ||
+        item.contract_signed === 'nao' ||
+        item.contract_signed === 'NÃO'),
   ).length
+  const recurringProposals = proposals.filter(
+    (item) =>
+      Number(item.monthly_value) > 0 &&
+      (item.contract_signed === true ||
+        item.contract_signed === 'Sim' ||
+        item.contract_signed === 'sim' ||
+        item.contract_signed === 'SIM') &&
+      ['Fechada', 'Aprovado', 'Contrato assinado', 'Projeto iniciado'].includes(item.proposal_status),
+  )
 
   const totalSent = proposals.reduce(
     (sum, item) => sum + (Number(item.setup_value) || 0) + (Number(item.monthly_value) || 0),
@@ -200,10 +213,12 @@ export function Dashboard({ proposals }) {
           value={signedContracts}
           icon={Award}
           items={proposals
-            .filter((item) =>
-              item.contract_signed === true ||
-              item.contract_signed === 'Sim' ||
-              item.contract_signed === 'sim',
+            .filter(
+              (item) =>
+                item.contract_signed === true ||
+                item.contract_signed === 'Sim' ||
+                item.contract_signed === 'sim' ||
+                item.contract_signed === 'SIM',
             )
             .map((item) => ({
               ...item,
@@ -219,11 +234,12 @@ export function Dashboard({ proposals }) {
           items={proposals
             .filter(
               (item) =>
-                item.contract_signed === false ||
-                item.contract_signed === '' ||
-                item.contract_signed === 'Não' ||
-                item.contract_signed === 'nao' ||
-                item.contract_signed === 'não',
+                item.proposal_status !== 'Perdida' &&
+                (item.contract_signed === false ||
+                  item.contract_signed === '' ||
+                  item.contract_signed === 'Não' ||
+                  item.contract_signed === 'nao' ||
+                  item.contract_signed === 'NÃO'),
             )
             .map((item) => ({
               ...item,
