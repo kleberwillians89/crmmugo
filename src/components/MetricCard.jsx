@@ -8,12 +8,12 @@ function formatCurrency(value) {
   }).format(number)
 }
 
-export function MetricCard({ title, value, icon: Icon, items = [], itemValueKey, highlight = false }) {
+export function MetricCard({ title, value, icon: Icon, items = [], itemValueKey, tone = 'neutral' }) {
   const visibleItems = items.slice(0, 8)
   const extraCount = items.length - visibleItems.length
 
   return (
-    <article className={`metric-card${highlight ? ' metric-card-highlight' : ''}`}>
+    <article className={`metric-card metric-card-${tone}`}>
       <div>
         <span>{title}</span>
         <strong>{value}</strong>
@@ -30,10 +30,10 @@ export function MetricCard({ title, value, icon: Icon, items = [], itemValueKey,
               <div key={item.id ?? item.client_name} className="metric-card-tooltip-item">
                 <div>
                   <strong>{item.client_name || 'Sem cliente'}</strong>
-                  <span>{item.main_service || '-'}</span>
+                  <span>{item.main_service || 'Serviço não informado'}</span>
                 </div>
                 <div>
-                  <span>{item.status || '-'}</span>
+                  <span>{item.status || 'Sem status'}</span>
                   {itemValueKey ? (
                     <strong>{formatCurrency(item[itemValueKey])}</strong>
                   ) : null}

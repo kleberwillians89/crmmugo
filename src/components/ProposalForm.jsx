@@ -1,11 +1,11 @@
-export const responsibilities = ['Kleber', 'Julia', 'Danilo']
-export const proposalStatuses = [
+const responsibilities = ['Kleber', 'Julia', 'Danilo']
+const proposalStatuses = [
   'Proposta enviada',
   'Em negociação',
   'Fechada',
   'Perdida',
 ]
-export const contractTerms = ['Sem contrato', '3 meses', '6 meses', '12 meses', 'Indeterminado']
+const contractTerms = ['Sem contrato', '3 meses', '6 meses', '12 meses', 'Indeterminado']
 
 export function ProposalForm({
   form,
@@ -18,18 +18,14 @@ export function ProposalForm({
 }) {
   return (
     <div className="proposal-form-page">
-      <div className="page-header">
-        <div>
-          <p className="eyebrow">Nova Proposta</p>
-          <h1>Cadastrar proposta</h1>
-          <p className="page-description">
-            Preencha os dados do cliente e envie a proposta para o painel comercial.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow={editMode ? 'Editar proposta' : 'Nova proposta'}
+        title={editMode ? 'Atualizar proposta' : 'Cadastrar proposta'}
+        description="Preencha os dados do cliente e envie a proposta para o painel comercial."
+      />
 
-      {message && <div className="toast success">{message}</div>}
-      {errors && <div className="toast error">{errors}</div>}
+      {message && <FeedbackMessage>{message}</FeedbackMessage>}
+      {errors && <FeedbackMessage type="error">{errors}</FeedbackMessage>}
 
       <form className="proposal-form" onSubmit={onSubmit}>
         <div className="form-grid">
@@ -175,3 +171,5 @@ export function ProposalForm({
     </div>
   )
 }
+import { FeedbackMessage } from './FeedbackMessage'
+import { PageHeader } from './PageHeader'

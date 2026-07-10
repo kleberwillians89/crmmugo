@@ -1,6 +1,8 @@
-import { ArrowUpRight, Award, BarChart3, CalendarDays, Clock3, FileText, Users } from 'lucide-react'
+import { ArrowUpRight, Award, BarChart3, CalendarDays, Clock3, FileText, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { MetricCard } from './MetricCard'
+import { PageHeader } from './PageHeader'
+import { FeedbackMessage } from './FeedbackMessage'
 
 function formatCurrency(value) {
   const number = Number(value)
@@ -12,18 +14,47 @@ function formatCurrency(value) {
   }).format(number)
 }
 
+function safeNumber(value) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : 0
+}
+
 function formatDate(value) {
-  if (!value) return '-'
-  return new Date(value).toLocaleDateString('pt-BR', {
+  if (!value) return 'Não informada'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Não informada'
+  return date.toLocaleDateString('pt-BR', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
   })
 }
 
+function RankingBars({ items, emptyMessage }) {
+  const maximum = Math.max(...items.map(([, count]) => count), 0)
+
+  if (!items.length) return <div className="panel-empty">{emptyMessage}</div>
+
+  return (
+    <ol className="ranking-bars">
+      {items.map(([label, count]) => (
+        <li key={label}>
+          <div className="ranking-label">
+            <span title={label}>{label}</span>
+            <strong>{count}</strong>
+          </div>
+          <div className="ranking-track" aria-label={`${label}: ${count}`}>
+            <span style={{ width: `${maximum ? (count / maximum) * 100 : 0}%` }} />
+          </div>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
 function countBy(list, field) {
   return list.reduce((acc, item) => {
-    const key = item[field] || 'Sem categoria'
+    const key = item[field] || (field === 'responsible' ? 'Não informado' : 'Serviço não informado')
     acc[key] = (acc[key] || 0) + 1
     return acc
   }, {})
@@ -90,15 +121,15 @@ export function Dashboard({ proposals }) {
   )
 
   const totalSent = proposals.reduce(
-    (sum, item) => sum + (Number(item.setup_value) || 0) + (Number(item.monthly_value) || 0),
+    (sum, item) => sum + safeNumber(item.setup_value) + safeNumber(item.monthly_value),
     0,
   )
   const totalClosed = closedProposals.reduce(
-    (sum, item) => sum + (Number(item.setup_value) || 0) + (Number(item.monthly_value) || 0),
+    (sum, item) => sum + safeNumber(item.setup_value) + safeNumber(item.monthly_value),
     0,
   )
   const totalLost = lostProposals.reduce(
-    (sum, item) => sum + (Number(item.setup_value) || 0) + (Number(item.monthly_value) || 0),
+    (sum, item) => sum + safeNumber(item.setup_value) + safeNumber(item.monthly_value),
     0,
   )
   const conversionRate = totalCount ? Math.round((closedProposals.length / totalCount) * 100) : 0
@@ -106,7 +137,7 @@ export function Dashboard({ proposals }) {
     ? totalClosed / closedProposals.length
     : 0
   const monthlyRecurring = recurringProposals.reduce(
-    (sum, item) => sum + (Number(item.monthly_value) || 0),
+    (sum, item) => sum + safeNumber(item.monthly_value),
     0,
   )
 
@@ -132,23 +163,34 @@ export function Dashboard({ proposals }) {
 
   return (
     <div className="dashboard-page">
-      <div className="page-header">
-        <div>
-          <p className="eyebrow">Dashboard</p>
-          <h1>Visão comercial Mugô</h1>
-          <p className="page-description">
-            Acompanhe as propostas, status de contratos e resultados comerciais.
-          </p>
-        </div>
-        <div>
+      <PageHeader
+        eyebrow="Visão geral"
+        title="Visão comercial Mugô"
+        description="Acompanhe as propostas, status de contratos e resultados comerciais."
+        actions={
+          <div className="connection-action">
           <button type="button" className="button small" onClick={testConnection}>
             Testar Conexão
           </button>
-          <div style={{ marginTop: 8, color: '#334155' }}>{connStatus}</div>
-        </div>
-      </div>
+          {connStatus && <FeedbackMessage type={connStatus.startsWith('❌') ? 'error' : 'success'}>{connStatus}</FeedbackMessage>}
+          </div>
+        }
+      />
 
-      <div className="cards-grid">
+      <section className="revenue-hero" aria-labelledby="recurring-revenue-title">
+        <div className="revenue-hero-copy">
+          <span className="revenue-label" id="recurring-revenue-title">Receita recorrente mensal</span>
+          <strong>{formatCurrency(monthlyRecurring)}</strong>
+          <p>Receita mensal de propostas fechadas com contrato assinado.</p>
+        </div>
+        <div className="revenue-hero-meta">
+          <div className="revenue-icon"><RefreshCw size={20} aria-hidden="true" /></div>
+          <span>{recurringProposals.length}</span>
+          <small>{recurringProposals.length === 1 ? 'contrato recorrente' : 'contratos recorrentes'}</small>
+        </div>
+      </section>
+
+      <div className="cards-grid dashboard-kpis">
         <MetricCard
           title="Total enviado"
           value={formatCurrency(totalSent)}
@@ -156,10 +198,10 @@ export function Dashboard({ proposals }) {
           items={totalSentProposals.map((item) => ({
             ...item,
             status: item.proposal_status,
-            value: Number(item.setup_value) + Number(item.monthly_value),
+            value: safeNumber(item.setup_value) + safeNumber(item.monthly_value),
           }))}
           itemValueKey="value"
-          highlight
+          tone="brand"
         />
         <MetricCard
           title="Fechadas"
@@ -168,7 +210,7 @@ export function Dashboard({ proposals }) {
           items={closedProposals.map((item) => ({
             ...item,
             status: item.proposal_status,
-            value: Number(item.setup_value) + Number(item.monthly_value),
+            value: safeNumber(item.setup_value) + safeNumber(item.monthly_value),
           }))}
           itemValueKey="value"
         />
@@ -179,9 +221,10 @@ export function Dashboard({ proposals }) {
           items={lostProposals.map((item) => ({
             ...item,
             status: item.proposal_status,
-            value: Number(item.setup_value) + Number(item.monthly_value),
+            value: safeNumber(item.setup_value) + safeNumber(item.monthly_value),
           }))}
           itemValueKey="value"
+          tone="danger"
         />
         <article className="card">
           <div>
@@ -198,17 +241,6 @@ export function Dashboard({ proposals }) {
           <ArrowUpRight size={20} />
         </article>
         <MetricCard
-          title="Receita recorrente"
-          value={formatCurrency(monthlyRecurring)}
-          icon={Users}
-          items={recurringProposals.map((item) => ({
-            ...item,
-            status: item.proposal_status,
-            value: Number(item.monthly_value),
-          }))}
-          itemValueKey="value"
-        />
-        <MetricCard
           title="Contratos assinados"
           value={signedContracts}
           icon={Award}
@@ -223,7 +255,7 @@ export function Dashboard({ proposals }) {
             .map((item) => ({
               ...item,
               status: item.proposal_status,
-              value: Number(item.monthly_value) || 0,
+              value: safeNumber(item.monthly_value),
             }))}
           itemValueKey="value"
         />
@@ -244,7 +276,7 @@ export function Dashboard({ proposals }) {
             .map((item) => ({
               ...item,
               status: item.proposal_status,
-              value: Number(item.monthly_value) || 0,
+              value: safeNumber(item.monthly_value),
             }))}
           itemValueKey="value"
         />
@@ -255,30 +287,14 @@ export function Dashboard({ proposals }) {
           <div className="panel-header">
             <h2>Serviços mais vendidos</h2>
           </div>
-          <ul className="stat-list">
-            {serviceList.map(([service, count]) => (
-              <li key={service}>
-                <span>{service}</span>
-                <strong>{count}x</strong>
-              </li>
-            ))}
-            {!serviceList.length && <li className="empty-state">Nenhuma proposta registrada.</li>}
-          </ul>
+          <RankingBars items={serviceList} emptyMessage="Nenhuma proposta registrada." />
         </div>
 
         <div className="dashboard-panel">
           <div className="panel-header">
             <h2>Responsáveis</h2>
           </div>
-          <ul className="stat-list">
-            {responsibleList.map(([responsible, count]) => (
-              <li key={responsible}>
-                <span>{responsible}</span>
-                <strong>{count}x</strong>
-              </li>
-            ))}
-            {!responsibleList.length && <li className="empty-state">Nenhum responsável selecionado.</li>}
-          </ul>
+          <RankingBars items={responsibleList} emptyMessage="Nenhum responsável selecionado." />
         </div>
       </section>
 
@@ -300,9 +316,9 @@ export function Dashboard({ proposals }) {
               <tbody>
                 {recentProposals.map((proposal) => (
                   <tr key={proposal.id}>
-                    <td>{proposal.client_name}</td>
-                    <td>{proposal.proposal_status}</td>
-                    <td>{proposal.responsible}</td>
+                    <td>{proposal.client_name || 'Cliente não informado'}</td>
+                    <td>{proposal.proposal_status || 'Sem status'}</td>
+                    <td>{proposal.responsible || 'Não informado'}</td>
                     <td>{formatDate(proposal.proposal_sent_date)}</td>
                   </tr>
                 ))}
@@ -333,8 +349,8 @@ export function Dashboard({ proposals }) {
               <tbody>
                 {expiringContracts.map((proposal) => (
                   <tr key={proposal.id}>
-                    <td>{proposal.client_name}</td>
-                    <td>{proposal.contract_term}</td>
+                    <td>{proposal.client_name || 'Cliente não informado'}</td>
+                    <td>{proposal.contract_term || 'Não informado'}</td>
                     <td>{formatDate(proposal.contract_end_date)}</td>
                     <td>{proposal.contract_signed ? 'Sim' : 'Não'}</td>
                   </tr>

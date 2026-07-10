@@ -19,7 +19,7 @@ export async function getProposals() {
   try {
     response = await fetch(API_URL, { method: 'GET' })
   } catch (err) {
-    throw new Error('Falha de conexão: ' + (err.message || err))
+    throw new Error('Falha de conexão: ' + (err.message || err), { cause: err })
   }
 
   if (!response.ok) {
@@ -31,7 +31,7 @@ export async function getProposals() {
   try {
     data = await response.json()
   } catch (err) {
-    throw new Error('Resposta inválida da API: não é JSON')
+    throw new Error('Resposta inválida da API: não é JSON', { cause: err })
   }
 
   return Array.isArray(data.data) ? data.data : []

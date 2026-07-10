@@ -1,108 +1,66 @@
-export function ProposalTable({ proposals, onEdit, onQuickUpdate, loading }) {
-  return (
-    <div className="proposal-table-page">
-      <div className="page-header">
-        <div>
-          <p className="eyebrow">Propostas</p>
-          <h1>Gerenciar propostas</h1>
-          <p className="page-description">Veja as propostas e atualize o status diretamente na tabela.</p>
-        </div>
-      </div>
+import { useCallback, useMemo, useState } from 'react'
+import { Columns3, List, Plus } from 'lucide-react'
+import { PageHeader } from './PageHeader'
+import { ProposalDetailsPanel } from './ProposalDetailsPanel'
+import { ProposalListView } from './ProposalListView'
+import { ProposalPipelineView } from './ProposalPipelineView'
+import { ProposalsSummary } from './ProposalsSummary'
+import { ProposalsToolbar } from './ProposalsToolbar'
 
-      <div className="table-scroll">
-        <table className="proposal-table">
-          <thead>
-            <tr>
-              <th>Cliente</th>
-              <th>Empresa</th>
-              <th>Serviço</th>
-              <th>Implantação</th>
-              <th>Mensal</th>
-              <th>Status</th>
-              <th>Contrato</th>
-              <th>Prazo</th>
-              <th>Responsável</th>
-              <th>Envio</th>
-              <th>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {proposals.map((proposal) => (
-              <tr key={proposal.id}>
-                <td>{proposal.client_name}</td>
-                <td>{proposal.company || '-'}</td>
-                <td>{proposal.main_service}</td>
-                <td>R$ {Number(proposal.setup_value || 0).toFixed(2)}</td>
-                <td>R$ {Number(proposal.monthly_value || 0).toFixed(2)}</td>
-                <td>
-                  <select
-                    value={proposal.proposal_status}
-                    onChange={(event) => onQuickUpdate(proposal.id, 'proposal_status', event.target.value)}
-                  >
-                    <option>Proposta enviada</option>
-                    <option>Em negociação</option>
-                    <option>Fechada</option>
-                    <option>Perdida</option>
-                  </select>
-                </td>
-                <td>
-                  <select
-                    value={proposal.contract_signed ? 'true' : 'false'}
-                    onChange={(event) =>
-                      onQuickUpdate(proposal.id, 'contract_signed', event.target.value === 'true')
-                    }
-                  >
-                    <option value="true">Sim</option>
-                    <option value="false">Não</option>
-                  </select>
-                </td>
-                <td>
-                  <select
-                    value={proposal.contract_term || 'Sem contrato'}
-                    onChange={(event) => onQuickUpdate(proposal.id, 'contract_term', event.target.value)}
-                  >
-                    <option>Sem contrato</option>
-                    <option>3 meses</option>
-                    <option>6 meses</option>
-                    <option>12 meses</option>
-                    <option>Indeterminado</option>
-                  </select>
-                </td>
-                <td>{proposal.responsible}</td>
-                <td>{proposal.proposal_sent_date || '-'}</td>
-                <td className="table-actions">
-                  <button type="button" className="button small" onClick={() => onEdit(proposal)}>
-                    Editar
-                  </button>
-                  <a
-                    className={proposal.proposal_file_url ? 'button small secondary' : 'button small secondary disabled'}
-                    href={proposal.proposal_file_url || '#'}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Ver proposta
-                  </a>
-                  <a
-                    className={proposal.contract_file_url ? 'button small secondary' : 'button small secondary disabled'}
-                    href={proposal.contract_file_url || '#'}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Ver contrato
-                  </a>
-                </td>
-              </tr>
-            ))}
-            {!proposals.length && (
-              <tr>
-                <td colSpan="11" className="empty-state">
-                  Nenhuma proposta cadastrada ainda.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
+const initialFilters = { search: '', status: '', responsible: '', service: '', signed: '', term: '', sort: 'recent' }
+const valueOf = (item) => (Number(item.setup_value) || 0) + (Number(item.monthly_value) || 0)
+const normalized = (value) => (value || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+const unique = (list) => [...new Set(list.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+
+function signedState(value) {
+  if (value === true || ['Sim', 'sim', 'SIM'].includes(value)) return 'signed'
+  if (value === false || value === '' || ['Não', 'nao', 'NÃO'].includes(value)) return 'pending'
+  return 'unknown'
+}
+
+export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading }) {
+  const [view, setView] = useState(() => localStorage.getItem('mugo-proposals-view') || 'list')
+  const [filters, setFilters] = useState(initialFilters)
+  const [selected, setSelected] = useState(null)
+
+  const setFilter = useCallback((field, value) => setFilters((current) => ({ ...current, [field]: value })), [])
+  const changeView = (next) => { setView(next); localStorage.setItem('mugo-proposals-view', next) }
+  const options = useMemo(() => ({
+    statuses: unique(proposals.map((item) => item.proposal_status)),
+    responsibles: unique(proposals.map((item) => item.responsible)),
+    services: unique(proposals.map((item) => item.main_service)),
+    terms: unique(proposals.map((item) => item.contract_term)),
+  }), [proposals])
+
+  const filtered = useMemo(() => {
+    const search = normalized(filters.search)
+    const result = proposals.filter((item) => {
+      const searchable = [item.client_name, item.company, item.main_service, item.responsible, item.email, item.phone].map(normalized).join(' ')
+      return (!search || searchable.includes(search)) && (!filters.status || item.proposal_status === filters.status) && (!filters.responsible || item.responsible === filters.responsible) && (!filters.service || item.main_service === filters.service) && (!filters.signed || signedState(item.contract_signed) === filters.signed) && (!filters.term || item.contract_term === filters.term)
+    })
+    return [...result].sort((a, b) => {
+      if (filters.sort === 'oldest') return new Date(a.created_at || a.proposal_sent_date || 0) - new Date(b.created_at || b.proposal_sent_date || 0)
+      if (filters.sort === 'highest') return valueOf(b) - valueOf(a)
+      if (filters.sort === 'lowest') return valueOf(a) - valueOf(b)
+      if (filters.sort === 'az') return (a.client_name || '').localeCompare(b.client_name || '', 'pt-BR')
+      if (filters.sort === 'za') return (b.client_name || '').localeCompare(a.client_name || '', 'pt-BR')
+      return new Date(b.created_at || b.proposal_sent_date || 0) - new Date(a.created_at || a.proposal_sent_date || 0)
+    })
+  }, [proposals, filters])
+
+  const metrics = useMemo(() => filtered.reduce((acc, item) => ({ count: acc.count + 1, total: acc.total + valueOf(item), monthly: acc.monthly + (Number(item.monthly_value) || 0), closed: acc.closed + (item.proposal_status === 'Fechada' ? 1 : 0), negotiating: acc.negotiating + (item.proposal_status === 'Em negociação' ? 1 : 0) }), { count: 0, total: 0, monthly: 0, closed: 0, negotiating: 0 }), [filtered])
+  const activeCount = ['search', 'status', 'responsible', 'service', 'signed', 'term'].filter((key) => filters[key]).length
+
+  const viewToggle = <div className="proposal-header-actions"><button type="button" className="button" onClick={onNew}><Plus size={15} />Nova proposta</button><div className="view-toggle" aria-label="Visualização"><button type="button" className={view === 'list' ? 'active' : ''} onClick={() => changeView('list')} aria-pressed={view === 'list'}><List size={15} />Lista</button><button type="button" className={view === 'pipeline' ? 'active' : ''} onClick={() => changeView('pipeline')} aria-pressed={view === 'pipeline'}><Columns3 size={15} />Pipeline</button></div></div>
+
+  return <div className="proposals-page" aria-busy={loading}>
+    <PageHeader eyebrow="Comercial" title="Propostas" description="Acompanhe oportunidades, negociações, fechamentos e perdas em um único lugar." actions={viewToggle} />
+    <ProposalsSummary metrics={metrics} />
+    <ProposalsToolbar filters={filters} options={options} activeCount={activeCount} onChange={setFilter} onClear={() => setFilters(initialFilters)} />
+    <section className="proposals-view" aria-live="polite">
+      <div className="results-heading"><span>{filtered.length} {filtered.length === 1 ? 'resultado' : 'resultados'}</span><small>{view === 'list' ? 'Visualização em lista' : 'Visualização em pipeline'}</small></div>
+      {view === 'list' ? <ProposalListView proposals={filtered} onEdit={onEdit} onSelect={setSelected} onNew={onNew} hasFilters={activeCount > 0} /> : <ProposalPipelineView proposals={filtered} onEdit={onEdit} onSelect={setSelected} onQuickUpdate={onQuickUpdate} />}
+    </section>
+    <ProposalDetailsPanel proposal={selected} onClose={() => setSelected(null)} onEdit={(proposal) => { setSelected(null); onEdit(proposal) }} />
+  </div>
 }

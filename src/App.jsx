@@ -5,6 +5,8 @@ import { Sidebar } from './components/Sidebar'
 import { Dashboard } from './components/Dashboard'
 import { ProposalForm } from './components/ProposalForm'
 import { ProposalTable } from './components/ProposalTable'
+import { PageHeader } from './components/PageHeader'
+import { Menu } from 'lucide-react'
 
 const initialFormState = {
   client_name: '',
@@ -40,6 +42,8 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   useEffect(() => {
     loadProposals()
@@ -194,9 +198,24 @@ export default function App() {
   const contractProposals = proposals.filter((proposal) => proposal.contract_term && proposal.contract_term !== 'Sem contrato')
 
   return (
-    <div className="app-shell">
-      <Sidebar activePage={activePage} onNavigate={handleNavigate} />
+    <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+      <Sidebar
+        activePage={activePage}
+        onNavigate={handleNavigate}
+        open={sidebarOpen}
+        collapsed={sidebarCollapsed}
+        onClose={() => setSidebarOpen(false)}
+        onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
+      />
       <main className="main-content">
+        <div className="mobile-topbar">
+          <button type="button" className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="Abrir menu">
+            <Menu size={20} />
+          </button>
+          <strong>Mugô CRM</strong>
+          <span aria-hidden="true" />
+        </div>
+        <div className="content-container">
         {activePage === 'dashboard' && <Dashboard proposals={proposals} />}
         {activePage === 'nova' && (
           <ProposalForm
@@ -215,19 +234,16 @@ export default function App() {
             onEdit={handleEdit}
             onQuickUpdate={handleQuickUpdate}
             loading={loading}
+            onNew={() => handleNavigate('nova')}
           />
         )}
         {activePage === 'contracts' && (
           <section className="contracts-page">
-            <div className="page-header">
-              <div>
-                <p className="eyebrow">Contratos</p>
-                <h1>Visão de contratos</h1>
-                <p className="page-description">
-                  Acompanhe contratos assinados e prazos de renovação.
-                </p>
-              </div>
-            </div>
+            <PageHeader
+              eyebrow="Contratos"
+              title="Visão de contratos"
+              description="Acompanhe contratos assinados e prazos de renovação."
+            />
             <div className="contracts-summary">
               <div className="contract-card">
                 <span>Contratos totais</span>
@@ -266,12 +282,12 @@ export default function App() {
                 <tbody>
                   {contractProposals.map((proposal) => (
                     <tr key={proposal.id}>
-                      <td>{proposal.client_name}</td>
-                      <td>{proposal.contract_term}</td>
-                      <td>{proposal.contract_start_date || '-'}</td>
-                      <td>{proposal.contract_end_date || '-'}</td>
+                      <td>{proposal.client_name || 'Cliente não informado'}</td>
+                      <td>{proposal.contract_term || 'Não informado'}</td>
+                      <td>{proposal.contract_start_date || 'Não informada'}</td>
+                      <td>{proposal.contract_end_date || 'Não informada'}</td>
                       <td>{proposal.contract_signed ? 'Sim' : 'Não'}</td>
-                      <td>{proposal.responsible}</td>
+                      <td>{proposal.responsible || 'Não informado'}</td>
                       <td className="table-actions">
                         <button type="button" className="button small" onClick={() => handleEdit(proposal)}>
                           Editar
@@ -291,6 +307,7 @@ export default function App() {
             </div>
           </section>
         )}
+        </div>
       </main>
     </div>
   )
