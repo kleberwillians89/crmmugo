@@ -1,0 +1,5 @@
+export function PageSkeleton({ type = 'dashboard' }) {
+  if (type === 'form') return <div className="page-skeleton" aria-label="Carregando formulário" role="status"><div className="skeleton-heading" /><div className="skeleton-form-layout"><div>{[1,2,3].map((item) => <div className="skeleton-section" key={item}><span /><div><i /><i /><i /><i /></div></div>)}</div><aside /></div></div>
+  if (type === 'proposals') return <div className="page-skeleton" aria-label="Carregando propostas" role="status"><div className="skeleton-heading" /><div className="skeleton-summary" /> <div className="skeleton-toolbar" /><div className="skeleton-table">{[1,2,3,4,5].map((item) => <span key={item} />)}</div></div>
+  return <div className="page-skeleton" aria-label="Carregando dashboard" role="status"><div className="skeleton-heading" /><div className="skeleton-hero" /><div className="skeleton-kpis">{[1,2,3,4,5,6].map((item) => <span key={item} />)}</div><div className="skeleton-panels"><span /><span /></div></div>
+}

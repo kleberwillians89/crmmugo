@@ -9,10 +9,23 @@ export function ProposalDetailsPanel({ proposal, onClose, onEdit }) {
   useEffect(() => {
     if (!proposal) return undefined
     const previous = document.activeElement
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
     closeRef.current?.focus()
-    const escape = (event) => event.key === 'Escape' && onClose()
-    document.addEventListener('keydown', escape)
-    return () => { document.removeEventListener('keydown', escape); previous?.focus?.() }
+    const keyboard = (event) => {
+      if (event.key === 'Escape') onClose()
+      if (event.key === 'Tab') {
+        const panel = closeRef.current?.closest('.proposal-details')
+        const focusable = panel ? [...panel.querySelectorAll('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')] : []
+        if (!focusable.length) return
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+      }
+    }
+    document.addEventListener('keydown', keyboard)
+    return () => { document.removeEventListener('keydown', keyboard); document.body.style.overflow = previousOverflow; previous?.focus?.() }
   }, [proposal, onClose])
   if (!proposal) return null
 

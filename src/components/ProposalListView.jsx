@@ -3,7 +3,11 @@ import { ProposalActions } from './ProposalActions'
 import { ProposalEmptyState } from './ProposalEmptyState'
 
 const currency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0)
-const date = (value) => value ? new Date(`${value.toString().slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : 'Não informada'
+const date = (value) => {
+  if (!value) return 'Não informada'
+  const parsed = new Date(`${value.toString().slice(0, 10)}T12:00:00`)
+  return Number.isNaN(parsed.getTime()) ? 'Data inválida' : parsed.toLocaleDateString('pt-BR')
+}
 
 export function ProposalListView({ proposals, onEdit, onSelect, onNew, hasFilters }) {
   if (!proposals.length) return <ProposalEmptyState title={hasFilters ? 'Nenhuma proposta encontrada' : 'Nenhuma proposta cadastrada'} description={hasFilters ? 'Ajuste a busca ou limpe os filtros para ampliar os resultados.' : 'Cadastre a primeira oportunidade para iniciar o acompanhamento comercial.'} actionLabel={hasFilters ? 'Limpar filtros acima' : 'Nova proposta'} onAction={hasFilters ? undefined : onNew} />

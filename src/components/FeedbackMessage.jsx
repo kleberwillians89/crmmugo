@@ -1,7 +1,7 @@
-import { AlertCircle, CheckCircle2 } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2 } from 'lucide-react'
 
 export function FeedbackMessage({ type = 'success', children }) {
-  const Icon = type === 'error' ? AlertCircle : CheckCircle2
+  const Icon = type === 'error' ? AlertCircle : type === 'warning' ? AlertTriangle : CheckCircle2
 
   return (
     <div className={`feedback-message ${type}`} role={type === 'error' ? 'alert' : 'status'}>

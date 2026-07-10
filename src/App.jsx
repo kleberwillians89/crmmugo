@@ -5,8 +5,10 @@ import { Sidebar } from './components/Sidebar'
 import { Dashboard } from './components/Dashboard'
 import { ProposalForm } from './components/ProposalForm'
 import { ProposalTable } from './components/ProposalTable'
-import { PageHeader } from './components/PageHeader'
 import { Menu } from 'lucide-react'
+import { ContractsPage } from './components/ContractsPage'
+import { FeedbackMessage } from './components/FeedbackMessage'
+import { PageSkeleton } from './components/PageSkeleton'
 
 const initialFormState = {
   client_name: '',
@@ -44,6 +46,8 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [formDirty, setFormDirty] = useState(false)
+  const [hasLoaded, setHasLoaded] = useState(false)
 
   useEffect(() => {
     loadProposals()
@@ -61,6 +65,7 @@ export default function App() {
       setErrorMessage('Não foi possível carregar as propostas.')
     } finally {
       setLoading(false)
+      setHasLoaded(true)
     }
   }
 
@@ -72,6 +77,11 @@ export default function App() {
   }
 
   function handleNavigate(page) {
+    if (activePage === 'nova' && page !== 'nova' && formDirty && !window.confirm('Você tem alterações não salvas. Deseja sair mesmo assim?')) return
+    if (activePage === 'nova' && page !== 'nova') {
+      resetForm()
+      setFormDirty(false)
+    }
     setActivePage(page)
     setMessage('')
     setErrorMessage('')
@@ -139,6 +149,7 @@ export default function App() {
       }
 
       resetForm()
+      setFormDirty(false)
       setActivePage('proposals')
     } catch (error) {
       console.error(error)
@@ -195,8 +206,6 @@ export default function App() {
     }
   }
 
-  const contractProposals = proposals.filter((proposal) => proposal.contract_term && proposal.contract_term !== 'Sem contrato')
-
   return (
     <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <Sidebar
@@ -216,6 +225,8 @@ export default function App() {
           <span aria-hidden="true" />
         </div>
         <div className="content-container">
+        {loading && !hasLoaded ? <PageSkeleton type={activePage === 'nova' ? 'form' : activePage === 'proposals' ? 'proposals' : 'dashboard'} /> : <>
+        {errorMessage && activePage !== 'nova' && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
         {activePage === 'dashboard' && <Dashboard proposals={proposals} />}
         {activePage === 'nova' && (
           <ProposalForm
@@ -226,6 +237,8 @@ export default function App() {
             errors={errorMessage}
             message={message}
             editMode={Boolean(editId)}
+            onDirtyChange={setFormDirty}
+            onCancel={() => handleNavigate('proposals')}
           />
         )}
         {activePage === 'proposals' && (
@@ -238,75 +251,9 @@ export default function App() {
           />
         )}
         {activePage === 'contracts' && (
-          <section className="contracts-page">
-            <PageHeader
-              eyebrow="Contratos"
-              title="Visão de contratos"
-              description="Acompanhe contratos assinados e prazos de renovação."
-            />
-            <div className="contracts-summary">
-              <div className="contract-card">
-                <span>Contratos totais</span>
-                <strong>{contractProposals.length}</strong>
-              </div>
-              <div className="contract-card">
-                <span>Assinados</span>
-                <strong>{proposals.filter((item) => item.contract_signed).length}</strong>
-              </div>
-              <div className="contract-card">
-                <span>Vencendo em 30 dias</span>
-                <strong>
-                  {proposals.filter((item) => {
-                    if (!item.contract_end_date) return false
-                    const end = new Date(item.contract_end_date)
-                    const now = new Date()
-                    const diff = (end - now) / (1000 * 60 * 60 * 24)
-                    return diff >= 0 && diff <= 30
-                  }).length}
-                </strong>
-              </div>
-            </div>
-            <div className="table-scroll">
-              <table className="proposal-table">
-                <thead>
-                  <tr>
-                    <th>Cliente</th>
-                    <th>Prazo</th>
-                    <th>Início</th>
-                    <th>Término</th>
-                    <th>Assinado</th>
-                    <th>Responsável</th>
-                    <th>Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {contractProposals.map((proposal) => (
-                    <tr key={proposal.id}>
-                      <td>{proposal.client_name || 'Cliente não informado'}</td>
-                      <td>{proposal.contract_term || 'Não informado'}</td>
-                      <td>{proposal.contract_start_date || 'Não informada'}</td>
-                      <td>{proposal.contract_end_date || 'Não informada'}</td>
-                      <td>{proposal.contract_signed ? 'Sim' : 'Não'}</td>
-                      <td>{proposal.responsible || 'Não informado'}</td>
-                      <td className="table-actions">
-                        <button type="button" className="button small" onClick={() => handleEdit(proposal)}>
-                          Editar
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {!contractProposals.length && (
-                    <tr>
-                      <td colSpan="7" className="empty-state">
-                        Nenhum contrato registrado.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <ContractsPage proposals={proposals} onEdit={handleEdit} />
         )}
+        </>}
         </div>
       </main>
     </div>
