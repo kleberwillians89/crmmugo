@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { listProposals as getProposals, createProposal, updateProposal } from './services/data/proposalsRepository'
 import { Sidebar } from './components/Sidebar'
@@ -20,6 +20,10 @@ import { SupabaseContractsPage } from './components/SupabaseContractsPage'
 import { dataProvider } from './lib/supabase/client'
 import { listContracts } from './services/data/contractsRepository'
 import { MugoAssistantPanel } from './components/MugoAssistantPanel'
+import { MugoIntelligencePage } from './components/MugoIntelligencePage'
+import { listClients } from './services/data/clientsRepository'
+import { listInstallments } from './services/data/financeRepository'
+import { listIntelligenceRecords } from './services/data/intelligenceRepository'
 
 const initialFormState = {
   client_name: '',
@@ -51,6 +55,11 @@ export default function App() {
   const [activePage, setActivePage] = useState('dashboard')
   const [proposals, setProposals] = useState([])
   const [supabaseContracts, setSupabaseContracts] = useState([])
+  const [clients, setClients] = useState([])
+  const [installments, setInstallments] = useState([])
+  const [documents, setDocuments] = useState([])
+  const [commercialEvents, setCommercialEvents] = useState([])
+  const [intelligenceError, setIntelligenceError] = useState('')
   const [form, setForm] = useState(initialFormState)
   const [editId, setEditId] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -69,11 +78,24 @@ export default function App() {
   async function loadProposals() {
     setLoading(true)
     setErrorMessage('')
+    setIntelligenceError('')
 
     try {
       const data = await getProposals()
       setProposals(data)
-      if (dataProvider === 'supabase') setSupabaseContracts(await listContracts())
+      if (dataProvider === 'supabase') {
+        setSupabaseContracts(await listContracts())
+        try {
+          const [clientRows, installmentRows, intelligenceRecords] = await Promise.all([listClients(), listInstallments(), listIntelligenceRecords()])
+          setClients(clientRows)
+          setInstallments(installmentRows)
+          setDocuments(intelligenceRecords.documents)
+          setCommercialEvents(intelligenceRecords.events)
+        } catch (error) {
+          console.error(error)
+          setIntelligenceError('Parte dos dados analíticos não pôde ser carregada. Os resultados exibidos consideram somente os registros disponíveis.')
+        }
+      }
     } catch (error) {
       console.error(error)
       setErrorMessage('Não foi possível carregar as propostas.')
@@ -97,6 +119,7 @@ export default function App() {
       setFormDirty(false)
     }
     setActivePage(page)
+    if (['dashboard', 'intelligence'].includes(page)) loadProposals()
     setMessage('')
     setErrorMessage('')
   }
@@ -220,6 +243,23 @@ export default function App() {
     }
   }
 
+  const intelligenceData = useMemo(() => ({
+    proposals,
+    contracts: dataProvider === 'supabase' ? supabaseContracts : proposals.map((proposal) => ({
+      ...proposal,
+      status: proposal.contract_signed ? 'active' : proposal.proposal_status,
+      signed: Boolean(proposal.contract_signed),
+      start_date: proposal.contract_start_date,
+      end_date: proposal.contract_end_date,
+      contract_services: proposal.main_service ? [{ service_name: proposal.main_service }] : [],
+      clients: { company_name: proposal.company || proposal.client_name },
+    })),
+    clients,
+    installments,
+    documents,
+    events: commercialEvents,
+  }), [proposals, supabaseContracts, clients, installments, documents, commercialEvents])
+
   return (
     <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
       <Sidebar
@@ -240,8 +280,8 @@ export default function App() {
         </div>
         <div className="content-container">
         {loading && !hasLoaded ? <PageSkeleton type={activePage === 'nova' ? 'form' : activePage === 'proposals' ? 'proposals' : 'dashboard'} /> : <>
-        {errorMessage && activePage !== 'nova' && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
-        {activePage === 'dashboard' && <Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible: contract.proposals?.responsible || '', main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} />}
+        {errorMessage && !['nova', 'intelligence'].includes(activePage) && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
+        {activePage === 'dashboard' && <Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible: contract.proposals?.responsible || '', main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} contracts={intelligenceData.contracts} installments={installments} />}
         {activePage === 'nova' && (
           <ProposalForm
             form={form}
@@ -275,10 +315,11 @@ export default function App() {
         {activePage === 'diagnostic' && <SupabaseDiagnosticPage />}
         {activePage === 'organization-settings' && <OrganizationSettingsPage />}
         {activePage === 'performance' && <CommercialPerformancePage />}
+        {activePage === 'intelligence' && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} />}
         </>}
         </div>
         <button type="button" className="assistant-trigger" onClick={() => setAssistantOpen(true)}><Sparkles size={16}/>Pergunte à Mugô</button>
-        <MugoAssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} data={{proposals,contracts:supabaseContracts}} />
+        <MugoAssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} data={intelligenceData} />
       </main>
     </div>
   )

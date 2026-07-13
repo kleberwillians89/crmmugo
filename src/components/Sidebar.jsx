@@ -1,5 +1,6 @@
 import {
   Building2,
+  BrainCircuit,
   ChevronLeft,
   ClipboardCheck,
   FileText,
@@ -21,7 +22,7 @@ import { NAVIGATION_LABELS } from '../config/navigationLabels'
 import { statusLabel } from '../config/statusLabels'
 
 const groups = [
-  { label: 'Visão geral', links: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
+  { label: 'Visão geral', links: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }, { id: 'intelligence', label: 'Mugô Intelligence', icon: BrainCircuit }] },
   {
     label: 'Comercial',
     links: [

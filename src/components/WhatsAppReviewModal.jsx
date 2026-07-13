@@ -1,2 +1,21 @@
-import { useEffect,useRef,useState } from 'react';import { buildWhatsAppLink } from '../lib/whatsapp'
-export function WhatsAppReviewModal({data,onClose}){const [message,setMessage]=useState(data.message);const dialog=useRef(null);useEffect(()=>{const previous=document.activeElement;dialog.current?.focus();const key=(event)=>{if(event.key==='Escape')onClose()};document.addEventListener('keydown',key);return()=>{document.removeEventListener('keydown',key);previous?.focus()}},[onClose]);return <div className="modal-overlay" role="presentation" onMouseDown={(e)=>{if(e.target===e.currentTarget)onClose()}}><section className="whatsapp-modal" role="dialog" aria-modal="true" aria-labelledby="whatsapp-title" tabIndex="-1" ref={dialog}><h2 id="whatsapp-title">Revisar mensagem de WhatsApp</h2><dl><div><dt>Cliente</dt><dd>{data.client}</dd></div><div><dt>Telefone</dt><dd>{data.phone}</dd></div><div><dt>Tipo</dt><dd>{data.type}</dd></div>{data.value&&<div><dt>Valor</dt><dd>{data.value}</dd></div>}{data.dueDate&&<div><dt>Vencimento</dt><dd>{data.dueDate}</dd></div>}</dl><label>Mensagem<textarea rows="12" value={message} onChange={(e)=>setMessage(e.target.value)}/></label><footer><button className="button secondary" onClick={onClose}>Cancelar</button><a className="button" href={buildWhatsAppLink(data.phone,message)} target="_blank" rel="noreferrer" onClick={onClose}>Abrir WhatsApp</a></footer><small>Abrir o link não registra a mensagem como enviada.</small></section></div>}
+import { useEffect, useRef, useState } from 'react'
+import { buildWhatsAppLink, isValidBrazilianPhone } from '../lib/whatsapp'
+import { FeedbackMessage } from './FeedbackMessage'
+
+export function WhatsAppReviewModal({ data, onClose, onConfirm }) {
+  const [message, setMessage] = useState(data.message)
+  const [phone, setPhone] = useState(data.phone || '')
+  const [error, setError] = useState('')
+  const [opening, setOpening] = useState(false)
+  const dialog = useRef(null)
+  useEffect(() => { const previous = document.activeElement; dialog.current?.focus(); const key = (event) => { if (event.key === 'Escape') onClose() }; document.addEventListener('keydown', key); return () => { document.removeEventListener('keydown', key); previous?.focus() } }, [onClose])
+  async function copy() { await navigator.clipboard.writeText(message); setError('Mensagem copiada.') }
+  async function open() {
+    if (!isValidBrazilianPhone(phone)) { setError('Informe um telefone válido com DDD.'); return }
+    setOpening(true)
+    const popup=window.open('', '_blank')
+    if(popup)popup.opener=null
+    try { await onConfirm?.({ phone, message }); if(popup)popup.location.href=buildWhatsAppLink(phone,message);else window.location.href=buildWhatsAppLink(phone,message); onClose() } catch { popup?.close(); setError('Não foi possível registrar a preparação da cobrança.') } finally { setOpening(false) }
+  }
+  return <div className="modal-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="whatsapp-modal" role="dialog" aria-modal="true" aria-labelledby="whatsapp-title" tabIndex="-1" ref={dialog}><h2 id="whatsapp-title">Revisar mensagem de WhatsApp</h2>{error&&<FeedbackMessage type={error.includes('copiada')?'success':'error'}>{error}</FeedbackMessage>}<dl><div><dt>Cliente</dt><dd>{data.client}</dd></div><div><dt>Tipo de cobrança</dt><dd>{data.type}</dd></div>{data.contract&&<div><dt>Contrato</dt><dd>{data.contract}</dd></div>}{data.reference&&<div><dt>Referência</dt><dd>{data.reference}</dd></div>}{data.value&&<div><dt>Valor</dt><dd>{data.value}</dd></div>}{data.received&&<div><dt>Valor já recebido</dt><dd>{data.received}</dd></div>}{data.balance&&<div><dt>Saldo</dt><dd>{data.balance}</dd></div>}{data.dueDate&&<div><dt>Vencimento</dt><dd>{data.dueDate}</dd></div>}{data.pixKey&&<div><dt>PIX</dt><dd>{data.pixKey}</dd></div>}{data.bankName&&<div><dt>Banco</dt><dd>{data.bankName}</dd></div>}</dl><label>Telefone que será utilizado<input value={phone} onChange={(event)=>setPhone(event.target.value)} /></label><small className="phone-source">Origem: {data.phoneSource||'telefone principal'}</small><label>Mensagem editável<textarea rows="14" value={message} onChange={(event)=>setMessage(event.target.value)} /></label><footer><button className="button secondary" onClick={onClose}>Cancelar</button><button className="button secondary" onClick={copy}>Copiar mensagem</button><button className="button" disabled={opening} onClick={open}>{opening?'Preparando…':'Abrir WhatsApp'}</button></footer><small>A cobrança só é registrada como preparada ao confirmar a abertura. Nenhuma mensagem é enviada automaticamente.</small></section></div>
+}
