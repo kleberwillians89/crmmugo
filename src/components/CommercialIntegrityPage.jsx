@@ -1,0 +1,5 @@
+import {useState} from 'react'
+import {ShieldCheck} from 'lucide-react'
+import {PageHeader} from './PageHeader'
+import {db,unwrap} from '../services/data/provider'
+export function CommercialIntegrityPage(){const [report,setReport]=useState(null),[loading,setLoading]=useState(false);const run=async()=>{setLoading(true);try{setReport(unwrap(await db().rpc('normalize_legacy_commercial_data')))}finally{setLoading(false)}};return <div><PageHeader eyebrow="Administração" title="Integridade Comercial" description="Diagnóstico seguro de vínculos, responsáveis, serviços e documentos do histórico comercial."/><section className="settings-card"><ShieldCheck size={28}/><h2>Normalização comercial</h2><p>A correção preenche apenas lacunas confirmadas e nunca substitui dados válidos. Cada execução preserva um relatório antes/depois.</p><button type="button" className="button" disabled={loading} onClick={run}>{loading?'Verificando...':'Diagnosticar e corrigir com segurança'}</button>{report&&<><h3>Relatório antes/depois</h3><pre>{JSON.stringify(report,null,2)}</pre></>}</section></div>}

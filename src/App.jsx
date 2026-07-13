@@ -24,6 +24,8 @@ import { MugoIntelligencePage } from './components/MugoIntelligencePage'
 import { listClients } from './services/data/clientsRepository'
 import { listInstallments } from './services/data/financeRepository'
 import { listIntelligenceRecords } from './services/data/intelligenceRepository'
+import { CommercialTrashPage } from './components/CommercialTrashPage'
+import { CommercialIntegrityPage } from './components/CommercialIntegrityPage'
 
 const initialFormState = {
   client_name: '',
@@ -207,19 +209,19 @@ export default function App() {
 
   function handleEdit(proposal) {
     setForm({
-      client_name: proposal.client_name || '',
-      company: proposal.company || '',
-      phone: proposal.phone || '',
-      email: proposal.email || '',
-      main_service: proposal.main_service || '',
+      client_name: proposal.clientName || proposal.client_name || '',
+      company: proposal.companyName || proposal.company || '',
+      phone: proposal.clientDetails?.phone || proposal.phone || '',
+      email: proposal.clientDetails?.email || proposal.email || '',
+      main_service: proposal.mainService || proposal.main_service || '',
       extra_services: proposal.extra_services || '',
-      setup_value: proposal.setup_value ?? '',
-      monthly_value: proposal.monthly_value ?? '',
-      proposal_sent_date: buildDateValue(proposal.proposal_sent_date),
-      responsible: proposal.responsible || '',
-      proposal_status: proposal.proposal_status || '',
-      contract_signed: proposal.contract_signed ?? false,
-      contract_term: proposal.contract_term || 'Sem contrato',
+      setup_value: proposal.setupValue ?? proposal.setup_value ?? '',
+      monthly_value: proposal.monthlyValue ?? proposal.monthly_value ?? '',
+      proposal_sent_date: buildDateValue(proposal.sentAt || proposal.proposal_sent_date),
+      responsible: proposal.responsibleName || proposal.responsible || '',
+      proposal_status: proposal.status || proposal.proposal_status || '',
+      contract_signed: proposal.hasContract ?? proposal.contract_signed ?? false,
+      contract_term: proposal.contractTermMonths ? `${proposal.contractTermMonths} meses` : proposal.contract_term || 'Sem contrato',
       contract_start_date: buildDateValue(proposal.contract_start_date),
       contract_end_date: buildDateValue(proposal.contract_end_date),
       proposal_file_url: proposal.proposal_file_url || '',
@@ -314,6 +316,7 @@ export default function App() {
             loading={loading}
             onNew={() => handleNavigate('nova')}
             initialSelectedId={importedEntity?.proposalId}
+            onChanged={loadProposals}
           />
         )}
         {activePage === 'contracts' && dataProvider === 'legacy' && (
@@ -326,6 +329,8 @@ export default function App() {
         {activePage === 'documents' && <ImportDocumentPage onImported={handleDocumentImported} />}
         {activePage === 'diagnostic' && <SupabaseDiagnosticPage />}
         {activePage === 'organization-settings' && <OrganizationSettingsPage />}
+        {activePage === 'commercial-trash' && <CommercialTrashPage />}
+        {activePage === 'commercial-integrity' && <CommercialIntegrityPage />}
         {activePage === 'performance' && <CommercialPerformancePage />}
         {activePage === 'intelligence' && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} />}
         </>}

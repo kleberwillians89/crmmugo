@@ -1,50 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, Pencil, X } from 'lucide-react'
-import { ContractBadge, ProposalStatusBadge } from './ProposalStatusBadge'
-import { buildProposalMessage, isValidBrazilianPhone } from '../lib/whatsapp'
-import { WhatsAppReviewModal } from './WhatsAppReviewModal'
-
-const currency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0)
-
-export function ProposalDetailsPanel({ proposal, onClose, onEdit }) {
-  const [whatsapp, setWhatsapp] = useState(null)
-  const closeRef = useRef(null)
-  useEffect(() => {
-    if (!proposal) return undefined
-    const previous = document.activeElement
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    closeRef.current?.focus()
-    const keyboard = (event) => {
-      if (event.key === 'Escape') onClose()
-      if (event.key === 'Tab') {
-        const panel = closeRef.current?.closest('.proposal-details')
-        const focusable = panel ? [...panel.querySelectorAll('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')] : []
-        if (!focusable.length) return
-        const first = focusable[0]
-        const last = focusable[focusable.length - 1]
-        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
-        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
-      }
-    }
-    document.addEventListener('keydown', keyboard)
-    return () => { document.removeEventListener('keydown', keyboard); document.body.style.overflow = previousOverflow; previous?.focus?.() }
-  }, [proposal, onClose])
-  if (!proposal) return null
-
-  const details = [
-    ['Cliente', proposal.client_name], ['Empresa', proposal.company], ['Telefone', proposal.phone], ['E-mail', proposal.email],
-    ['Serviço', proposal.main_service], ['Responsável', proposal.responsible], ['Origem', proposal.origin], ['Prazo', proposal.contract_term],
-    ['Data de envio', proposal.proposal_sent_date], ['Observações', proposal.notes], ['Tags', proposal.tags],
-  ]
-  return <div className="details-overlay" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-    <aside className="proposal-details" role="dialog" aria-modal="true" aria-labelledby="proposal-details-title">
-      <header><div><p>Detalhes da oportunidade</p><h2 id="proposal-details-title">{proposal.client_name || proposal.company || 'Proposta'}</h2></div><button ref={closeRef} type="button" className="icon-button" onClick={onClose} aria-label="Fechar detalhes"><X size={19} /></button></header>
-      <div className="details-badges"><ProposalStatusBadge status={proposal.proposal_status} /><ContractBadge signed={proposal.contract_signed} /></div>
-      <section className="details-values"><div><span>Implantação</span><strong>{currency(proposal.setup_value)}</strong></div><div><span>Mensalidade</span><strong>{currency(proposal.monthly_value)}</strong></div></section>
-      <dl className="details-list">{details.map(([label, value]) => <div key={label} className={label === 'Observações' ? 'detail-wide' : ''}><dt>{label}</dt><dd>{value || 'Não informado'}</dd></div>)}</dl>
-      <footer><button type="button" className="button" onClick={() => onEdit(proposal)}><Pencil size={14} />Editar</button>{isValidBrazilianPhone(proposal.phone)&&<button type="button" className="button secondary" onClick={()=>setWhatsapp({client:proposal.client_name||proposal.company,phone:proposal.phone,type:'Conversa sobre proposta',message:buildProposalMessage({name:proposal.client_name,service:proposal.main_service})})}>Conversar sobre a proposta</button>}{proposal.proposal_file_url && <a className="button secondary" href={proposal.proposal_file_url} target="_blank" rel="noreferrer">Abrir proposta<ExternalLink size={13} /></a>}{proposal.contract_file_url && <a className="button secondary" href={proposal.contract_file_url} target="_blank" rel="noreferrer">Abrir contrato<ExternalLink size={13} /></a>}</footer>
-    </aside>
-    {whatsapp&&<WhatsAppReviewModal data={whatsapp} onClose={()=>setWhatsapp(null)}/>}
-  </div>
-}
+import {useEffect,useRef} from 'react'
+import {ExternalLink,Pencil,X} from 'lucide-react'
+import {ContractBadge,ProposalStatusBadge} from './ProposalStatusBadge'
+const currency=(value)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(value)||0)
+const date=(value)=>value?new Date(value).toLocaleDateString('pt-BR'):'Não informado'
+export function ProposalDetailsPanel({proposal,onClose,onEdit}){const closeRef=useRef(null);useEffect(()=>{if(!proposal)return;const overflow=document.body.style.overflow;document.body.style.overflow='hidden';closeRef.current?.focus();const keyboard=(event)=>event.key==='Escape'&&onClose();document.addEventListener('keydown',keyboard);return()=>{document.removeEventListener('keydown',keyboard);document.body.style.overflow=overflow}},[proposal,onClose]);if(!proposal)return null
+return <div className="details-overlay" role="presentation" onMouseDown={(event)=>event.target===event.currentTarget&&onClose()}><aside className="proposal-details" role="dialog" aria-modal="true" aria-labelledby="proposal-details-title">
+  <header><div><p>{proposal.proposalNumber||'Proposta comercial'}</p><h2 id="proposal-details-title">{proposal.title}</h2></div><button ref={closeRef} type="button" className="icon-button" onClick={onClose} aria-label="Fechar detalhes"><X size={19}/></button></header>
+  <div className="details-badges"><ProposalStatusBadge status={proposal.status}/><ContractBadge signed={proposal.hasContract}/></div>
+  <section className="details-values"><div><span>Implantação</span><strong>{currency(proposal.setupValue)}</strong></div><div><span>Mensalidade</span><strong>{currency(proposal.monthlyValue)}</strong></div><div><span>Total</span><strong>{currency(proposal.totalValue)}</strong></div></section>
+  <dl className="details-list"><div><dt>Cliente</dt><dd>{proposal.clientName}</dd></div><div><dt>Empresa</dt><dd>{proposal.companyName}</dd></div><div><dt>Contato</dt><dd>{proposal.contactName||'Não informado'}</dd></div><div><dt>Responsável</dt><dd>{proposal.responsibleName||'Não informado'}</dd></div><div><dt>Envio</dt><dd>{date(proposal.sentAt)}</dd></div><div><dt>Validade</dt><dd>{date(proposal.validUntil)}</dd></div><div><dt>Prazo</dt><dd>{proposal.contractTermMonths?`${proposal.contractTermMonths} meses`:'Não informado'}</dd></div><div><dt>Origem</dt><dd>{proposal.leadSource||'Não informada'}</dd></div><div className="detail-wide"><dt>Observações</dt><dd>{proposal.notes||'Não informado'}</dd></div></dl>
+  <section className="detail-wide"><h3>Serviços</h3><div className="table-scroll"><table className="proposal-list-table"><thead><tr><th>Serviço</th><th>Categoria</th><th>Qtd.</th><th>Unitário</th><th>Implantação</th><th>Mensal</th></tr></thead><tbody>{proposal.services.map((service)=><tr key={service.id||service.name}><td>{service.name}</td><td>{service.category||'—'}</td><td>{service.quantity??'—'}</td><td>{currency(service.unitPrice)}</td><td>{currency(service.oneTimeValue)}</td><td>{currency(service.monthlyValue)}</td></tr>)}</tbody></table></div>{!proposal.services.length&&<p>Nenhum serviço relacionado.</p>}</section>
+  <section className="detail-wide"><h3>Documentos</h3>{proposal.documents.map((document)=><p key={document.id}>{document.file_name} <small>v{document.version||1}</small></p>)}{!proposal.documents.length&&<p>Nenhum documento relacionado.</p>}</section>
+  <section className="detail-wide"><h3>Linha do tempo comercial</h3>{[...proposal.history].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).map((item)=><p key={item.id}><strong>{item.title}</strong> <small>{date(item.created_at)}</small><br/>{item.description}</p>)}{!proposal.history.length&&<p>Nenhum evento registrado.</p>}</section>
+  <footer><button type="button" className="button" onClick={()=>onEdit(proposal)}><Pencil size={14}/>Editar</button>{proposal.proposalFile&&<a className="button secondary" href={proposal.proposalFile.public_url||proposal.proposalFile.url||'#'} target="_blank" rel="noreferrer">Abrir proposta<ExternalLink size={13}/></a>}</footer>
+</aside></div>}

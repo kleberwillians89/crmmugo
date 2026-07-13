@@ -14,6 +14,8 @@ import {
   LayoutDashboard,
   Plus,
   Settings,
+  Trash2,
+  ShieldCheck,
   X,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -38,6 +40,8 @@ const groups = [
   },
   { label: 'Sistema', links: [
     { id: 'organization-settings', label: 'Configurações da empresa', icon: SlidersHorizontal, supabaseOnly: true },
+    { id: 'commercial-trash', label: 'Lixeira comercial', icon: Trash2, supabaseOnly: true },
+    { id: 'commercial-integrity', label: 'Integridade Comercial', icon: ShieldCheck, adminOnly: true, supabaseOnly: true },
     { id: 'diagnostic', label: 'Diagnóstico Supabase', icon: Activity, adminOnly: true },
     { id: 'settings', label: 'Configurações', icon: Settings, disabled: true },
   ] },
