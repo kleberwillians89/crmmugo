@@ -26,3 +26,17 @@ Este documento registra campos recomendados para uma futura evolução da fonte 
 - `proposal_valid_until`: validade formal da proposta. Hoje não existe campo persistido.
 
 Antes de implementar esses campos, a API, a planilha e os registros existentes devem receber uma migração compatível e versionada.
+
+## Campos recomendados pela inteligência comercial
+
+- `service_catalog_id`
+- `billing_type`
+- `price_reference`
+- `assigned_member_id`
+- `contract_status`
+- `contract_duration_months`
+- `recurring_revenue`
+- `one_time_revenue`
+- `service_category`
+
+Esses campos são somente requisitos futuros e não foram adicionados ao payload atual.

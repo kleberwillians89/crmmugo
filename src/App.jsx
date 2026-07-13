@@ -9,6 +9,7 @@ import { Menu } from 'lucide-react'
 import { ContractsPage } from './components/ContractsPage'
 import { FeedbackMessage } from './components/FeedbackMessage'
 import { PageSkeleton } from './components/PageSkeleton'
+import { ServicesCatalogPage } from './components/ServicesCatalogPage'
 
 const initialFormState = {
   client_name: '',
@@ -253,6 +254,7 @@ export default function App() {
         {activePage === 'contracts' && (
           <ContractsPage proposals={proposals} onEdit={handleEdit} />
         )}
+        {activePage === 'services' && <ServicesCatalogPage />}
         </>}
         </div>
       </main>

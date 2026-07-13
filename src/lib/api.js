@@ -1,7 +1,5 @@
 const API_URL = import.meta.env.VITE_GOOGLE_SCRIPT_URL
 
-console.log('API URL:', API_URL)
-
 function wait(ms) {
   return new Promise((res) => setTimeout(res, ms))
 }
