@@ -26,6 +26,8 @@ import { listInstallments } from './services/data/financeRepository'
 import { listIntelligenceRecords } from './services/data/intelligenceRepository'
 import { CommercialTrashPage } from './components/CommercialTrashPage'
 import { CommercialIntegrityPage } from './components/CommercialIntegrityPage'
+import {TeamPage} from './components/TeamPage'
+import {CRM_DATA_CHANGED} from './lib/dataInvalidation'
 
 const initialFormState = {
   client_name: '',
@@ -79,6 +81,7 @@ export default function App() {
     loadProposals()
   }, [])
   useEffect(()=>{const navigate=(event)=>handleNavigate(event.detail);window.addEventListener('mugo:navigate',navigate);return()=>window.removeEventListener('mugo:navigate',navigate)})
+  useEffect(()=>{const refresh=()=>loadProposals();window.addEventListener(CRM_DATA_CHANGED,refresh);return()=>window.removeEventListener(CRM_DATA_CHANGED,refresh)},[])
 
   async function loadProposals() {
     setLoading(true)
@@ -326,6 +329,7 @@ export default function App() {
         {activePage === 'contracts' && dataProvider === 'supabase' && <SupabaseContractsPage />}
         {activePage === 'services' && <ServicesCatalogPage />}
         {activePage === 'clients' && <ClientsPage />}
+        {activePage === 'team' && <TeamPage />}
         {activePage === 'finance' && <FinancePage />}
         {activePage === 'documents' && <ImportDocumentPage onImported={handleDocumentImported} />}
         {activePage === 'diagnostic' && <SupabaseDiagnosticPage />}

@@ -3,7 +3,7 @@ import { normalizeProposal,normalizeProposals } from '../../lib/normalizeProposa
 import { db,isSupabaseProvider,organizationId,unwrap } from './provider'
 import {attachResponsibleProfiles,listActiveProfiles} from './serviceResponsibilitiesRepository'
 
-const select='*, clients(*), profiles(name), proposal_services(*), documents(*), commercial_events(*), contracts(id,status)'
+const select='*, clients(*), team_members(name), proposal_services(*), documents(*), commercial_events(*), contracts(id,status)'
 const canonicalStatus=(value)=>({'Proposta enviada':'sent','Em negociação':'negotiating','Fechada':'won','Perdida':'lost'}[value]||value)
 const dbValues=(values,partial=false)=>{const mapped=({
   client_id:values.client_id??values.clientId,
