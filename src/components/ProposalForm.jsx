@@ -4,7 +4,6 @@ import { FeedbackMessage } from './FeedbackMessage'
 import { PageHeader } from './PageHeader'
 import { ContractBadge, ProposalStatusBadge } from './ProposalStatusBadge'
 
-const responsibilities = ['Kleber', 'Julia', 'Danilo']
 const proposalStatuses = ['Proposta enviada', 'Em negociação', 'Fechada', 'Perdida']
 const contractTerms = ['Sem contrato', '3 meses', '6 meses', '12 meses', 'Indeterminado']
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -35,7 +34,7 @@ function FormSection({ icon: Icon, title, description, children }) {
   return <section className="form-section"><header><div className="form-section-icon"><Icon size={18} /></div><div><h2>{title}</h2><p>{description}</p></div></header><div className="form-section-grid">{children}</div></section>
 }
 
-export function ProposalForm({ form, onChange, onSubmit, onCancel, loading, errors, message, editMode, onDirtyChange }) {
+export function ProposalForm({ form, teamMembers, onChange, onSubmit, onCancel, loading, errors, message, editMode, onDirtyChange }) {
   const [initialSnapshot] = useState(() => JSON.stringify(form))
   const formRef = useRef(null)
   const dirty = JSON.stringify(form) !== initialSnapshot
@@ -54,7 +53,7 @@ export function ProposalForm({ form, onChange, onSubmit, onCancel, loading, erro
     if (!form.client_name.trim()) result.client_name = 'Nome do cliente é obrigatório.'
     if (!form.main_service.trim()) result.main_service = 'Serviço principal é obrigatório.'
     if (!form.proposal_status) result.proposal_status = 'Status da proposta é obrigatório.'
-    if (!form.responsible) result.responsible = 'Responsável é obrigatório.'
+    if (!form.responsible_id) result.responsible_id = 'Responsável é obrigatório.'
     if (form.setup_value === '' && form.monthly_value === '') result.setup_value = 'Informe o valor de implantação ou a mensalidade.'
     if (form.email && !emailPattern.test(form.email)) result.email = 'Informe um e-mail válido.'
     if (form.phone && !phonePattern.test(form.phone)) result.phone = 'Use apenas números, espaços, parênteses, + ou hífen.'
@@ -65,13 +64,13 @@ export function ProposalForm({ form, onChange, onSubmit, onCancel, loading, erro
   }, [form])
 
   const warnings = useMemo(() => ({
-    responsible: !form.responsible ? 'Defina um responsável para facilitar o acompanhamento.' : '',
+    responsible_id: !form.responsible_id ? 'Defina um responsável para facilitar o acompanhamento.' : '',
     contract_signed: form.proposal_status === 'Fechada' && !form.contract_signed ? 'A proposta está fechada, mas o contrato ainda consta como pendente.' : '',
     contract_file_url: form.contract_signed && !form.contract_file_url ? 'Contrato assinado sem link do documento.' : '',
     contract_end_date: form.contract_term !== 'Sem contrato' && !form.contract_end_date ? 'Contrato sem data final informada.' : '',
   }), [form])
 
-  const completionFields = ['client_name', 'company', 'phone', 'email', 'main_service', 'setup_value', 'monthly_value', 'proposal_sent_date', 'responsible', 'proposal_status', 'contract_term']
+  const completionFields = ['client_name', 'company', 'phone', 'email', 'main_service', 'setup_value', 'monthly_value', 'proposal_sent_date', 'responsible_id', 'proposal_status', 'contract_term']
   const completed = completionFields.filter((name) => form[name] !== '' && form[name] !== null).length
   const completion = Math.round((completed / completionFields.length) * 100)
   const totalAvailable = (Number(form.setup_value) || 0) + (Number(form.monthly_value) || 0)
@@ -124,7 +123,7 @@ export function ProposalForm({ form, onChange, onSubmit, onCancel, loading, erro
         </FormSection>
 
         <FormSection icon={ShieldCheck} title="Gestão interna" description="Responsabilidade e acompanhamento pela equipe Mugô.">
-          <Field label="Responsável" name="responsible" required error={validation.responsible} warning={warnings.responsible}>{(props) => <select {...props} {...bind('responsible')} required><option value="">Selecione</option>{responsibilities.map((value) => <option key={value}>{value}</option>)}</select>}</Field>
+          <Field label="Responsável" name="responsible_id" required error={validation.responsible_id} warning={warnings.responsible_id}>{(props) => <select {...props} {...bind('responsible_id')} required><option value="">Selecione</option>{teamMembers.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select>}</Field>
           <div className="internal-note"><Building2 size={17} /><p>O status comercial é controlado na seção “Proposta comercial” e também pode ser atualizado no Pipeline.</p></div>
         </FormSection>
 
@@ -134,7 +133,7 @@ export function ProposalForm({ form, onChange, onSubmit, onCancel, loading, erro
       </div>
 
       <aside className="proposal-form-summary">
-        <div className="summary-card"><header><div><p>Resumo da proposta</p><h2>{form.company || form.client_name || 'Nova oportunidade'}</h2></div><ClipboardCheck size={19} /></header><dl><div><dt>Cliente</dt><dd>{form.client_name || 'Não informado'}</dd></div><div><dt>Serviço</dt><dd>{form.main_service || 'Não informado'}</dd></div><div><dt>Responsável</dt><dd>{form.responsible || 'Não informado'}</dd></div><div><dt>Status</dt><dd><ProposalStatusBadge status={form.proposal_status} /></dd></div><div><dt>Implantação</dt><dd>{money(form.setup_value)}</dd></div><div><dt>Mensalidade</dt><dd>{money(form.monthly_value)}</dd></div><div><dt>Contrato</dt><dd><ContractBadge signed={form.contract_signed} /></dd></div></dl><div className="completion"><div><span>Completude do cadastro</span><strong>{completion}%</strong></div><div className="completion-track"><span style={{ width: `${completion}%` }} /></div><small>Indicação visual; não é salva na proposta.</small></div></div>
+        <div className="summary-card"><header><div><p>Resumo da proposta</p><h2>{form.company || form.client_name || 'Nova oportunidade'}</h2></div><ClipboardCheck size={19} /></header><dl><div><dt>Cliente</dt><dd>{form.client_name || 'Não informado'}</dd></div><div><dt>Serviço</dt><dd>{form.main_service || 'Não informado'}</dd></div><div><dt>Responsável</dt><dd>{teamMembers.find((member)=>member.id===form.responsible_id)?.name || 'Não informado'}</dd></div><div><dt>Status</dt><dd><ProposalStatusBadge status={form.proposal_status} /></dd></div><div><dt>Implantação</dt><dd>{money(form.setup_value)}</dd></div><div><dt>Mensalidade</dt><dd>{money(form.monthly_value)}</dd></div><div><dt>Contrato</dt><dd><ContractBadge signed={form.contract_signed} /></dd></div></dl><div className="completion"><div><span>Completude do cadastro</span><strong>{completion}%</strong></div><div className="completion-track"><span style={{ width: `${completion}%` }} /></div><small>Indicação visual; não é salva na proposta.</small></div></div>
         <div className="form-action-bar"><button type="button" className="button secondary" onClick={onCancel}>Cancelar</button><button type="submit" className="button" disabled={loading}><Save size={15} />{loading ? 'Salvando...' : editMode ? 'Atualizar proposta' : 'Salvar proposta'}</button>{dirty && <small>Alterações ainda não salvas.</small>}</div>
       </aside>
     </form>

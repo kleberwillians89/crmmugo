@@ -64,6 +64,7 @@ export async function findCommercialDuplicates(result,analysis){
 }
 
 function extractedValues(section){return Object.fromEntries(Object.entries(section||{}).map(([key,field])=>[key,valueOf(field)]))}
+async function resolveTeamMemberId(client,organizationId,name){if(!name)return null;const members=unwrap(await client.from('team_members').select('id,name').eq('organization_id',organizationId).eq('active',true));const normalized=String(name).trim().toLocaleLowerCase('pt-BR');return members.find((member)=>member.name.trim().toLocaleLowerCase('pt-BR')===normalized)?.id||null}
 
 export async function confirmCommercialDocumentImport({analysis,result,reviewed,clientAction,clientId,entityAction,entityId,relatedProposalId,confirmations,onProgress=()=>{}}){
   if(!isSupabaseProvider())return legacyUnavailable('Importação comercial')
@@ -95,7 +96,9 @@ export async function confirmCommercialDocumentImport({analysis,result,reviewed,
       // O registro e seu cliente já foram validados acima pela sessão e pelo RLS.
     }else if(type==='proposal'){
       stage='proposta';onProgress('Importando proposta')
-      const proposal=cleanRecord({...extractedValues(reviewed.proposal),organization_id:oid,client_id:resolvedClientId,created_by:user?.id,updated_by:user?.id})
+      const extractedProposal=extractedValues(reviewed.proposal),responsibleId=await resolveTeamMemberId(client,oid,extractedProposal.responsible)
+      delete extractedProposal.responsible
+      const proposal=cleanRecord({...extractedProposal,responsible_id:responsibleId,organization_id:oid,client_id:resolvedClientId,created_by:user?.id,updated_by:user?.id})
       proposal.title=proposal.title||`Proposta importada — ${analysis.file_name}`
       proposal.status=proposal.status||'sent'
       created.proposal=unwrap(await client.from('proposals').insert(proposal).select().single());proposalId=created.proposal.id
@@ -104,7 +107,8 @@ export async function confirmCommercialDocumentImport({analysis,result,reviewed,
       if(services.length){created.servicesTable='proposal_services';unwrap(await client.from('proposal_services').insert(services))}
     }else if(type!=='amendment'){
       stage='contrato';onProgress('Importando contrato')
-      const contract=cleanRecord({...extractedValues(reviewed.contract),organization_id:oid,client_id:resolvedClientId,proposal_id:relatedProposalId||null,created_by:user?.id,updated_by:user?.id,setup_received_amount:0,setup_received_at:null,setup_payment_method:null})
+      const linkedProposal=relatedProposalId?unwrap(await client.from('proposals').select('responsible_id').eq('id',relatedProposalId).single()):null
+      const contract=cleanRecord({...extractedValues(reviewed.contract),responsible_id:linkedProposal?.responsible_id||null,organization_id:oid,client_id:resolvedClientId,proposal_id:relatedProposalId||null,created_by:user?.id,updated_by:user?.id,setup_received_amount:0,setup_received_at:null,setup_payment_method:null})
       contract.status=contract.status||'draft'
       created.contract=unwrap(await client.from('contracts').insert(contract).select().single());contractId=created.contract.id
       stage='serviços';onProgress('Vinculando serviços')

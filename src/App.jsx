@@ -28,6 +28,7 @@ import { CommercialTrashPage } from './components/CommercialTrashPage'
 import { CommercialIntegrityPage } from './components/CommercialIntegrityPage'
 import {TeamPage} from './components/TeamPage'
 import {CRM_DATA_CHANGED} from './lib/dataInvalidation'
+import {listTeamMembers} from './services/data/teamRepository'
 
 const initialFormState = {
   client_name: '',
@@ -39,7 +40,7 @@ const initialFormState = {
   setup_value: '',
   monthly_value: '',
   proposal_sent_date: '',
-  responsible: '',
+  responsible_id: '',
   proposal_status: '',
   contract_signed: false,
   contract_term: 'Sem contrato',
@@ -76,6 +77,7 @@ export default function App() {
   const [hasLoaded, setHasLoaded] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [importedEntity, setImportedEntity] = useState(null)
+  const [teamMembers, setTeamMembers] = useState([])
 
   useEffect(() => {
     loadProposals()
@@ -94,12 +96,13 @@ export default function App() {
       if (dataProvider === 'supabase') {
         setSupabaseContracts(await listContracts())
         try {
-          const [clientRows, installmentRows, intelligenceRecords] = await Promise.all([listClients(), listInstallments(), listIntelligenceRecords()])
+          const [clientRows, installmentRows, intelligenceRecords, members] = await Promise.all([listClients(), listInstallments(), listIntelligenceRecords(), listTeamMembers({activeOnly:true})])
           setClients(clientRows)
           setInstallments(installmentRows)
           setDocuments(intelligenceRecords.documents)
           setCommercialEvents(intelligenceRecords.events)
           setDocumentAnalyses(intelligenceRecords.documentAnalyses)
+          setTeamMembers(members)
         } catch (error) {
           console.error(error)
           setIntelligenceError('Parte dos dados analíticos não pôde ser carregada. Os resultados exibidos consideram somente os registros disponíveis.')
@@ -154,7 +157,7 @@ export default function App() {
     if (!form.client_name.trim()) return 'Nome do cliente é obrigatório.'
     if (!form.main_service.trim()) return 'Serviço principal é obrigatório.'
     if (!form.proposal_status) return 'Status da proposta é obrigatório.'
-    if (!form.responsible) return 'Responsável é obrigatório.'
+    if (!form.responsible_id) return 'Responsável é obrigatório.'
     if (!form.setup_value && !form.monthly_value) return 'Valor de implantação ou valor mensal obrigatórios.'
     return ''
   }
@@ -222,7 +225,7 @@ export default function App() {
       setup_value: proposal.setupValue ?? proposal.setup_value ?? '',
       monthly_value: proposal.monthlyValue ?? proposal.monthly_value ?? '',
       proposal_sent_date: buildDateValue(proposal.sentAt || proposal.proposal_sent_date),
-      responsible: proposal.responsibleName || proposal.responsible || '',
+      responsible_id: proposal.responsibleId || '',
       proposal_status: proposal.status || proposal.proposal_status || '',
       contract_signed: proposal.hasContract ?? proposal.contract_signed ?? false,
       contract_term: proposal.contractTermMonths ? `${proposal.contractTermMonths} meses` : proposal.contract_term || 'Sem contrato',
@@ -297,10 +300,11 @@ export default function App() {
         <div className="content-container">
         {loading && !hasLoaded ? <PageSkeleton type={activePage === 'nova' ? 'form' : activePage === 'proposals' ? 'proposals' : 'dashboard'} /> : <>
         {errorMessage && !['nova', 'intelligence'].includes(activePage) && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
-        {activePage === 'dashboard' && <Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible: contract.proposals?.responsible || '', main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} contracts={intelligenceData.contracts} installments={installments} />}
+        {activePage === 'dashboard' && <Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible_id: contract.responsibleId, responsibleName: contract.responsibleName, main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} contracts={intelligenceData.contracts} installments={installments} teamMembers={teamMembers} />}
         {activePage === 'nova' && (
           <ProposalForm
             form={form}
+            teamMembers={teamMembers}
             onChange={handleChange}
             onSubmit={handleSubmit}
             loading={loading}
