@@ -4,6 +4,8 @@
 
 Aplicar a migration `202607130004_sprint10_5_document_extraction.sql`. Ela cria o staging privado `crm-documents-temp`, limitado a 20 MB, e a tabela protegida `document_analyses`.
 
+Aplicar também `202607130005_sprint10_6_import_completion.sql`, que alinha o bucket definitivo ao limite de 20 MB usado pelo staging.
+
 Os secrets permanecem somente no Supabase:
 
 ```bash
@@ -27,6 +29,7 @@ Não use `--no-verify-jwt`. A função valida novamente a sessão, o profile ati
 1. O navegador envia PDF, DOC ou DOCX para um caminho temporário privado da organização e do usuário.
 2. A Edge Function baixa o arquivo pela sessão autenticada, extrai apenas o texto necessário e solicita JSON aderente a schema rígido.
 3. O resultado permanece em revisão. Nenhum cliente, proposta, contrato, serviço, parcela ou pagamento é criado nessa etapa.
+   A classificação retorna confiança, motivos e avisos e pode ser corrigida manualmente antes da confirmação.
 4. O usuário edita campos, resolve duplicidades e confirma explicitamente status, valores, datas, assinatura, recebimento, cobrança e total.
 5. Após a confirmação, o arquivo é copiado ao bucket definitivo e os registros são criados. Em falha, os registros parciais e o arquivo definitivo são compensados.
 6. O arquivo temporário é removido após confirmação ou cancelamento.
@@ -38,5 +41,6 @@ Arquivos expirados são removidos de forma oportunista na próxima análise do u
 - Não há OCR externo nesta sprint. PDFs sem texto pesquisável retornam o aviso de documento digitalizado.
 - DOC legado depende da extração textual disponível no arquivo; layouts complexos podem exigir revisão adicional.
 - Cláusulas e dados financeiros extraídos ficam na análise para revisão, mas não geram parcelas nem confirmam recebimentos.
+- Totais monetários informam se a origem é explícita, calculada pela composição dos serviços ou ausente.
 - Aditivos precisam ser vinculados a um contrato existente.
 - A função não envia documentos completos, tokens ou payloads financeiros à interface e não grava o texto integral em logs ou auditoria.

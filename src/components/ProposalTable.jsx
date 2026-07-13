@@ -19,10 +19,10 @@ function signedState(value) {
   return 'unknown'
 }
 
-export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading }) {
+export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading, initialSelectedId }) {
   const [view, setView] = useState(() => localStorage.getItem('mugo-proposals-view') || 'list')
   const [filters, setFilters] = useState(initialFilters)
-  const [selected, setSelected] = useState(null)
+  const [selected, setSelected] = useState(()=>proposals.find((proposal)=>proposal.id===initialSelectedId)||null)
 
   const setFilter = useCallback((field, value) => setFilters((current) => ({ ...current, [field]: value })), [])
   const changeView = (next) => { setView(next); localStorage.setItem('mugo-proposals-view', next) }

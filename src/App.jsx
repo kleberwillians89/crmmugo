@@ -71,6 +71,7 @@ export default function App() {
   const [formDirty, setFormDirty] = useState(false)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
+  const [importedEntity, setImportedEntity] = useState(null)
 
   useEffect(() => {
     loadProposals()
@@ -124,6 +125,12 @@ export default function App() {
     if (['dashboard', 'intelligence'].includes(page)) loadProposals()
     setMessage('')
     setErrorMessage('')
+  }
+
+  async function handleDocumentImported(imported) {
+    setImportedEntity(imported)
+    await loadProposals()
+    setActivePage(imported.documentType === 'proposal' ? 'proposals' : imported.documentType === 'other' ? 'clients' : 'contracts')
   }
 
   function handleChange(event) {
@@ -300,11 +307,13 @@ export default function App() {
         )}
         {activePage === 'proposals' && (
           <ProposalTable
+            key={importedEntity?.proposalId || 'proposals'}
             proposals={proposals}
             onEdit={handleEdit}
             onQuickUpdate={handleQuickUpdate}
             loading={loading}
             onNew={() => handleNavigate('nova')}
+            initialSelectedId={importedEntity?.proposalId}
           />
         )}
         {activePage === 'contracts' && dataProvider === 'legacy' && (
@@ -314,7 +323,7 @@ export default function App() {
         {activePage === 'services' && <ServicesCatalogPage />}
         {activePage === 'clients' && <ClientsPage />}
         {activePage === 'finance' && <FinancePage />}
-        {activePage === 'documents' && <ImportDocumentPage />}
+        {activePage === 'documents' && <ImportDocumentPage onImported={handleDocumentImported} />}
         {activePage === 'diagnostic' && <SupabaseDiagnosticPage />}
         {activePage === 'organization-settings' && <OrganizationSettingsPage />}
         {activePage === 'performance' && <CommercialPerformancePage />}

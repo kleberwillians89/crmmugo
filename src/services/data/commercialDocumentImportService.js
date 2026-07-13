@@ -1,4 +1,5 @@
 import { db, isSupabaseProvider, legacyUnavailable, organizationId, unwrap } from './provider'
+import { confirmationsForDocument } from '../../lib/commercialDocumentReview'
 
 export const TEMP_DOCUMENT_BUCKET='crm-documents-temp'
 const FINAL_DOCUMENT_BUCKET='crm-documents'
@@ -56,31 +57,31 @@ export async function findCommercialDuplicates(result,analysis){
     const {data=[]}=await client.from('contracts').select('id,contract_number,start_date,end_date,setup_value,monthly_value,total_value,client_id').limit(500)
     entityMatches=data.map((item)=>({item,reasons:[valueOf(contract.contract_number)&&item.contract_number===valueOf(contract.contract_number)?'Número':null,valueOf(contract.start_date)&&item.start_date===valueOf(contract.start_date)?'Início':null,valueOf(contract.end_date)&&item.end_date===valueOf(contract.end_date)?'Fim':null,valueOf(contract.total_value)!=null&&Number(item.total_value)===Number(valueOf(contract.total_value))?'Valor':null].filter(Boolean)})).filter((row)=>row.reasons.length>=2||row.reasons.includes('Número'))
   }
+  const {data:relatedProposals=[]}=await client.from('proposals').select('id,title,client_id,status').order('created_at',{ascending:false}).limit(250)
   const files=[...(hashQuery.data||[]).map((item)=>({item,reasons:['Conteúdo idêntico']})),...(documentQuery.data||[]).map((item)=>({item,reasons:['Arquivo com o mesmo nome']}))]
   const confirmed=Boolean(hashQuery.data?.length||entityMatches.some((row)=>row.reasons.includes('Número')))
-  return {clientMatches,entityMatches,files,classification:confirmed?'duplicidade confirmada':entityMatches.length||files.length||clientMatches.length?'possível duplicidade':'sem conflito'}
+  return {clientMatches,entityMatches,files,relatedProposals,classification:confirmed?'duplicidade confirmada':entityMatches.length||files.length||clientMatches.length?'possível duplicidade':'sem conflito'}
 }
 
 function extractedValues(section){return Object.fromEntries(Object.entries(section||{}).map(([key,field])=>[key,valueOf(field)]))}
 
-export async function confirmCommercialDocumentImport({analysis,result,reviewed,clientAction,clientId,entityAction,entityId,confirmations}){
+export async function confirmCommercialDocumentImport({analysis,result,reviewed,clientAction,clientId,entityAction,entityId,relatedProposalId,confirmations,onProgress=()=>{}}){
   if(!isSupabaseProvider())return legacyUnavailable('Importação comercial')
   if(entityAction==='cancel')throw new Error('Importação cancelada.')
-  const required=['status','values','dates','signature','setup_received','billing_day','total_value']
+  const required=confirmationsForDocument(result.documentType).map(([key])=>key)
   if(required.some((key)=>!confirmations[key]))throw new Error('Confirme explicitamente todos os campos sensíveis antes de importar.')
-  const client=db(),oid=analysis.organization_id,{data:{user}}=await client.auth.getUser(),created={client:null,proposal:null,contract:null,document:null,finalPath:null,servicesTable:null}
+  const client=db(),oid=analysis.organization_id,{data:{user}}=await client.auth.getUser(),created={client:null,proposal:null,contract:null,document:null,finalPath:null,servicesTable:null},type=result.documentType
+  let stage='cliente'
   try{
-    const file=unwrap(await client.storage.from(analysis.temp_bucket).download(analysis.temp_path))
-    created.finalPath=`${oid}/imports/${result.documentType}/${crypto.randomUUID()}-${safeName(analysis.file_name)}`
-    unwrap(await client.storage.from(FINAL_DOCUMENT_BUCKET).upload(created.finalPath,file,{contentType:analysis.mime_type,upsert:false}))
-    if(result.documentType==='amendment'&&entityAction!=='link')throw new Error('Vincule o aditivo a um contrato existente antes de confirmar.')
+    onProgress('Importando cliente')
+    if(type==='amendment'&&entityAction!=='link')throw new Error('Vincule o aditivo a um contrato existente antes de confirmar.')
     let resolvedClientId=clientId,proposalId=null,contractId=null
-    if(entityAction==='link'&&result.documentType!=='other'){
+    if(entityAction==='link'&&type!=='other'){
       if(!entityId)throw new Error('Selecione o registro existente que receberá o documento.')
-      const table=result.documentType==='proposal'?'proposals':'contracts'
+      const table=type==='proposal'?'proposals':'contracts'
       const existing=unwrap(await client.from(table).select('id,client_id').eq('id',entityId).single())
       resolvedClientId=existing.client_id
-      if(result.documentType==='proposal')proposalId=existing.id
+      if(type==='proposal')proposalId=existing.id
       else contractId=existing.id
     }else if(clientAction==='create'){
       const values=cleanRecord({...extractedValues(reviewed.client),status:'lead',organization_id:oid,created_by:user?.id,updated_by:user?.id})
@@ -88,36 +89,51 @@ export async function confirmCommercialDocumentImport({analysis,result,reviewed,
       created.client=unwrap(await client.from('clients').insert(values).select().single());resolvedClientId=created.client.id
     }
     if(!resolvedClientId)throw new Error('Selecione ou crie o cliente antes de confirmar.')
-    if(result.documentType==='other'){
+    if(type==='other'){
       proposalId=null;contractId=null
     }else if(entityAction==='link'){
       // O registro e seu cliente já foram validados acima pela sessão e pelo RLS.
-    }else if(result.documentType==='proposal'){
+    }else if(type==='proposal'){
+      stage='proposta';onProgress('Importando proposta')
       const proposal=cleanRecord({...extractedValues(reviewed.proposal),organization_id:oid,client_id:resolvedClientId,created_by:user?.id,updated_by:user?.id})
       proposal.title=proposal.title||`Proposta importada — ${analysis.file_name}`
-      proposal.status=proposal.status||'draft'
+      proposal.status=proposal.status||'sent'
       created.proposal=unwrap(await client.from('proposals').insert(proposal).select().single());proposalId=created.proposal.id
+      stage='serviços';onProgress('Vinculando serviços')
       const services=(reviewed.services||[]).map((service)=>cleanRecord({...pick(extractedValues(service),serviceFields),organization_id:oid,proposal_id:proposalId})).filter((service)=>service.service_name)
       if(services.length){created.servicesTable='proposal_services';unwrap(await client.from('proposal_services').insert(services))}
-    }else{
-      const contract=cleanRecord({...extractedValues(reviewed.contract),organization_id:oid,client_id:resolvedClientId,created_by:user?.id,updated_by:user?.id,setup_received_amount:0,setup_received_at:null,setup_payment_method:null})
+    }else if(type!=='amendment'){
+      stage='contrato';onProgress('Importando contrato')
+      const contract=cleanRecord({...extractedValues(reviewed.contract),organization_id:oid,client_id:resolvedClientId,proposal_id:relatedProposalId||null,created_by:user?.id,updated_by:user?.id,setup_received_amount:0,setup_received_at:null,setup_payment_method:null})
       contract.status=contract.status||'draft'
       created.contract=unwrap(await client.from('contracts').insert(contract).select().single());contractId=created.contract.id
+      stage='serviços';onProgress('Vinculando serviços')
       const services=(reviewed.services||[]).map((service)=>cleanRecord({...pick(extractedValues(service),serviceFields),organization_id:oid,contract_id:contractId})).filter((service)=>service.service_name)
       if(services.length){created.servicesTable='contract_services';unwrap(await client.from('contract_services').insert(services))}
     }
-    created.document=unwrap(await client.from('documents').insert({organization_id:oid,client_id:resolvedClientId,proposal_id:proposalId,contract_id:contractId,document_type:result.documentType,file_name:analysis.file_name,storage_bucket:FINAL_DOCUMENT_BUCKET,storage_path:created.finalPath,mime_type:analysis.mime_type,file_size:analysis.file_size,uploaded_by:user?.id,notes:`Importado após revisão humana. Confiança geral: ${Math.round(Number(result.confidence||0)*100)}%.`}).select().single())
+    stage='documento';onProgress('Salvando documento')
+    const file=unwrap(await client.storage.from(analysis.temp_bucket).download(analysis.temp_path))
+    created.finalPath=`${oid}/imports/${type}/${crypto.randomUUID()}-${safeName(analysis.file_name)}`
+    unwrap(await client.storage.from(FINAL_DOCUMENT_BUCKET).upload(created.finalPath,file,{contentType:analysis.mime_type,upsert:false}))
+    const documentObservation=type==='other'?valueOf(reviewed.contract?.notes):null
+    created.document=unwrap(await client.from('documents').insert({organization_id:oid,client_id:resolvedClientId,proposal_id:proposalId,contract_id:contractId,document_type:type,file_name:analysis.file_name,storage_bucket:FINAL_DOCUMENT_BUCKET,storage_path:created.finalPath,mime_type:analysis.mime_type,file_size:analysis.file_size,uploaded_by:user?.id,notes:`Importado após revisão humana. Confiança geral: ${Math.round(Number(result.confidence||0)*100)}%.${documentObservation?` Observações: ${String(documentObservation).slice(0,500)}`:''}`}).select().single())
+    stage='histórico';onProgress('Registrando histórico')
     unwrap(await client.from('commercial_events').insert({organization_id:oid,client_id:resolvedClientId,proposal_id:proposalId,contract_id:contractId,event_type:'document_import_confirmed',title:'Importação de documento confirmada',description:analysis.file_name,new_value:{analysis_id:analysis.id,document_id:created.document.id,document_type:result.documentType,field_count:result.fieldCount||0,low_confidence_fields:result.lowConfidenceFields?.length||0,action:entityAction},created_by:user?.id}))
-    unwrap(await client.from('document_analyses').update({status:'confirmed',confirmed_document_id:created.document.id,expires_at:new Date().toISOString()}).eq('id',analysis.id))
+    const analysisUpdate=await client.from('document_analyses').update({status:'confirmed',document_type:type,confirmed_document_id:created.document.id,expires_at:new Date().toISOString()}).eq('id',analysis.id)
     await client.storage.from(analysis.temp_bucket).remove([analysis.temp_path])
-    return {clientId:resolvedClientId,proposalId,contractId,documentId:created.document.id}
+    onProgress(analysisUpdate.error?'Importação parcialmente concluída':'Importação concluída')
+    return {clientId:resolvedClientId,proposalId,contractId,documentId:created.document.id,partial:Boolean(analysisUpdate.error)}
   }catch(error){
-    if(created.document)await client.from('documents').delete().eq('id',created.document.id)
-    if(created.servicesTable){const parentKey=created.proposal?'proposal_id':'contract_id',parentId=created.proposal?.id||created.contract?.id;await client.from(created.servicesTable).delete().eq(parentKey,parentId)}
-    if(created.proposal)await client.from('proposals').delete().eq('id',created.proposal.id)
-    if(created.contract)await client.from('contracts').delete().eq('id',created.contract.id)
-    if(created.client)await client.from('clients').delete().eq('id',created.client.id)
-    if(created.finalPath)await client.storage.from(FINAL_DOCUMENT_BUCKET).remove([created.finalPath])
-    throw error
+    let compensationFailed=false
+    const compensate=async(operation)=>{try{const response=await operation();if(response?.error)compensationFailed=true}catch{compensationFailed=true}}
+    if(created.document)await compensate(()=>client.from('documents').delete().eq('id',created.document.id))
+    if(created.servicesTable){const parentKey=created.proposal?'proposal_id':'contract_id',parentId=created.proposal?.id||created.contract?.id;await compensate(()=>client.from(created.servicesTable).delete().eq(parentKey,parentId))}
+    if(created.proposal)await compensate(()=>client.from('proposals').delete().eq('id',created.proposal.id))
+    if(created.contract)await compensate(()=>client.from('contracts').delete().eq('id',created.contract.id))
+    if(created.client)await compensate(()=>client.from('clients').delete().eq('id',created.client.id))
+    if(created.finalPath)await compensate(()=>client.storage.from(FINAL_DOCUMENT_BUCKET).remove([created.finalPath]))
+    const noun=type==='proposal'?'a proposta':type==='other'?'o documento':'o contrato',message=compensationFailed?`${noun[0].toUpperCase()+noun.slice(1)} foi parcialmente importado na etapa de ${stage}. Você pode tentar novamente sem criar outro registro.`:`Não foi possível importar ${noun}. Nenhum registro parcial foi mantido.`
+    const safeError=new Error(message,{cause:error});safeError.stage=stage;safeError.partial=compensationFailed;safeError.code=import.meta.env.DEV?error?.code||'IMPORT_FAILED':undefined
+    throw safeError
   }
 }
