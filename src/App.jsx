@@ -5,7 +5,7 @@ import { Sidebar } from './components/Sidebar'
 import { Dashboard } from './components/Dashboard'
 import { ProposalForm } from './components/ProposalForm'
 import { ProposalTable } from './components/ProposalTable'
-import { Menu } from 'lucide-react'
+import { Menu, Sparkles } from 'lucide-react'
 import { ContractsPage } from './components/ContractsPage'
 import { FeedbackMessage } from './components/FeedbackMessage'
 import { PageSkeleton } from './components/PageSkeleton'
@@ -19,6 +19,7 @@ import { CommercialPerformancePage } from './components/CommercialPerformancePag
 import { SupabaseContractsPage } from './components/SupabaseContractsPage'
 import { dataProvider } from './lib/supabase/client'
 import { listContracts } from './services/data/contractsRepository'
+import { MugoAssistantPanel } from './components/MugoAssistantPanel'
 
 const initialFormState = {
   client_name: '',
@@ -59,6 +60,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [formDirty, setFormDirty] = useState(false)
   const [hasLoaded, setHasLoaded] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
 
   useEffect(() => {
     loadProposals()
@@ -275,6 +277,8 @@ export default function App() {
         {activePage === 'performance' && <CommercialPerformancePage />}
         </>}
         </div>
+        <button type="button" className="assistant-trigger" onClick={() => setAssistantOpen(true)}><Sparkles size={16}/>Pergunte à Mugô</button>
+        <MugoAssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} data={{proposals,contracts:supabaseContracts}} />
       </main>
     </div>
   )

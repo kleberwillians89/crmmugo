@@ -1,4 +1,4 @@
-import { toNumber } from './businessMetrics'
+import { toNumber } from './businessMetrics.js'
 const norm=(v)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim()
 const parse=(v)=>{if(!v)return null;const d=new Date(`${String(v).slice(0,10)}T12:00:00`);return Number.isNaN(d.getTime())?null:d}
 const status=(p)=>norm(p.status||p.proposal_status)

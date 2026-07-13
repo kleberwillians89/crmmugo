@@ -1,0 +1,1 @@
+export const NAVIGATION_LABELS={dashboard:'Painel',nova:'Nova proposta',proposals:'Propostas',performance:'Performance comercial',contracts:'Contratos',clients:'Clientes',services:'Serviços e preços',finance:'Financeiro',documents:'Importar documento','organization-settings':'Configurações da empresa',diagnostic:'Diagnóstico Supabase'}

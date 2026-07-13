@@ -16,6 +16,9 @@ import {
   X,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { MugoBrand } from './brand/MugoBrand'
+import { NAVIGATION_LABELS } from '../config/navigationLabels'
+import { statusLabel } from '../config/statusLabels'
 
 const groups = [
   { label: 'Visão geral', links: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
@@ -57,11 +60,7 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
       />
       <aside className={`sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`}>
       <div className="brand-panel">
-        <div className="brand-mark" aria-hidden="true">M</div>
-        <div className="brand-copy">
-          <strong>Mugô CRM</strong>
-          <p>Inteligência comercial</p>
-        </div>
+        <MugoBrand variant={collapsed ? 'symbol' : 'full'} theme="dark" />
         <button type="button" className="sidebar-close" onClick={onClose} aria-label="Fechar menu">
           <X size={20} />
         </button>
@@ -82,7 +81,7 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
                   title={collapsed ? link.label : undefined}
                 >
                   <Icon size={18} aria-hidden="true" />
-                  <span>{link.label}</span>
+                  <span>{NAVIGATION_LABELS[link.id] || link.label}</span>
                   {link.disabled && <small>Em breve</small>}
                 </button>
               )
@@ -94,7 +93,7 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
         <div className="agency-avatar"><Building2 size={17} /></div>
         <div className="brand-copy">
           <strong>{profile?.name || 'Agência Mugô'}</strong>
-          <small>{profile?.role || 'Workspace comercial'}</small>
+          <small>{profile?.role ? statusLabel('role',profile.role) : 'Ambiente comercial'}</small>
         </div>
       </div>
       {!isLegacy && <button type="button" className="collapse-button" onClick={signOut}><LogOut size={17} /><span>Sair</span></button>}

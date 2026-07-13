@@ -1,10 +1,13 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, Pencil, X } from 'lucide-react'
 import { ContractBadge, ProposalStatusBadge } from './ProposalStatusBadge'
+import { buildProposalMessage, isValidBrazilianPhone } from '../lib/whatsapp'
+import { WhatsAppReviewModal } from './WhatsAppReviewModal'
 
 const currency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0)
 
 export function ProposalDetailsPanel({ proposal, onClose, onEdit }) {
+  const [whatsapp, setWhatsapp] = useState(null)
   const closeRef = useRef(null)
   useEffect(() => {
     if (!proposal) return undefined
@@ -40,7 +43,8 @@ export function ProposalDetailsPanel({ proposal, onClose, onEdit }) {
       <div className="details-badges"><ProposalStatusBadge status={proposal.proposal_status} /><ContractBadge signed={proposal.contract_signed} /></div>
       <section className="details-values"><div><span>Implantação</span><strong>{currency(proposal.setup_value)}</strong></div><div><span>Mensalidade</span><strong>{currency(proposal.monthly_value)}</strong></div></section>
       <dl className="details-list">{details.map(([label, value]) => <div key={label} className={label === 'Observações' ? 'detail-wide' : ''}><dt>{label}</dt><dd>{value || 'Não informado'}</dd></div>)}</dl>
-      <footer><button type="button" className="button" onClick={() => onEdit(proposal)}><Pencil size={14} />Editar</button>{proposal.proposal_file_url && <a className="button secondary" href={proposal.proposal_file_url} target="_blank" rel="noreferrer">Abrir proposta<ExternalLink size={13} /></a>}{proposal.contract_file_url && <a className="button secondary" href={proposal.contract_file_url} target="_blank" rel="noreferrer">Abrir contrato<ExternalLink size={13} /></a>}</footer>
+      <footer><button type="button" className="button" onClick={() => onEdit(proposal)}><Pencil size={14} />Editar</button>{isValidBrazilianPhone(proposal.phone)&&<button type="button" className="button secondary" onClick={()=>setWhatsapp({client:proposal.client_name||proposal.company,phone:proposal.phone,type:'Conversa sobre proposta',message:buildProposalMessage({name:proposal.client_name,service:proposal.main_service})})}>Conversar sobre a proposta</button>}{proposal.proposal_file_url && <a className="button secondary" href={proposal.proposal_file_url} target="_blank" rel="noreferrer">Abrir proposta<ExternalLink size={13} /></a>}{proposal.contract_file_url && <a className="button secondary" href={proposal.contract_file_url} target="_blank" rel="noreferrer">Abrir contrato<ExternalLink size={13} /></a>}</footer>
     </aside>
+    {whatsapp&&<WhatsAppReviewModal data={whatsapp} onClose={()=>setWhatsapp(null)}/>}
   </div>
 }
