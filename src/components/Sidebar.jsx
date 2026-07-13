@@ -4,11 +4,18 @@ import {
   ClipboardCheck,
   FileText,
   Library,
+  Users,
+  WalletCards,
+  Upload,
+  LogOut,
+  Activity,
+  SlidersHorizontal,
   LayoutDashboard,
   Plus,
   Settings,
   X,
 } from 'lucide-react'
+import { useAuth } from '../contexts/AuthContext'
 
 const groups = [
   { label: 'Visão geral', links: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
@@ -17,14 +24,23 @@ const groups = [
     links: [
       { id: 'nova', label: 'Nova proposta', icon: Plus },
       { id: 'proposals', label: 'Propostas', icon: FileText },
+      { id: 'performance', label: 'Performance comercial', icon: Activity },
       { id: 'contracts', label: 'Contratos', icon: ClipboardCheck },
+      { id: 'clients', label: 'Clientes', icon: Users },
       { id: 'services', label: 'Serviços e preços', icon: Library },
+      { id: 'finance', label: 'Financeiro', icon: WalletCards },
+      { id: 'documents', label: 'Importar documento', icon: Upload },
     ],
   },
-  { label: 'Sistema', links: [{ id: 'settings', label: 'Configurações', icon: Settings, disabled: true }] },
+  { label: 'Sistema', links: [
+    { id: 'organization-settings', label: 'Configurações da empresa', icon: SlidersHorizontal, supabaseOnly: true },
+    { id: 'diagnostic', label: 'Diagnóstico Supabase', icon: Activity, adminOnly: true },
+    { id: 'settings', label: 'Configurações', icon: Settings, disabled: true },
+  ] },
 ]
 
 export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onToggleCollapse }) {
+  const { isLegacy, signOut, profile } = useAuth()
   function navigate(id) {
     onNavigate(id)
     onClose()
@@ -54,7 +70,7 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
         {groups.map((group) => (
           <div className="nav-group" key={group.label}>
             <p className="nav-group-label">{group.label}</p>
-            {group.links.map((link) => {
+            {group.links.filter((link)=>!link.supabaseOnly||!isLegacy).filter((link)=>!link.adminOnly||profile?.role==='admin').map((link) => {
               const Icon = link.icon
               return (
                 <button
@@ -77,10 +93,11 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
       <div className="sidebar-footer">
         <div className="agency-avatar"><Building2 size={17} /></div>
         <div className="brand-copy">
-          <strong>Agência Mugô</strong>
-          <small>Workspace comercial</small>
+          <strong>{profile?.name || 'Agência Mugô'}</strong>
+          <small>{profile?.role || 'Workspace comercial'}</small>
         </div>
       </div>
+      {!isLegacy && <button type="button" className="collapse-button" onClick={signOut}><LogOut size={17} /><span>Sair</span></button>}
       <button type="button" className="collapse-button" onClick={onToggleCollapse} aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}>
         <ChevronLeft size={17} />
         <span>Recolher menu</span>

@@ -1,0 +1,8 @@
+import { db,isSupabaseProvider,legacyUnavailable,organizationId,unwrap } from './provider'
+const bucket='crm-documents';const allowed=['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document'];const safe=(name)=>name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]/g,'-')
+export async function uploadDocument(file,metadata){if(!isSupabaseProvider())return legacyUnavailable('Documentos');if(!allowed.includes(file.type)||file.size>10*1024*1024)throw new Error('Use PDF ou DOC/DOCX com até 10 MB.');const oid=await organizationId();const path=`${oid}/${metadata.client_id}/${metadata.document_type}/${crypto.randomUUID()}-${safe(file.name)}`;unwrap(await db().storage.from(bucket).upload(path,file));try{return unwrap(await db().from('documents').insert({...metadata,organization_id:oid,file_name:file.name,storage_bucket:bucket,storage_path:path,mime_type:file.type,file_size:file.size}).select().single())}catch(error){await db().storage.from(bucket).remove([path]);throw error}}
+export const listByClient=(id)=>db().from('documents').select('*').eq('client_id',id).then(unwrap)
+export const listByProposal=(id)=>db().from('documents').select('*').eq('proposal_id',id).then(unwrap)
+export const listByContract=(id)=>db().from('documents').select('*').eq('contract_id',id).then(unwrap)
+export const createSignedUrl=(path,seconds=300)=>db().storage.from(bucket).createSignedUrl(path,seconds).then(unwrap)
+export async function deleteDocument(doc){unwrap(await db().storage.from(doc.storage_bucket).remove([doc.storage_path]));return unwrap(await db().from('documents').delete().eq('id',doc.id))}

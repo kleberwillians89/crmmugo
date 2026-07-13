@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import './App.css'
-import { getProposals, createProposal, updateProposal } from './lib/api'
+import { listProposals as getProposals, createProposal, updateProposal } from './services/data/proposalsRepository'
 import { Sidebar } from './components/Sidebar'
 import { Dashboard } from './components/Dashboard'
 import { ProposalForm } from './components/ProposalForm'
@@ -10,6 +10,15 @@ import { ContractsPage } from './components/ContractsPage'
 import { FeedbackMessage } from './components/FeedbackMessage'
 import { PageSkeleton } from './components/PageSkeleton'
 import { ServicesCatalogPage } from './components/ServicesCatalogPage'
+import { ClientsPage } from './components/ClientsPage'
+import { FinancePage } from './components/FinancePage'
+import { ImportDocumentPage } from './components/ImportDocumentPage'
+import { SupabaseDiagnosticPage } from './components/SupabaseDiagnosticPage'
+import { OrganizationSettingsPage } from './components/OrganizationSettingsPage'
+import { CommercialPerformancePage } from './components/CommercialPerformancePage'
+import { SupabaseContractsPage } from './components/SupabaseContractsPage'
+import { dataProvider } from './lib/supabase/client'
+import { listContracts } from './services/data/contractsRepository'
 
 const initialFormState = {
   client_name: '',
@@ -40,6 +49,7 @@ function buildDateValue(value) {
 export default function App() {
   const [activePage, setActivePage] = useState('dashboard')
   const [proposals, setProposals] = useState([])
+  const [supabaseContracts, setSupabaseContracts] = useState([])
   const [form, setForm] = useState(initialFormState)
   const [editId, setEditId] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -61,6 +71,7 @@ export default function App() {
     try {
       const data = await getProposals()
       setProposals(data)
+      if (dataProvider === 'supabase') setSupabaseContracts(await listContracts())
     } catch (error) {
       console.error(error)
       setErrorMessage('Não foi possível carregar as propostas.')
@@ -228,7 +239,7 @@ export default function App() {
         <div className="content-container">
         {loading && !hasLoaded ? <PageSkeleton type={activePage === 'nova' ? 'form' : activePage === 'proposals' ? 'proposals' : 'dashboard'} /> : <>
         {errorMessage && activePage !== 'nova' && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
-        {activePage === 'dashboard' && <Dashboard proposals={proposals} />}
+        {activePage === 'dashboard' && <Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible: contract.proposals?.responsible || '', main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} />}
         {activePage === 'nova' && (
           <ProposalForm
             form={form}
@@ -251,10 +262,17 @@ export default function App() {
             onNew={() => handleNavigate('nova')}
           />
         )}
-        {activePage === 'contracts' && (
+        {activePage === 'contracts' && dataProvider === 'legacy' && (
           <ContractsPage proposals={proposals} onEdit={handleEdit} />
         )}
+        {activePage === 'contracts' && dataProvider === 'supabase' && <SupabaseContractsPage />}
         {activePage === 'services' && <ServicesCatalogPage />}
+        {activePage === 'clients' && <ClientsPage />}
+        {activePage === 'finance' && <FinancePage />}
+        {activePage === 'documents' && <ImportDocumentPage />}
+        {activePage === 'diagnostic' && <SupabaseDiagnosticPage />}
+        {activePage === 'organization-settings' && <OrganizationSettingsPage />}
+        {activePage === 'performance' && <CommercialPerformancePage />}
         </>}
         </div>
       </main>

@@ -1,0 +1,5 @@
+# Ativação da Sprint 8
+
+1. Crie o projeto Supabase. 2. Execute as migrations em ordem. 3. Ative e-mail/senha e desative cadastro público. 4. Crie o primeiro usuário. 5. Insira o profile admin ligado à organização `mugo`. 6. Confira a organização. 7. Confira `organization_settings`. 8. Confirme o bucket privado `crm-documents`. 9. Configure `.env.local` apenas com URL, publishable key, provider e slug. 10. Rode com provider Supabase. 11. Execute o Diagnóstico Supabase. 12. Crie um cliente fictício local. 13. Crie uma proposta fictícia. 14. Transforme-a em contrato pendente e revise. 15. Envie um documento fictício. 16. Crie uma parcela manual. 17. Valide admin, manager e viewer separadamente. 18. Remova os dados fictícios. 19. Configure as variáveis públicas na Vercel. 20. Para rollback, publique com `VITE_DATA_PROVIDER=legacy`.
+
+Nunca copie service role, senha, access token ou secrets para Vite. Este checkout ainda não possui credenciais Supabase; a validação remota deve seguir este roteiro.

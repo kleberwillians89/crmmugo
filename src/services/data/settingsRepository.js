@@ -1,0 +1,3 @@
+import { db,isSupabaseProvider,legacyUnavailable,organizationId,unwrap } from './provider'
+export async function getOrganizationSettings(){if(!isSupabaseProvider())return legacyUnavailable('Configurações da empresa');return unwrap(await db().from('organization_settings').select('*').eq('organization_id',await organizationId()).single())}
+export async function updateOrganizationSettings(values){if(!isSupabaseProvider())return legacyUnavailable('Configurações da empresa');return unwrap(await db().from('organization_settings').update(values).eq('organization_id',await organizationId()).select().single())}
