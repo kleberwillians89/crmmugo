@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:sprint11": "node scripts/test-sprint11-normalization.mjs"
+    "test:sprint11": "node scripts/test-sprint11-normalization.mjs",
+    "test:sprint12": "node scripts/test-sprint12-billing.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.3",

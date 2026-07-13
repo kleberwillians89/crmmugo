@@ -78,6 +78,7 @@ export default function App() {
   useEffect(() => {
     loadProposals()
   }, [])
+  useEffect(()=>{const navigate=(event)=>handleNavigate(event.detail);window.addEventListener('mugo:navigate',navigate);return()=>window.removeEventListener('mugo:navigate',navigate)})
 
   async function loadProposals() {
     setLoading(true)

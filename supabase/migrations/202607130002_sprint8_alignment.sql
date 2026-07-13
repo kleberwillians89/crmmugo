@@ -19,9 +19,7 @@ alter table public.contracts add constraint contracts_org_legacy_unique unique(o
 
 -- View financeira segura para viewer, sem raw_payload.
 create or replace view public.payments_safe with (security_invoker=true) as select id,organization_id,installment_id,provider,provider_payment_id,amount,status,payment_method,paid_at,created_at,updated_at from public.payments;
-grant select on public.payments_safe to authenticated;npm run lint
-npm run build
-git status
+grant select on public.payments_safe to authenticated;
 drop policy if exists payments_view_safe on public.payments;
 create policy payments_read on public.payments for select to authenticated using(organization_id=public.current_organization_id() and public.is_active_user());
 revoke select(raw_payload) on public.payments from authenticated;
