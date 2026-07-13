@@ -37,7 +37,7 @@ const groups = [
       { id: 'team', label: 'Equipe Mugô', icon: UserRoundCog, supabaseOnly: true },
       { id: 'services', label: 'Serviços e preços', icon: Library },
       { id: 'finance', label: 'Financeiro', icon: WalletCards },
-      { id: 'documents', label: 'Importar documento', icon: Upload },
+      { id: 'documents', label: 'Importar', icon: Upload },
     ],
   },
   { label: 'Sistema', links: [
