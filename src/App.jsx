@@ -59,6 +59,7 @@ export default function App() {
   const [installments, setInstallments] = useState([])
   const [documents, setDocuments] = useState([])
   const [commercialEvents, setCommercialEvents] = useState([])
+  const [documentAnalyses, setDocumentAnalyses] = useState([])
   const [intelligenceError, setIntelligenceError] = useState('')
   const [form, setForm] = useState(initialFormState)
   const [editId, setEditId] = useState(null)
@@ -91,6 +92,7 @@ export default function App() {
           setInstallments(installmentRows)
           setDocuments(intelligenceRecords.documents)
           setCommercialEvents(intelligenceRecords.events)
+          setDocumentAnalyses(intelligenceRecords.documentAnalyses)
         } catch (error) {
           console.error(error)
           setIntelligenceError('Parte dos dados analíticos não pôde ser carregada. Os resultados exibidos consideram somente os registros disponíveis.')
@@ -257,8 +259,9 @@ export default function App() {
     clients,
     installments,
     documents,
+    documentAnalyses,
     events: commercialEvents,
-  }), [proposals, supabaseContracts, clients, installments, documents, commercialEvents])
+  }), [proposals, supabaseContracts, clients, installments, documents, documentAnalyses, commercialEvents])
 
   return (
     <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
