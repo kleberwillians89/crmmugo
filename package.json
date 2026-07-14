@@ -13,7 +13,8 @@
     "test:sprint12-2": "node scripts/test-sprint12-2-services.mjs",
     "test:contracts": "node scripts/test-contract-reliability.mjs",
     "test:archiving": "node scripts/test-safe-archiving.mjs",
-    "test:integration": "node scripts/test-commercial-integration.mjs"
+    "test:integration": "node scripts/test-commercial-integration.mjs",
+    "test:trigger-fix": "node scripts/test-financial-trigger-fix.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.3",
