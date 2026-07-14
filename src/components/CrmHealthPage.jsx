@@ -1,0 +1,5 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+import {useEffect,useState} from 'react'
+import {PageHeader} from './PageHeader'
+import {getCrmHealth} from '../services/data/operationsRepository'
+export function CrmHealthPage(){const [data,setData]=useState(null),[error,setError]=useState('');async function load(){try{setData(await getCrmHealth())}catch(cause){setError(cause.message)}}useEffect(()=>{load()},[]);return <div className="operations-page"><PageHeader eyebrow="Sistema" title="Saúde do CRM" description="Visão consolidada da confiabilidade operacional." actions={<button className="button" onClick={load}>Atualizar</button>}/>{error&&<p className="feedback-message error">{error}</p>}<div className="health-grid">{Object.entries(data?.counts||{}).map(([key,value])=><article key={key}><span>{key}</span><strong>{value}</strong></article>)}</div>{data&&<section className="dashboard-panel"><h2>Último diagnóstico</h2><p>{new Date(data.generatedAt).toLocaleString('pt-BR')}</p><p><strong>{data.errors}</strong> erros · <strong>{data.warnings}</strong> alertas · <strong>{data.duplicates}</strong> duplicidades</p></section>}</div>}

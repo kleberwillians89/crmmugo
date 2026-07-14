@@ -8,6 +8,7 @@ import { buildInsights } from '../services/intelligence/insightsEngine'
 import { buildOpportunities } from '../services/intelligence/opportunityEngine'
 import { buildRecommendations } from '../services/intelligence/recommendationEngine'
 import { buildTimeline } from '../services/intelligence/timelineEngine'
+import { buildCausalAnalysis } from '../services/intelligence/causalAnalysisEngine'
 import { FeedbackMessage } from './FeedbackMessage'
 import { PageHeader } from './PageHeader'
 
@@ -48,6 +49,7 @@ export function MugoIntelligencePage({ data, loading, error }) {
     const forecast = buildForecast(data)
     const timeline = buildTimeline(data)
     const recommendations = buildRecommendations(insights, opportunities)
+    const causal = buildCausalAnalysis(data)
     const lifetime = active.reduce((sum, contract) => sum + Number(contract.monthly_value || 0) * contractMonths(contract) + Number(contract.setup_value || 0), 0)
     const summary = [
       ['Receita recorrente', money(mrr)], ['Receita de projetos', money(projectRevenue)], ['Meta', money(AGENCY_GOALS.monthlyAgencyGoal)], ['Falta para meta', money(Math.max(AGENCY_GOALS.monthlyAgencyGoal - mrr, 0))],
@@ -61,7 +63,7 @@ export function MugoIntelligencePage({ data, loading, error }) {
       period: group(active, (row) => row.start_date ? String(row.start_date).slice(0, 7) : 'Sem período', (row) => Number(row.monthly_value || 0)),
       duration: group(active, (row) => { const months = contractMonths(row); return !months ? 'Prazo não informado' : months <= 3 ? 'Até 3 meses' : months <= 6 ? '4 a 6 meses' : months <= 12 ? '7 a 12 meses' : 'Mais de 12 meses' }, (row) => Number(row.monthly_value || 0)),
     }
-    return { summary, insights, opportunities, health, forecast, timeline, recommendations, maps }
+    return { summary, insights, opportunities, health, forecast, timeline, recommendations, causal, maps }
   }, [data])
 
   return <div className="intelligence-page">
@@ -69,6 +71,10 @@ export function MugoIntelligencePage({ data, loading, error }) {
     {error && <FeedbackMessage type="error">{error}</FeedbackMessage>}
     {loading && <p className="intelligence-loading" role="status">Calculando inteligência comercial…</p>}
     <p className="data-scope-note">Número calculado apenas com os dados atualmente cadastrados.</p>
+
+    <Section icon={BrainCircuit} eyebrow="Causa, evidência e impacto" title="Análise Cruzada">
+      <div className="causal-insight-grid">{intelligence.causal.slice(0,12).map((item)=><article key={item.id}><span>{item.type}</span><h3>{item.statement}</h3><ul>{item.evidence.slice(0,4).map((evidence)=><li key={evidence}>{evidence}</li>)}</ul><small>Fontes: {item.sources.join(' · ')}</small></article>)}{!intelligence.causal.length&&<p className="intelligence-empty">Nenhuma relação causal confiável foi identificada com os dados atuais.</p>}</div>
+    </Section>
 
     <Section icon={ChartNoAxesCombined} eyebrow="Visão consolidada" title="Resumo Executivo">
       <div className="intelligence-summary">{intelligence.summary.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div>

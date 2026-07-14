@@ -29,6 +29,17 @@ import { CommercialIntegrityPage } from './components/CommercialIntegrityPage'
 import {TeamPage} from './components/TeamPage'
 import {CRM_DATA_CHANGED} from './lib/dataInvalidation'
 import {listTeamMembers} from './services/data/teamRepository'
+import {SystemAuditPage} from './components/SystemAuditPage'
+import {FinancialReconciliationPage} from './components/FinancialReconciliationPage'
+import {CrmHealthPage} from './components/CrmHealthPage'
+import {BackupPage} from './components/BackupPage'
+import {RestorePage} from './components/RestorePage'
+import {initializeMonitoring} from './lib/observability'
+import {generatePulseAlerts} from './services/pulse/pulseEngine'
+import {listPulseAlerts,syncPulseAlerts} from './services/data/pulseRepository'
+import {PulseAlertsPage} from './components/PulseAlertsPage'
+import {PulseBell} from './components/PulseBell'
+import {PulseDailySummary} from './components/PulseDailySummary'
 
 const initialFormState = {
   client_name: '',
@@ -78,12 +89,14 @@ export default function App() {
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [importedEntity, setImportedEntity] = useState(null)
   const [teamMembers, setTeamMembers] = useState([])
+  const [pulseAlerts, setPulseAlerts] = useState([])
   const loadPromise=useRef(null)
   const proposalSubmitRef=useRef(false)
 
   useEffect(() => {
     loadProposals()
   }, [])
+  useEffect(()=>initializeMonitoring(),[])
   useEffect(()=>{const navigate=(event)=>handleNavigate(event.detail);window.addEventListener('mugo:navigate',navigate);return()=>window.removeEventListener('mugo:navigate',navigate)})
   useEffect(()=>{const refresh=()=>loadProposals();window.addEventListener(CRM_DATA_CHANGED,refresh);return()=>window.removeEventListener(CRM_DATA_CHANGED,refresh)},[])
 
@@ -287,7 +300,13 @@ export default function App() {
     documents,
     documentAnalyses,
     events: commercialEvents,
-  }), [proposals, supabaseContracts, clients, installments, documents, documentAnalyses, commercialEvents])
+    teamMembers,
+    alerts: pulseAlerts,
+  }), [proposals, supabaseContracts, clients, installments, documents, documentAnalyses, commercialEvents, teamMembers, pulseAlerts])
+
+  useEffect(()=>{if(!hasLoaded||dataProvider!=='supabase')return undefined;let mounted=true;const monitor=async()=>{const generated=generatePulseAlerts({proposals,contracts:supabaseContracts,clients,installments,documents,events:commercialEvents,teamMembers});try{await syncPulseAlerts(generated);const persisted=await listPulseAlerts({status:'all'});if(mounted)setPulseAlerts(persisted)}catch{if(mounted)setPulseAlerts(generated.map((alert)=>({...alert,id:alert.fingerprint,status:'open',detected_at:new Date().toISOString()})))}};monitor();const timer=setInterval(monitor,300000);return()=>{mounted=false;clearInterval(timer)}},[hasLoaded,proposals,supabaseContracts,clients,installments,documents,commercialEvents,teamMembers])
+
+  async function refreshPulse(){try{setPulseAlerts(await listPulseAlerts({status:'all'}))}catch{return}}
 
   return (
     <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
@@ -300,6 +319,7 @@ export default function App() {
         onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
       />
       <main className="main-content">
+        <PulseBell alerts={pulseAlerts} onOpen={()=>handleNavigate('alerts')} />
         <div className="mobile-topbar">
           <button type="button" className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="Abrir menu">
             <Menu size={20} />
@@ -310,7 +330,7 @@ export default function App() {
         <div className="content-container">
         {loading && !hasLoaded ? <PageSkeleton type={activePage === 'nova' ? 'form' : activePage === 'proposals' ? 'proposals' : 'dashboard'} /> : <>
         {errorMessage && !['nova', 'intelligence'].includes(activePage) && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
-        {activePage === 'dashboard' && <Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible_id: contract.responsibleId, responsibleName: contract.responsibleName, main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} contracts={intelligenceData.contracts} installments={installments} teamMembers={teamMembers} />}
+        {activePage === 'dashboard' && <><PulseDailySummary alerts={pulseAlerts} onOpen={()=>handleNavigate('alerts')}/><Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible_id: contract.responsibleId, responsibleName: contract.responsibleName, main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} contracts={intelligenceData.contracts} installments={installments} teamMembers={teamMembers} /></>}
         {activePage === 'nova' && (
           <ProposalForm
             form={form}
@@ -345,11 +365,17 @@ export default function App() {
         {activePage === 'clients' && <ClientsPage />}
         {activePage === 'team' && <TeamPage />}
         {activePage === 'finance' && <FinancePage />}
+        {activePage === 'financial-reconciliation' && <FinancialReconciliationPage />}
         {activePage === 'documents' && <ImportDocumentPage onImported={handleDocumentImported} />}
         {activePage === 'diagnostic' && <SupabaseDiagnosticPage />}
         {activePage === 'organization-settings' && <OrganizationSettingsPage />}
         {activePage === 'commercial-trash' && <CommercialTrashPage />}
         {activePage === 'commercial-integrity' && <CommercialIntegrityPage />}
+        {activePage === 'system-audit' && <SystemAuditPage />}
+        {activePage === 'crm-health' && <CrmHealthPage />}
+        {activePage === 'backup' && <BackupPage />}
+        {activePage === 'restore' && <RestorePage />}
+        {activePage === 'alerts' && <PulseAlertsPage alerts={pulseAlerts} teamMembers={teamMembers} onChanged={refreshPulse} onNavigate={handleNavigate} />}
         {activePage === 'performance' && <CommercialPerformancePage />}
         {activePage === 'intelligence' && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} />}
         </>}

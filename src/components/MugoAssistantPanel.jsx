@@ -3,7 +3,7 @@ import { AI_MAX_QUESTION_LENGTH } from '../config/aiConfig'
 import { useAuth } from '../contexts/AuthContext'
 import { askMugoAssistant } from '../services/ai/aiAssistantService'
 
-const defaultSuggestions = ['Quanto falta para bater a meta?', 'Quantos contratos precisamos para fazer 10 mil de Social Media?', 'Quais contratos vencem?', 'Quem devo ligar hoje?', 'Quais clientes podem comprar IA?', 'Qual serviço mais converte?', 'Como aumentar a receita este mês?', 'Quais propostas estão paradas?']
+const defaultSuggestions = ['Por que o faturamento pode cair no próximo mês?', 'Qual serviço representa mais receita?', 'Quantas entregas estão com a Julia?', 'Quais clientes estão sem cobrança?', 'Quem está inadimplente há mais tempo?', 'Quais setups nunca foram recebidos?', 'Como estão as propostas de Automação?', 'Quais são as principais causas agora?']
 const pageSuggestions={contracts:['Quais contratos vencem?','Quem ainda não pagou?','Quanto recebo este mês?','Quais contratos renovam em agosto?']}
 
 function SafeAnswer({ text }) {

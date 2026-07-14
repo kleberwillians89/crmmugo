@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict'
+import {readFileSync} from 'node:fs'
+const read=(path)=>readFileSync(new URL(`../${path}`,import.meta.url),'utf8')
+const migration=read('supabase/migrations/202607140006_sprint14_1_operational_audit.sql')
+const sidebar=read('src/components/Sidebar.jsx')
+const repository=read('src/services/data/operationsRepository.js')
+const docs=read('docs/SPRINT14_1_OPERATIONS.md')
+for(const rpc of ['crm_operational_audit','crm_financial_reconciliation','crm_permission_audit','crm_health_snapshot','crm_archived_records','restore_archived_record'])assert.match(migration,new RegExp(`function public\\.${rpc}`))
+assert.match(migration,/audit_log_immutable/)
+assert.match(migration,/security definer/)
+assert.match(migration,/current_user_role\(\) not in/)
+for(const page of ['system-audit','financial-reconciliation','crm-health','backup','restore'])assert.match(sidebar,new RegExp(page))
+assert.match(repository,/observed/)
+assert.match(docs,/não é executada/)
+console.log('Sprint 14.1 operations passed: protected RPCs, immutable audit, operational pages, structured observation and manual-only migration.')

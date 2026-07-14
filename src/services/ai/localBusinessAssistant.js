@@ -8,6 +8,7 @@ import { buildTimeline } from '../intelligence/timelineEngine.js'
 import { calculateFinancialSummary } from '../../lib/financialMetrics.js'
 import { calculateContractsForTarget, calculateServiceMixForTarget, parseCommercialQuestion } from './commercialQuestionParser.js'
 import { SERVICE_CATALOG } from '../../config/serviceCatalog.js'
+import { buildCausalAnalysis } from '../intelligence/causalAnalysisEngine.js'
 
 const money = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0)
 const norm = (value) => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
@@ -33,7 +34,21 @@ export function localBusinessAssistant(question, data = {}) {
   const contractServices=contracts.flatMap((contract)=>(contract.services||contract.contract_services||[]).map((service)=>({...service,contract})))
   const installmentBalance=(item)=>Math.max(Number(item.amount||0)-Number(item.received_amount||0),0)
   const currentMonth=new Date().toISOString().slice(0,7)
+  const pulseAlerts=(data.alerts||[]).filter((item)=>!['resolved','ignored'].includes(item.status))
+  const causal=buildCausalAnalysis(data)
+  const causalAnswer=(matcher,intention)=>{const rows=causal.filter(matcher);return answer(rows.length?rows.map((item)=>`${item.statement}${item.evidence?.length?` Evidências: ${item.evidence.slice(0,3).join(' · ')}.`:''}`).join('\n'):'Não encontrei evidência suficiente nos dados atuais para afirmar isso.',[...new Set(rows.flatMap((item)=>item.sources))],intention)}
 
+  if(q.includes('mostre')&&q.includes('alertas criticos')){const critical=pulseAlerts.filter((item)=>item.priority==='critical');return answer(critical.length?critical.map((item)=>`• ${item.title}: ${item.description}`).join('\n'):'Não há alertas críticos ativos.',['Mugô Pulse'],'pulse_summary')}
+  if(q.includes('alertas criticos')||q.includes('quantos alertas')){const critical=pulseAlerts.filter((item)=>item.priority==='critical');return answer(`Tenho ${critical.length} alerta(s) crítico(s).${critical.length?' Quer que eu mostre?':''}`,['Mugô Pulse'],'pulse_summary',true,{suggestions:critical.length?['Mostre os alertas críticos','Qual é o maior risco hoje?']:[]})}
+  if(q.includes('maior risco')){const weights={critical:5,high:4,medium:3,low:2,informational:1},groups=new Map();pulseAlerts.forEach((item)=>groups.set(item.category,(groups.get(item.category)||0)+(weights[item.priority]||0)));const row=[...groups].sort((a,b)=>b[1]-a[1])[0];return answer(row?`O maior risco hoje é ${row[0].toLowerCase()}, com ${pulseAlerts.filter((item)=>item.category===row[0]).length} alerta(s) ativo(s).`:'Não há alertas ativos para classificar.',['Mugô Pulse'],'pulse_risk')}
+  if((q.includes('faturamento')||q.includes('receita'))&&(q.includes('cai')||q.includes('proximo mes')||q.includes('vencem')))return causalAnswer((item)=>item.id==='revenue-drop','revenue_projection')
+  if(q.includes('representa')&&q.includes('receita')||q.includes('participacao')&&q.includes('servico')||q.includes('mix de receita'))return causalAnswer((item)=>item.id==='service-share','service_revenue_share')
+  if(q.includes('entregas')&&(/julia|equipe|responsavel|quantas/.test(q)))return causalAnswer((item)=>item.type==='Equipe'&&(!q.includes('julia')||norm(item.statement).includes('julia')),'service_capacity')
+  if((q.includes('cliente')||q.includes('contrato'))&&(q.includes('sem cobranca')||q.includes('cobranca gerada')))return causalAnswer((item)=>item.id==='clients-without-billing','financial_diagnostic')
+  if(q.includes('inadimplente')||q.includes('inadimplencia')||q.includes('atraso'))return causalAnswer((item)=>item.type==='Inadimplência'&&(!clients.some((client)=>q.includes(norm(client.company_name||client.trade_name)))||clients.some((client)=>q.includes(norm(client.company_name||client.trade_name))&&norm(item.statement).includes(norm(client.company_name||client.trade_name)))),'financial_attention')
+  if(q.includes('setup')&&(q.includes('nunca')||q.includes('nao foi recebido')||q.includes('sem receber')))return causalAnswer((item)=>item.type==='Setup','financial_attention')
+  if(q.includes('automacao')&&(q.includes('conversao')||q.includes('abertas')||q.includes('20 dias')))return causalAnswer((item)=>item.id==='automation-conversion','pipeline_summary')
+  if(q.includes('analise cruzada')||q.includes('o que esta acontecendo')||q.includes('principais causas'))return causalAnswer(()=>true,'causal_summary')
   if(q.includes('contratos')&&q.includes('importad')){const confirmed=documentAnalyses.filter((item)=>item.status==='confirmed'&&['signed_contract','unsigned_contract','amendment'].includes(item.document_type));return answer(confirmed.length?`${confirmed.length} contrato(s) foram importados após revisão humana: ${confirmed.slice(0,8).map((item)=>item.file_name).join(', ')}.`:'Nenhum contrato importado após revisão humana foi identificado.',['Análises de documentos','Documentos'],'document_imports')}
   if(q.includes('valor mensal')&&q.includes('extraid')){const rows=contracts.filter((item)=>documents.some((document)=>document.contract_id===item.id));return answer(rows.length?rows.slice(0,8).map((item)=>`${item.clients?.company_name||'Cliente'}: ${item.monthly_value==null?'valor mensal não identificado':money(item.monthly_value)}`).join(' · '):'Nenhum valor mensal confirmado por importação foi identificado.',['Contratos','Documentos analisados'],'document_imports')}
   if(q.includes('documentos')&&q.includes('baixa confianca')){const rows=documentAnalyses.filter((item)=>item.low_confidence_fields?.length);return answer(rows.length?`${rows.length} documento(s) possuem campos com baixa confiança: ${rows.slice(0,8).map((item)=>`${item.file_name} (${item.low_confidence_fields.length})`).join(', ')}.`:'Nenhum documento com baixa confiança foi identificado.',['Análises de documentos'],'document_review')}
