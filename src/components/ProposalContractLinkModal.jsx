@@ -1,0 +1,12 @@
+import {useEffect,useMemo,useState} from 'react'
+import {listContracts} from '../services/data/contractsRepository'
+import {linkProposalToContract} from '../services/data/commercialIntegrationRepository'
+
+const normalize=(value='')=>String(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()
+export function ProposalContractLinkModal({proposal,onClose,onLinked}){
+  const [contracts,setContracts]=useState([]),[search,setSearch]=useState(''),[selected,setSelected]=useState(''),[loading,setLoading]=useState(true),[error,setError]=useState('')
+  useEffect(()=>{listContracts().then(setContracts).catch((cause)=>setError(cause.message)).finally(()=>setLoading(false))},[])
+  const rows=useMemo(()=>contracts.filter((contract)=>!contract.proposal_id&&normalize([contract.contract_number,contract.clients?.company_name].join(' ')).includes(normalize(search))).sort((a,b)=>Number(b.client_id===proposal.clientId)-Number(a.client_id===proposal.clientId)),[contracts,search,proposal.clientId])
+  async function confirm(){if(!selected)return;setLoading(true);setError('');try{await linkProposalToContract({proposalId:proposal.id,contractId:selected});onLinked();onClose()}catch(cause){setError(cause.message)}finally{setLoading(false)}}
+  return <div className="modal-overlay"><section className="setup-payment-modal" role="dialog" aria-modal="true"><h2>Vincular a contrato existente</h2><p>A proposta e o contrato precisam pertencer ao mesmo cliente.</p>{error&&<p className="feedback-message error">{error}</p>}<label>Buscar contrato<input type="search" value={search} onChange={(event)=>setSearch(event.target.value)} placeholder="Número ou cliente"/></label><div className="link-record-list">{rows.map((contract)=><label key={contract.id}><input type="radio" name="contract" value={contract.id} checked={selected===contract.id} onChange={()=>setSelected(contract.id)}/><span><strong>Contrato {contract.contract_number||'sem número'}</strong><small>{contract.clients?.company_name} · {contract.statusLabel}</small></span>{contract.client_id===proposal.clientId&&<em>Mesmo cliente</em>}</label>)}{!loading&&!rows.length&&<p>Nenhum contrato disponível.</p>}</div><footer><button className="button secondary" disabled={loading} onClick={onClose}>Cancelar</button><button className="button" disabled={loading||!selected} onClick={confirm}>{loading?'Carregando…':'Vincular contrato'}</button></footer></section></div>
+}

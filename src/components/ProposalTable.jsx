@@ -7,6 +7,7 @@ import { ProposalPipelineView } from './ProposalPipelineView'
 import { ProposalsSummary } from './ProposalsSummary'
 import { ProposalsToolbar } from './ProposalsToolbar'
 import { archiveProposal, convertProposalToContract, duplicateProposal } from '../services/data/proposalsRepository'
+import {ProposalContractLinkModal} from './ProposalContractLinkModal'
 
 const initialFilters = { search: '', status: '', responsible: '', service: '', signed: '', term: '', sort: 'recent' }
 const valueOf = (item) => Number(item.totalValue)||(Number(item.setupValue)||0)+(Number(item.monthlyValue)||0)
@@ -24,6 +25,7 @@ export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading
   const [view, setView] = useState(() => localStorage.getItem('mugo-proposals-view') || 'list')
   const [filters, setFilters] = useState(initialFilters)
   const [selected, setSelected] = useState(()=>proposals.find((proposal)=>proposal.id===initialSelectedId)||null)
+  const [linking,setLinking]=useState(null)
 
   const setFilter = useCallback((field, value) => setFilters((current) => ({ ...current, [field]: value })), [])
   const changeView = (next) => { setView(next); localStorage.setItem('mugo-proposals-view', next) }
@@ -52,7 +54,7 @@ export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading
 
   const metrics = useMemo(() => {const result=filtered.reduce((acc,item)=>{const value=valueOf(item);const won=statusIs(item,['won','fechada','aprovado','contrato assinado','projeto iniciado']);const lost=statusIs(item,['lost','perdida']);const sent=!statusIs(item,['draft','rascunho']);if(sent){acc.sent++;acc.sentValue+=value}if(won){acc.closed++;acc.closedValue+=value}if(lost){acc.lost++;acc.lostValue+=value}return acc},{sent:0,sentValue:0,closed:0,closedValue:0,lost:0,lostValue:0});result.outcomeConversion=result.closed+result.lost?result.closed/(result.closed+result.lost)*100:0;result.sentConversion=result.sent?result.closed/result.sent*100:0;return result}, [filtered])
   const activeCount = ['search', 'status', 'responsible', 'service', 'signed', 'term'].filter((key) => filters[key]).length
-  const actions = { onDuplicate: async (proposal) => { await duplicateProposal(proposal); await onChanged() }, onConvert: async (proposal) => { await convertProposalToContract(proposal); await onChanged() }, onArchive: async (proposal) => { if (window.confirm(`Arquivar a proposta “${proposal.title}”?`)) { await archiveProposal(proposal); setSelected(null); await onChanged() } } }
+  const actions = { onDuplicate: async (proposal) => { await duplicateProposal(proposal); await onChanged() }, onConvert: async (proposal) => { await convertProposalToContract(proposal); await onChanged() },onLink:setLinking, onArchive: async (proposal) => { if (window.confirm(`Arquivar a proposta “${proposal.title}”?`)) { await archiveProposal(proposal); setSelected(null); await onChanged() } } }
 
   const viewToggle = <div className="proposal-header-actions"><button type="button" className="button" onClick={onNew}><Plus size={15} />Nova proposta</button><div className="view-toggle" aria-label="Visualização"><button type="button" className={view === 'list' ? 'active' : ''} onClick={() => changeView('list')} aria-pressed={view === 'list'}><List size={15} />Lista</button><button type="button" className={view === 'pipeline' ? 'active' : ''} onClick={() => changeView('pipeline')} aria-pressed={view === 'pipeline'}><Columns3 size={15} />Pipeline</button></div></div>
 
@@ -65,5 +67,6 @@ export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading
       {view === 'list' ? <ProposalListView proposals={filtered} onEdit={onEdit} onSelect={setSelected} onNew={onNew} hasFilters={activeCount > 0} actions={actions} /> : <ProposalPipelineView proposals={filtered} onEdit={onEdit} onSelect={setSelected} onQuickUpdate={onQuickUpdate} actions={actions} />}
     </section>
     <ProposalDetailsPanel proposal={selected} onClose={() => setSelected(null)} onEdit={(proposal) => { setSelected(null); onEdit(proposal) }} />
+    {linking&&<ProposalContractLinkModal proposal={linking} onClose={()=>setLinking(null)} onLinked={onChanged}/>}
   </div>
 }
