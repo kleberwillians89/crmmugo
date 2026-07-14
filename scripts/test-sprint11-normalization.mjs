@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {normalizeProposal} from '../src/lib/normalizeProposal.js'
-const proposal=normalizeProposal({id:'akana',title:'Proposta Akanã',status:'sent',setup_value:'2500',monthly_value:'1800',responsible:'Klebs',clients:{company_name:'Akanã',trade_name:'Akanã',contact_name:'Ana',email:'financeiro@akana.test'},proposal_services:[{id:'service',service_name:'Gestão de mídia',service_category:'Marketing',monthly_value:'1800',one_time_value:'2500'}],documents:[{id:'document',document_type:'proposal',file_name:'proposta-akana.pdf',uploaded_at:'2026-07-13'}]})
+const proposal=normalizeProposal({id:'akana',title:'Proposta Akanã',status:'sent',setup_value:'2500',monthly_value:'1800',responsible_id:'11111111-1111-4111-8111-111111111111',team_members:{name:'Klebs'},clients:{company_name:'Akanã',trade_name:'Akanã',contact_name:'Ana',email:'financeiro@akana.test'},proposal_services:[{id:'service',service_name:'Gestão de mídia',service_category:'Marketing',monthly_value:'1800',one_time_value:'2500'}],documents:[{id:'document',document_type:'proposal',file_name:'proposta-akana.pdf',uploaded_at:'2026-07-13'}]})
 assert.equal(proposal.clientName,'Akanã')
 assert.equal(proposal.companyName,'Akanã')
 assert.equal(proposal.contactName,'Ana')
