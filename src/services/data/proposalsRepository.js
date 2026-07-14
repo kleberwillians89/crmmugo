@@ -7,6 +7,8 @@ import {invalidateCrmData} from '../../lib/dataInvalidation'
 import {findOrMatchClient} from './commercialIntegrationRepository'
 
 const select='*, clients(*), team_members(name), proposal_services(*), documents(*), commercial_events(*), contracts(id,contract_number,status)'
+const mutations=new Map()
+const singleFlight=(key,operation)=>{if(mutations.has(key))return mutations.get(key);const task=Promise.resolve().then(operation).finally(()=>mutations.delete(key));mutations.set(key,task);return task}
 const canonicalStatus=(value)=>({'Proposta enviada':'sent','Em negociação':'negotiating','Fechada':'won','Perdida':'lost'}[value]||value)
 const dbValues=(values,partial=false)=>{const mapped=({
   client_id:values.client_id??values.clientId,
@@ -34,8 +36,8 @@ export async function listProposals(){
 }
 export async function listDeletedProposals(){if(!isSupabaseProvider())return [];return normalizeProposals(unwrap(await db().from('proposals').select(select).not('deleted_at','is',null).order('deleted_at',{ascending:false})))}
 export async function getProposal(id){if(!isSupabaseProvider())return normalizeProposal((await getProposals()).find((p)=>String(p.id)===String(id)));const [row,profiles]=await Promise.all([db().from('proposals').select(select).eq('id',id).single().then(unwrap),listActiveProfiles()]);return normalizeProposal({...row,proposal_services:attachResponsibleProfiles(row.proposal_services||[],profiles)})}
-export async function createProposal(values){if(!isSupabaseProvider())return legacyCreate(values);const created=unwrap(await db().from('proposals').insert({...dbValues(values),client_id:await resolveClient(values),organization_id:await organizationId()}).select('id').single());await syncPrimaryService(created.id,values);return {success:true,data:await getProposal(created.id)}}
-export async function updateProposal(id,values){if(!isSupabaseProvider())return legacyUpdate(id,values);unwrap(await db().from('proposals').update(dbValues(values,true)).eq('id',id));await syncPrimaryService(id,values);return {success:true,data:await getProposal(id)}}
+export function createProposal(values){return singleFlight('create',async()=>{if(!isSupabaseProvider())return legacyCreate(values);const created=unwrap(await db().from('proposals').insert({...dbValues(values),client_id:await resolveClient(values),organization_id:await organizationId()}).select('id').single());await syncPrimaryService(created.id,values);return {success:true,data:await getProposal(created.id)}})}
+export function updateProposal(id,values){return singleFlight(`update:${id}`,async()=>{if(!isSupabaseProvider())return legacyUpdate(id,values);unwrap(await db().from('proposals').update(dbValues(values,true)).eq('id',id));await syncPrimaryService(id,values);return {success:true,data:await getProposal(id)}})}
 export const updateStatus=(id,status)=>updateProposal(id,{status})
 export const associateDocument=(proposalId,documentId)=>db().from('documents').update({proposal_id:proposalId}).eq('id',documentId).then(unwrap)
 export async function archiveProposal(proposal){assertUuid(proposal.id);const result=unwrap(await db().rpc('archive_proposal',{target_id:proposal.id}));invalidateCrmData({resources:['proposals','contracts','dashboard','clients','intelligence']});return result}

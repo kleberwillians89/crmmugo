@@ -4,7 +4,7 @@ import {attachResponsibleProfiles,listActiveProfiles} from './serviceResponsibil
 import {invalidateCrmData} from '../../lib/dataInvalidation'
 import {assertContractId,buildContractPayload} from './contractPayload'
 
-const select='*, team_members(name), clients(company_name,contact_name,phone,billing_contact_name,billing_contact_phone), proposals(responsible_id,team_members(name)), contract_services(*), invoice_installments(id,reference_month,due_date,amount,received_amount,status,payment_method,paid_at), documents(id,file_name,document_type,uploaded_at), commercial_events(id,title,description,event_type,created_at)'
+const select='*, team_members(name), clients(company_name,contact_name,phone,billing_contact_name,billing_contact_phone), proposals(responsible_id,team_members(name)), contract_services(*), invoice_installments(id,reference_month,due_date,amount,received_amount,status,payment_method,paid_at,installment_type), documents(id,file_name,document_type,uploaded_at), commercial_events(id,title,description,event_type,created_at)'
 const changed=()=>invalidateCrmData({resources:['contracts','proposals','installments','dashboard','clients','intelligence']})
 const debug=(stage,details)=>{if(import.meta.env.DEV)console.info(`[Contracts] ${stage}`,details)}
 export class ContractOperationError extends Error{constructor(operation,error,{payload,query}={}){super(error?.message||`Falha ao ${operation} contrato.`);this.name='ContractOperationError';this.operation=operation;this.code=error?.code||null;this.details=error?.details||null;this.hint=error?.hint||null;this.payload=payload||null;this.query=query||null;this.cause=error}}

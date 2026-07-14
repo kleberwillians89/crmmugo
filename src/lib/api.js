@@ -49,8 +49,7 @@ export async function createProposal(data) {
       body: JSON.stringify({ action: 'create', data }),
     })
   } catch (err) {
-    // no-cors geralmente não lança erros acessíveis; silenciamos e seguimos
-    console.warn('createProposal fetch erro (ignorado em no-cors):', err)
+    throw new Error(`Não foi possível enviar a proposta: ${err?.message||'falha de rede.'}`,{cause:err})
   }
 
   // não é possível ler resposta em no-cors; aguardar e retornar sucesso
@@ -71,7 +70,7 @@ export async function updateProposal(id, data) {
       body: JSON.stringify({ action: 'update', id, data }),
     })
   } catch (err) {
-    console.warn('updateProposal fetch erro (ignorado em no-cors):', err)
+    throw new Error(`Não foi possível atualizar a proposta: ${err?.message||'falha de rede.'}`,{cause:err})
   }
 
   await wait(800)

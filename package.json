@@ -14,7 +14,10 @@
     "test:contracts": "node scripts/test-contract-reliability.mjs",
     "test:archiving": "node scripts/test-safe-archiving.mjs",
     "test:integration": "node scripts/test-commercial-integration.mjs",
-    "test:trigger-fix": "node scripts/test-financial-trigger-fix.mjs"
+    "test:trigger-fix": "node scripts/test-financial-trigger-fix.mjs",
+    "test:idempotency": "node scripts/test-installment-idempotency.mjs",
+    "test:stability": "node scripts/test-sprint14-stability.mjs",
+    "test:financial-truth": "node scripts/test-financial-source-truth.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.3",

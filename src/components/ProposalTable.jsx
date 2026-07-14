@@ -8,6 +8,8 @@ import { ProposalsSummary } from './ProposalsSummary'
 import { ProposalsToolbar } from './ProposalsToolbar'
 import { archiveProposal, convertProposalToContract, duplicateProposal } from '../services/data/proposalsRepository'
 import {ProposalContractLinkModal} from './ProposalContractLinkModal'
+import {FeedbackMessage} from './FeedbackMessage'
+import {errorPresentation} from '../lib/userError'
 
 const initialFilters = { search: '', status: '', responsible: '', service: '', signed: '', term: '', sort: 'recent' }
 const valueOf = (item) => Number(item.totalValue)||(Number(item.setupValue)||0)+(Number(item.monthlyValue)||0)
@@ -26,6 +28,7 @@ export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading
   const [filters, setFilters] = useState(initialFilters)
   const [selected, setSelected] = useState(()=>proposals.find((proposal)=>proposal.id===initialSelectedId)||null)
   const [linking,setLinking]=useState(null)
+  const [busyId,setBusyId]=useState(null),[operationError,setOperationError]=useState(null)
 
   const setFilter = useCallback((field, value) => setFilters((current) => ({ ...current, [field]: value })), [])
   const changeView = (next) => { setView(next); localStorage.setItem('mugo-proposals-view', next) }
@@ -54,12 +57,14 @@ export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading
 
   const metrics = useMemo(() => {const result=filtered.reduce((acc,item)=>{const value=valueOf(item);const won=statusIs(item,['won','fechada','aprovado','contrato assinado','projeto iniciado']);const lost=statusIs(item,['lost','perdida']);const sent=!statusIs(item,['draft','rascunho']);if(sent){acc.sent++;acc.sentValue+=value}if(won){acc.closed++;acc.closedValue+=value}if(lost){acc.lost++;acc.lostValue+=value}return acc},{sent:0,sentValue:0,closed:0,closedValue:0,lost:0,lostValue:0});result.outcomeConversion=result.closed+result.lost?result.closed/(result.closed+result.lost)*100:0;result.sentConversion=result.sent?result.closed/result.sent*100:0;return result}, [filtered])
   const activeCount = ['search', 'status', 'responsible', 'service', 'signed', 'term'].filter((key) => filters[key]).length
-  const actions = { onDuplicate: async (proposal) => { await duplicateProposal(proposal); await onChanged() }, onConvert: async (proposal) => { await convertProposalToContract(proposal); await onChanged() },onLink:setLinking, onArchive: async (proposal) => { if (window.confirm(`Arquivar a proposta “${proposal.title}”?`)) { await archiveProposal(proposal); setSelected(null); await onChanged() } } }
+  const run=async(proposal,operation,action)=>{if(busyId)return;setBusyId(proposal.id);setOperationError(null);try{await action();await onChanged()}catch(cause){setOperationError(errorPresentation(cause,`Não foi possível ${operation} a proposta.`,{operation,entity:'proposta',id:proposal.id}))}finally{setBusyId(null)}}
+  const actions = {busyId,onDuplicate:(proposal)=>run(proposal,'duplicar',()=>duplicateProposal(proposal)),onConvert:(proposal)=>run(proposal,'converter',()=>convertProposalToContract(proposal)),onLink:setLinking,onArchive:async(proposal)=>{if(window.confirm(`Arquivar a proposta “${proposal.title}”?`))await run(proposal,'arquivar',async()=>{await archiveProposal(proposal);setSelected(null)})}}
 
   const viewToggle = <div className="proposal-header-actions"><button type="button" className="button" onClick={onNew}><Plus size={15} />Nova proposta</button><div className="view-toggle" aria-label="Visualização"><button type="button" className={view === 'list' ? 'active' : ''} onClick={() => changeView('list')} aria-pressed={view === 'list'}><List size={15} />Lista</button><button type="button" className={view === 'pipeline' ? 'active' : ''} onClick={() => changeView('pipeline')} aria-pressed={view === 'pipeline'}><Columns3 size={15} />Pipeline</button></div></div>
 
   return <div className="proposals-page" aria-busy={loading}>
     <PageHeader eyebrow="Comercial" title="Propostas" description="Acompanhe oportunidades, negociações, fechamentos e perdas em um único lugar." actions={viewToggle} />
+    {operationError&&<FeedbackMessage type="error" details={operationError.technical}>{operationError.friendly}</FeedbackMessage>}
     <ProposalsSummary metrics={metrics} />
     <ProposalsToolbar filters={filters} options={options} activeCount={activeCount} onChange={setFilter} onClear={() => setFilters(initialFilters)} />
     <section className="proposals-view" aria-live="polite">

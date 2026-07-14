@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { listProposals as getProposals, createProposal, updateProposal } from './services/data/proposalsRepository'
 import { Sidebar } from './components/Sidebar'
@@ -78,6 +78,8 @@ export default function App() {
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [importedEntity, setImportedEntity] = useState(null)
   const [teamMembers, setTeamMembers] = useState([])
+  const loadPromise=useRef(null)
+  const proposalSubmitRef=useRef(false)
 
   useEffect(() => {
     loadProposals()
@@ -85,16 +87,18 @@ export default function App() {
   useEffect(()=>{const navigate=(event)=>handleNavigate(event.detail);window.addEventListener('mugo:navigate',navigate);return()=>window.removeEventListener('mugo:navigate',navigate)})
   useEffect(()=>{const refresh=()=>loadProposals();window.addEventListener(CRM_DATA_CHANGED,refresh);return()=>window.removeEventListener(CRM_DATA_CHANGED,refresh)},[])
 
-  async function loadProposals() {
+  function loadProposals() {
+    if(loadPromise.current)return loadPromise.current
+    const task=(async()=>{
     setLoading(true)
     setErrorMessage('')
     setIntelligenceError('')
 
     try {
-      const data = await getProposals()
+      const [data,contractRows]=dataProvider==='supabase'?await Promise.all([getProposals(),listContracts()]):[await getProposals(),[]]
       setProposals(data)
       if (dataProvider === 'supabase') {
-        setSupabaseContracts(await listContracts())
+        setSupabaseContracts(contractRows)
         try {
           const [clientRows, installmentRows, intelligenceRecords, members] = await Promise.all([listClients(), listInstallments(), listIntelligenceRecords(), listTeamMembers({activeOnly:true})])
           setClients(clientRows)
@@ -104,17 +108,20 @@ export default function App() {
           setDocumentAnalyses(intelligenceRecords.documentAnalyses)
           setTeamMembers(members)
         } catch (error) {
-          console.error(error)
+          if(import.meta.env.DEV)console.error('[CRM] Partial analytics load failed',{message:error?.message,code:error?.code,details:error?.details,hint:error?.hint})
           setIntelligenceError('Parte dos dados analíticos não pôde ser carregada. Os resultados exibidos consideram somente os registros disponíveis.')
         }
       }
     } catch (error) {
-      console.error(error)
+      if(import.meta.env.DEV)console.error('[CRM] Initial load failed',{message:error?.message,code:error?.code,details:error?.details,hint:error?.hint})
       setErrorMessage('Não foi possível carregar as propostas.')
     } finally {
       setLoading(false)
       setHasLoaded(true)
     }
+    })()
+    loadPromise.current=task
+    return task.finally(()=>{loadPromise.current=null})
   }
 
   function resetForm() {
@@ -164,6 +171,7 @@ export default function App() {
 
   async function handleSubmit(event) {
     event.preventDefault()
+    if(proposalSubmitRef.current)return
     setErrorMessage('')
     setMessage('')
 
@@ -173,6 +181,7 @@ export default function App() {
       return
     }
 
+    proposalSubmitRef.current=true
     setLoading(true)
 
     try {
@@ -210,6 +219,7 @@ export default function App() {
       console.error(error)
       setErrorMessage('Erro ao salvar proposta. Verifique os dados e tente novamente.')
     } finally {
+      proposalSubmitRef.current=false
       setLoading(false)
     }
   }
