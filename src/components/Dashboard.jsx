@@ -6,6 +6,7 @@ import { calculateAgencyGoalProgress, calculateContractedRevenue, calculateProje
 import { calculateFinancialSummary } from '../lib/financialMetrics'
 import {ServiceResponsibilityMetrics} from './ServiceResponsibilityMetrics'
 import {BillingDueMetrics} from './BillingDueMetrics'
+import {NowCard} from './NowCard'
 
 const money=(value)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(value||0)
 const Progress=({value,label})=><div className="goal-progress" role="progressbar" aria-label={label} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(value)}><span style={{width:`${Math.min(value,100)}%`}} /></div>
@@ -15,6 +16,7 @@ function Simulator(){const [rows,setRows]=useState([{serviceId:SERVICE_CATALOG[0
 
 export function Dashboard({proposals,contracts=[],installments=[],teamMembers=[]}){const metrics=useMemo(()=>{const now=new Date(),goalMembers=teamMembers.map((member)=>({id:member.id,name:member.name,goal:AGENCY_GOALS.individualMonthlyGoal}));return {goal:calculateAgencyGoalProgress(proposals,AGENCY_GOALS.monthlyAgencyGoal,now),team:calculateTeamGoals(proposals,goalMembers,now),project:calculateProjectRevenue(proposals),services:groupRevenueByService(proposals,now),projection:calculateContractedRevenue(proposals,now),duration:groupContractsByDuration(proposals,now),risk:calculateRevenueRisk(proposals,now),financial:calculateFinancialSummary(contracts,installments)}},[proposals,contracts,installments,teamMembers]);const scenarios=calculateSalesGapScenarios(metrics.goal.remaining,SERVICE_CATALOG);return <div className="dashboard-page business-dashboard">
 <PageHeader eyebrow="Mugô Business Intelligence" title="Gestão comercial e inteligência de receita" description="Metas, composição de receita e leitura contratual usando exclusivamente os dados comerciais atuais." />
+<NowCard />
 <BillingDueMetrics installments={installments}/>
 <ServiceResponsibilityMetrics contracts={contracts}/>
 <section className="goal-hero"><div><span>Meta mensal da Mugô</span><h2>{money(metrics.goal.current)}</h2><p>de {money(metrics.goal.goal)} — Meta base mensal da equipe</p><Progress value={metrics.goal.percentage} label="Progresso da meta mensal" /></div><div className="goal-facts"><Stat label="Atingido" value={`${metrics.goal.percentage.toFixed(1)}%`} /><Stat label="Valor restante" value={money(metrics.goal.remaining)} /><Stat label="Contratos recorrentes ativos" value={metrics.goal.activeContracts} /></div></section>

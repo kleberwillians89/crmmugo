@@ -11,6 +11,7 @@ import { buildTimeline } from '../services/intelligence/timelineEngine'
 import { buildCausalAnalysis } from '../services/intelligence/causalAnalysisEngine'
 import { FeedbackMessage } from './FeedbackMessage'
 import { PageHeader } from './PageHeader'
+import {getTemporalContext} from '../lib/temporalIntelligence'
 
 const money = (value) => Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const percent = (value) => `${Number(value || 0).toFixed(1)}%`
@@ -35,6 +36,7 @@ function BarList({ rows, format = money }) {
 
 export function MugoIntelligencePage({ data, loading, error }) {
   const [revenueView, setRevenueView] = useState('service')
+  const temporal=getTemporalContext()
   const intelligence = useMemo(() => {
     const proposals = data.proposals || []
     const contracts = data.contracts || []
@@ -113,7 +115,7 @@ export function MugoIntelligencePage({ data, loading, error }) {
     </Section>
 
     <Section icon={BrainCircuit} eyebrow="Assistência consultiva" title="Central IA">
-      <p className="central-ai-copy">Use “Pergunte à Mugô” para consultar resumo, metas, radar, oportunidades, projeções e timeline. A Central IA não executa alterações.</p>
+      <p className="central-ai-copy">{temporal.greeting}. Agora são {temporal.formattedTime} de {temporal.weekday}. O horário comercial está {temporal.businessStatus}. Use “Pergunte à Mugô” para saber o que resolver hoje, o que vence amanhã, o que é urgente agora e o que pode aguardar. A Central IA não executa alterações.</p>
     </Section>
   </div>
 }

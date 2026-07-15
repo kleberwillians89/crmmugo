@@ -40,6 +40,7 @@ import {listPulseAlerts,syncPulseAlerts} from './services/data/pulseRepository'
 import {PulseAlertsPage} from './components/PulseAlertsPage'
 import {PulseBell} from './components/PulseBell'
 import {PulseDailySummary} from './components/PulseDailySummary'
+import {useAuth} from './contexts/AuthContext'
 
 const initialFormState = {
   client_name: '',
@@ -68,6 +69,7 @@ function buildDateValue(value) {
 }
 
 export default function App() {
+  const {profile}=useAuth()
   const [activePage, setActivePage] = useState('dashboard')
   const [proposals, setProposals] = useState([])
   const [supabaseContracts, setSupabaseContracts] = useState([])
@@ -304,7 +306,7 @@ export default function App() {
     alerts: pulseAlerts,
   }), [proposals, supabaseContracts, clients, installments, documents, documentAnalyses, commercialEvents, teamMembers, pulseAlerts])
 
-  useEffect(()=>{if(!hasLoaded||dataProvider!=='supabase')return undefined;let mounted=true;const monitor=async()=>{const generated=generatePulseAlerts({proposals,contracts:supabaseContracts,clients,installments,documents,events:commercialEvents,teamMembers});try{await syncPulseAlerts(generated);const persisted=await listPulseAlerts({status:'all'});if(mounted)setPulseAlerts(persisted)}catch{if(mounted)setPulseAlerts(generated.map((alert)=>({...alert,id:alert.fingerprint,status:'open',detected_at:new Date().toISOString()})))}};monitor();const timer=setInterval(monitor,300000);return()=>{mounted=false;clearInterval(timer)}},[hasLoaded,proposals,supabaseContracts,clients,installments,documents,commercialEvents,teamMembers])
+  useEffect(()=>{if(!hasLoaded||dataProvider!=='supabase')return undefined;let mounted=true;const canSynchronize=['admin','manager'].includes(profile?.role);const monitor=async()=>{const generated=generatePulseAlerts({proposals,contracts:supabaseContracts,clients,installments,documents,events:commercialEvents,teamMembers});try{if(canSynchronize)await syncPulseAlerts(generated,{executionScope:'full'});const persisted=await listPulseAlerts({status:'all'});if(mounted)setPulseAlerts(persisted)}catch{if(mounted&&canSynchronize)setPulseAlerts(generated.map((alert)=>({...alert,id:alert.fingerprint,status:'open',detected_at:new Date().toISOString()})))}};monitor();const timer=canSynchronize?setInterval(monitor,300000):null;return()=>{mounted=false;if(timer)clearInterval(timer)}},[hasLoaded,proposals,supabaseContracts,clients,installments,documents,commercialEvents,teamMembers,profile?.role])
 
   async function refreshPulse(){try{setPulseAlerts(await listPulseAlerts({status:'all'}))}catch{return}}
 

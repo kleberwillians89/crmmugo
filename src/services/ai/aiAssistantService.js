@@ -1,6 +1,7 @@
 import { AI_MAX_CONVERSATION_ITEMS, AI_MAX_QUESTION_LENGTH, AI_PROVIDER, AI_TIMEOUT_MS, canUseExternalAssistant } from '../../config/aiConfig.js'
 import { dataProvider, getSupabaseClient } from '../../lib/supabase/client.js'
 import { localBusinessAssistant } from './localBusinessAssistant.js'
+import {getTemporalContext} from '../../lib/temporalIntelligence.js'
 
 const friendlySources = {
   local: 'Baseado nos cálculos e dados registrados no CRM.',
@@ -25,7 +26,7 @@ export async function askMugoAssistant({question,crmContext={},conversation=[],u
   if(!canUseExternalAssistant(dataProvider)){telemetry('local',startedAt,true,'NOT_RECOGNIZED');return {...local,answer:'Não consegui entender completamente. Você quer consultar metas, clientes, propostas, contratos, serviços ou financeiro?',sources:[friendlySources.local],suggestions:['Quanto falta para a meta?','Quais propostas estão paradas?','Quanto temos em aberto?']}}
   try{
     const safeConversation=conversation.slice(-AI_MAX_CONVERSATION_ITEMS).map((item)=>({question:String(item.question||'').slice(0,500),answer:String(item.answer||item.text||'').slice(0,700)}))
-    const invocation=getSupabaseClient().functions.invoke('mugo-ai-assistant',{body:{question:clean,localContext:{intent:local.intent,confidence:local.confidence},conversation:safeConversation,userRole}})
+    const invocation=getSupabaseClient().functions.invoke('mugo-ai-assistant',{body:{question:clean,localContext:{intent:local.intent,confidence:local.confidence},temporalContext:getTemporalContext(),conversation:safeConversation,userRole}})
     const {data,error}=await Promise.race([invocation,timeout()])
     if(error)throw error
     if(!data?.answer)throw new Error(data?.code||'EMPTY_RESPONSE')

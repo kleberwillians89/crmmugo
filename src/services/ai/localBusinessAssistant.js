@@ -9,6 +9,7 @@ import { calculateFinancialSummary } from '../../lib/financialMetrics.js'
 import { calculateContractsForTarget, calculateServiceMixForTarget, parseCommercialQuestion } from './commercialQuestionParser.js'
 import { SERVICE_CATALOG } from '../../config/serviceCatalog.js'
 import { buildCausalAnalysis } from '../intelligence/causalAnalysisEngine.js'
+import {getTemporalContext,operationalRecommendation,remainingTime} from '../../lib/temporalIntelligence.js'
 
 const money = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0)
 const norm = (value) => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
@@ -33,10 +34,26 @@ export function localBusinessAssistant(question, data = {}) {
   const documentAnalyses = data.documentAnalyses || []
   const contractServices=contracts.flatMap((contract)=>(contract.services||contract.contract_services||[]).map((service)=>({...service,contract})))
   const installmentBalance=(item)=>Math.max(Number(item.amount||0)-Number(item.received_amount||0),0)
-  const currentMonth=new Date().toISOString().slice(0,7)
+  const now=data.now?new Date(data.now):new Date(),temporal=getTemporalContext(now)
+  const currentMonth=temporal.dateKey.slice(0,7)
   const pulseAlerts=(data.alerts||[]).filter((item)=>!['resolved','ignored'].includes(item.status))
   const causal=buildCausalAnalysis(data)
   const causalAnswer=(matcher,intention)=>{const rows=causal.filter(matcher);return answer(rows.length?rows.map((item)=>`${item.statement}${item.evidence?.length?` Evidências: ${item.evidence.slice(0,3).join(' · ')}.`:''}`).join('\n'):'Não encontrei evidência suficiente nos dados atuais para afirmar isso.',[...new Set(rows.flatMap((item)=>item.sources))],intention)}
+
+  const openBalance=(item)=>Math.max(Number(item.amount||0)-Number(item.received_amount||0),0)
+  const dayKey=(value)=>String(value||'').slice(0,10)
+  const tomorrowDate=new Date(Date.UTC(temporal.year,temporal.month-1,temporal.day+1)).toISOString().slice(0,10)
+  const dueToday=installments.filter((item)=>openBalance(item)>0&&dayKey(item.due_date)===temporal.dateKey),dueTomorrow=installments.filter((item)=>openBalance(item)>0&&dayKey(item.due_date)===tomorrowDate)
+  const contractsToday=contracts.filter((item)=>dayKey(item.end_date)===temporal.dateKey),contractsTomorrow=contracts.filter((item)=>dayKey(item.end_date)===tomorrowDate)
+  const openProposals=proposals.filter((item)=>!['won','lost','cancelled','expired'].includes(norm(item.status||item.proposal_status)))
+  const urgent=[...pulseAlerts].sort((a,b)=>Number(b.score||0)-Number(a.score||0)).filter((item)=>['critical','high'].includes(item.priority))
+  const temporalHeader=`Agora são ${temporal.formattedTime} de ${temporal.weekday}, ${temporal.formattedDate}. ${temporal.isHoliday?`Hoje é feriado (${temporal.holidayName}).`:temporal.isWeekend?'Hoje é fim de semana.':`O horário comercial está ${temporal.businessStatus}.`}`
+  if(q.includes('que horas')||q.includes('horario atual')||q.includes('momento atual'))return answer(`${temporalHeader}${!temporal.isBusinessHours?` Próximo expediente: ${temporal.nextBusinessLabel} às ${temporal.nextBusinessTime}.`:''}`,['Contexto temporal'],'temporal_context')
+  if(q.includes('o que vence amanha')){const rows=[...contractsTomorrow.map((item)=>`• Contrato ${item.clients?.company_name||item.contract_number||item.id} vence amanhã.`),...dueTomorrow.map((item)=>`• Cobrança de ${money(openBalance(item))} vence amanhã.`)];return answer(`${temporalHeader}\n${rows.length?rows.join('\n'):'Nada com vencimento amanhã foi identificado nos dados atuais.'}`,['Contexto temporal','Contratos','Financeiro'],'tomorrow_due')}
+  if(q.includes('urgente agora')||q.includes('algo urgente'))return answer(`${temporalHeader}\n${urgent.length?urgent.slice(0,8).map((item)=>`• ${item.title}: ${item.description}`).join('\n'):'Não há alertas críticos ou altos ativos agora.'}\n${operationalRecommendation(temporal,urgent.some((item)=>item.category==='Financeiro')?'cobrança':'prioridade')}`,['Contexto temporal','Mugô Pulse'],'urgent_now')
+  if(q.includes('deixar para amanha')){const deferrable=pulseAlerts.filter((item)=>['low','informational'].includes(item.priority));return answer(`${temporalHeader}\n${deferrable.length?`${deferrable.length} item(ns) de prioridade baixa ou informativa podem aguardar: ${deferrable.slice(0,6).map((item)=>item.title).join(', ')}.`:'Não identifiquei itens de baixa prioridade para adiar com segurança.'} Itens críticos, altos ou com vencimento hoje não devem ser adiados.`,['Contexto temporal','Mugô Pulse'],'deferrable_work')}
+  if(q.includes('resolver hoje')||q.includes('preciso fazer hoje')||q.includes('preciso resolver')){const agenda=(data.agenda||data.calendarEvents||[]).filter((item)=>dayKey(item.start_at||item.date||item.start)===temporal.dateKey);const lines=[dueToday.length&&`${dueToday.length} cobrança(s) vencem hoje, totalizando ${money(dueToday.reduce((sum,item)=>sum+openBalance(item),0))}.`,contractsToday.length&&`${contractsToday.length} contrato(s) vencem hoje.`,agenda.length&&`${agenda.length} compromisso(s) na agenda.`,urgent.length&&`${urgent.length} alerta(s) crítico(s) ou alto(s).`,openProposals.length&&`${openProposals.length} proposta(s) seguem abertas.`].filter(Boolean);return answer(`${temporalHeader}\n${lines.length?lines.map((line)=>`• ${line}`).join('\n'):'Não há pendências temporais identificadas para hoje.'}\n${operationalRecommendation(temporal,dueToday.length?'cobrança':'prioridades')}`,['Contexto temporal','Agenda','Contratos','Financeiro','Mugô Pulse'],'today_priorities')}
+  if(q.includes('quanto tempo')||q.includes('tempo restante')){const rows=[...installments.filter((item)=>openBalance(item)>0&&item.due_date).map((item)=>`Cobrança vence ${remainingTime(item.due_date,now)}`),...contracts.filter((item)=>item.end_date).map((item)=>`Contrato vence ${remainingTime(item.end_date,now)}`)];return answer(`${temporalHeader}\n${rows.slice(0,10).map((row)=>`• ${row}`).join('\n')||'Nenhum vencimento com data válida foi identificado.'}`,['Contexto temporal','Contratos','Financeiro'],'remaining_time')}
 
   if(q.includes('mostre')&&q.includes('alertas criticos')){const critical=pulseAlerts.filter((item)=>item.priority==='critical');return answer(critical.length?critical.map((item)=>`• ${item.title}: ${item.description}`).join('\n'):'Não há alertas críticos ativos.',['Mugô Pulse'],'pulse_summary')}
   if(q.includes('alertas criticos')||q.includes('quantos alertas')){const critical=pulseAlerts.filter((item)=>item.priority==='critical');return answer(`Tenho ${critical.length} alerta(s) crítico(s).${critical.length?' Quer que eu mostre?':''}`,['Mugô Pulse'],'pulse_summary',true,{suggestions:critical.length?['Mostre os alertas críticos','Qual é o maior risco hoje?']:[]})}
