@@ -5,21 +5,12 @@ import {
   FileText,
   Library,
   Users,
-  UserRoundCog,
   WalletCards,
   Upload,
   LogOut,
-  Activity,
   SlidersHorizontal,
   LayoutDashboard,
-  Plus,
-  Settings,
-  Trash2,
-  ShieldCheck,
-  DatabaseBackup,
   HeartPulse,
-  History,
-  Scale,
   BellRing,
   CalendarDays,
   Lightbulb,
@@ -36,6 +27,14 @@ import { statusLabel } from '../config/statusLabels'
 
 const groups = [
   { label: 'Visão geral', links: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
+  { label: 'Gestão comercial', links: [
+    { id: 'clients', label: 'Clientes', icon: Users },
+    { id: 'proposals', label: 'Propostas', icon: FileText },
+    { id: 'contracts', label: 'Contratos', icon: ClipboardCheck },
+    { id: 'finance', label: 'Financeiro', icon: WalletCards },
+    { id: 'services', label: 'Serviços', icon: Library },
+    { id: 'documents', label: 'Documentos', icon: Upload },
+  ] },
   { label: 'Mugô Intelligence', links: [
     { id: 'intelligence-today', label: 'Hoje', icon: CalendarDays },
     { id: 'intelligence-attention', label: 'Atenção', icon: BellRing, supabaseOnly: true },
@@ -46,36 +45,13 @@ const groups = [
     { id: 'intelligence-health', label: 'Saúde do Negócio', icon: HeartPulse },
     { id: 'intelligence-ai', label: 'Pergunte à IA', icon: MessageCircleQuestion },
   ] },
-  {
-    label: 'Comercial',
-    links: [
-      { id: 'nova', label: 'Nova proposta', icon: Plus },
-      { id: 'proposals', label: 'Propostas', icon: FileText },
-      { id: 'performance', label: 'Performance comercial', icon: Activity },
-      { id: 'contracts', label: 'Contratos', icon: ClipboardCheck },
-      { id: 'clients', label: 'Clientes', icon: Users },
-      { id: 'team', label: 'Equipe Mugô', icon: UserRoundCog, supabaseOnly: true },
-      { id: 'services', label: 'Serviços e preços', icon: Library },
-      { id: 'finance', label: 'Financeiro', icon: WalletCards },
-      { id: 'financial-reconciliation', label: 'Reconciliação', icon: Scale, supabaseOnly: true },
-      { id: 'documents', label: 'Importar', icon: Upload },
-    ],
-  },
-  { label: 'Sistema', links: [
-    { id: 'organization-settings', label: 'Configurações da empresa', icon: SlidersHorizontal, supabaseOnly: true },
-    { id: 'commercial-trash', label: 'Lixeira comercial', icon: Trash2, supabaseOnly: true },
-    { id: 'commercial-integrity', label: 'Integridade Comercial', icon: ShieldCheck, adminOnly: true, supabaseOnly: true },
-    { id: 'system-audit', label: 'Auditoria', icon: ClipboardCheck, adminOnly: true, supabaseOnly: true },
-    { id: 'crm-health', label: 'Saúde do CRM', icon: HeartPulse, adminOnly: true, supabaseOnly: true },
-    { id: 'backup', label: 'Backup', icon: DatabaseBackup, adminOnly: true, supabaseOnly: true },
-    { id: 'restore', label: 'Restauração', icon: History, adminOnly: true, supabaseOnly: true },
-    { id: 'diagnostic', label: 'Diagnóstico Supabase', icon: Activity, adminOnly: true },
-    { id: 'settings', label: 'Configurações', icon: Settings, disabled: true },
+  { label: 'Administração', links: [
+    { id: 'organization-settings', label: 'Configurações', icon: SlidersHorizontal, adminOnly: true, supabaseOnly: true },
   ] },
 ]
 
 export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onToggleCollapse }) {
-  const { isLegacy, signOut, profile } = useAuth()
+  const { isLegacy, signOut, profile, loading: profileLoading } = useAuth()
   function navigate(id) {
     onNavigate(id)
     onClose()
@@ -101,7 +77,7 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
         {groups.map((group) => (
           <div className="nav-group" key={group.label}>
             <p className="nav-group-label">{group.label}</p>
-            {group.links.filter((link)=>!link.supabaseOnly||!isLegacy).filter((link)=>!link.adminOnly||profile?.role==='admin').map((link) => {
+            {group.links.filter((link)=>!link.supabaseOnly||!isLegacy).filter((link)=>!link.adminOnly||profileLoading||profile?.role==='admin').map((link) => {
               const Icon = link.icon
               return (
                 <button

@@ -64,13 +64,34 @@ const initialFormState = {
   notes: '',
 }
 
+const PAGE_PATHS = {
+  dashboard: '/',
+  proposals: '/propostas',
+  contracts: '/contratos',
+  clients: '/clientes',
+  finance: '/financeiro',
+  services: '/servicos',
+  documents: '/documentos',
+  'organization-settings': '/configuracoes',
+  'intelligence-today': '/intelligence/hoje',
+  'intelligence-attention': '/intelligence/atencao',
+  'intelligence-insights': '/intelligence/insights',
+  'intelligence-recommendations': '/intelligence/recomendacoes',
+  'intelligence-trends': '/intelligence/tendencias',
+  'intelligence-cross-analysis': '/intelligence/analise-cruzada',
+  'intelligence-health': '/intelligence/saude',
+  'intelligence-ai': '/intelligence/ia',
+}
+const PATH_PAGES = {...Object.fromEntries(Object.entries(PAGE_PATHS).map(([page, path]) => [path, page])), '/importar':'documents'}
+const pageFromLocation = () => PATH_PAGES[window.location.pathname.replace(/\/$/, '') || '/'] || 'dashboard'
+
 function buildDateValue(value) {
   return value ? value.toString().slice(0, 10) : ''
 }
 
 export default function App() {
   const {profile}=useAuth()
-  const [activePage, setActivePage] = useState('dashboard')
+  const [activePage, setActivePage] = useState(pageFromLocation)
   const [proposals, setProposals] = useState([])
   const [supabaseContracts, setSupabaseContracts] = useState([])
   const [clients, setClients] = useState([])
@@ -99,6 +120,7 @@ export default function App() {
     loadProposals()
   }, [])
   useEffect(()=>initializeMonitoring(),[])
+  useEffect(()=>{const restore=()=>setActivePage(pageFromLocation());window.addEventListener('popstate',restore);return()=>window.removeEventListener('popstate',restore)},[])
   useEffect(()=>{const navigate=(event)=>handleNavigate(event.detail);window.addEventListener('mugo:navigate',navigate);return()=>window.removeEventListener('mugo:navigate',navigate)})
   useEffect(()=>{const refresh=()=>loadProposals();window.addEventListener(CRM_DATA_CHANGED,refresh);return()=>window.removeEventListener(CRM_DATA_CHANGED,refresh)},[])
 
@@ -154,6 +176,8 @@ export default function App() {
     }
     if (page === 'intelligence') page = 'intelligence-today'
     setActivePage(page)
+    const path=PAGE_PATHS[page]
+    if(path&&window.location.pathname!==path)window.history.pushState({page},'',path)
     if (page === 'dashboard' || page.startsWith('intelligence-')) loadProposals()
     setMessage('')
     setErrorMessage('')
@@ -333,7 +357,7 @@ export default function App() {
         <div className="content-container">
         {loading && !hasLoaded ? <PageSkeleton type={activePage === 'nova' ? 'form' : activePage === 'proposals' ? 'proposals' : 'dashboard'} /> : <>
         {errorMessage && activePage !== 'nova' && !activePage.startsWith('intelligence-') && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
-        {activePage === 'dashboard' && <><PulseDailySummary alerts={pulseAlerts} onOpen={()=>handleNavigate('intelligence-attention')}/><Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible_id: contract.responsibleId, responsibleName: contract.responsibleName, main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} contracts={intelligenceData.contracts} installments={installments} teamMembers={teamMembers} /></>}
+        {activePage === 'dashboard' && <><PulseDailySummary alerts={pulseAlerts} onOpen={()=>handleNavigate('intelligence-attention')}/><Dashboard proposals={proposals.map((proposal)=>({ ...proposal, proposal_status:proposal.status==='won'?'Fechada':proposal.status, contract_signed:Boolean(proposal.linkedContract?.signed), contract_start_date:proposal.linkedContract?.start_date||null, contract_end_date:proposal.linkedContract?.end_date||null, contract_term:proposal.contractTermMonths?`${proposal.contractTermMonths} meses`:'', contract_file_url:proposal.linkedContract?.id||null, setup_value:proposal.setupValue, monthly_value:proposal.monthlyValue, responsible_id:proposal.responsibleId, main_service:proposal.mainService }))} contracts={intelligenceData.contracts} installments={installments} teamMembers={teamMembers} /></>}
         {activePage === 'nova' && (
           <ProposalForm
             form={form}
