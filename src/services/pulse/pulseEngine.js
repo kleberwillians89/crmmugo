@@ -6,7 +6,7 @@ const DAY=86400000,norm=(v)=>String(v??'').normalize('NFD').replace(/[\u0300-\u0
 const parsed=(v)=>{if(!v)return null;const d=new Date(`${String(v).slice(0,10)}T12:00:00`);return Number.isNaN(d.getTime())?null:d}
 const active=(c)=>norm(c.status)==='active'&&(c.signed??true),open=(p)=>!['won','lost','cancelled','expired'].includes(norm(p.status||p.proposal_status))
 const clientName=(id,clients)=>clients.find((c)=>c.id===id)?.company_name||'Cliente não identificado'
-const make=(rule,title,description,{category='Sistema',priority='medium',origin='Mugô Pulse',clientId=null,contractId=null,proposalId=null,responsibleId=null,link='dashboard',evidence=[],score=30}={})=>({fingerprint:[rule,clientId,contractId,proposalId].filter(Boolean).join(':'),rule,title,description,category,priority,origin,clientId,contractId,proposalId,assignedTeamMemberId:responsibleId,link,evidence,score})
+const make=(rule,title,description,{category='Sistema',priority='medium',origin='Mugô Intelligence',clientId=null,contractId=null,proposalId=null,responsibleId=null,link='dashboard',evidence=[],score=30}={})=>({fingerprint:[rule,clientId,contractId,proposalId].filter(Boolean).join(':'),rule,title,description,category,priority,origin,clientId,contractId,proposalId,assignedTeamMemberId:responsibleId,link,evidence,score})
 export function generatePulseAlerts(data={},now=new Date()){
  const clients=data.clients||[],contracts=data.contracts||[],installments=data.installments||[],proposals=data.proposals||[],team=data.teamMembers||[],alerts=[],time=getTemporalContext(now)
  const activeContracts=contracts.filter(active),contractById=new Map(contracts.map((c)=>[c.id,c]))

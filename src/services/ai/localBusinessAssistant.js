@@ -13,7 +13,7 @@ import {getTemporalContext,operationalRecommendation,remainingTime} from '../../
 
 const money = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0)
 const norm = (value) => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-const answer = (text, sources, intention, handled = true, extras = {}) => ({ text, answer:text, sources, mode: 'local', intention, intent:intention, handled, confidence:handled?100:0, ...extras })
+const answer = (text, sources, intention, handled = true, extras = {}) => ({ text, answer:text, sources:(sources||[]).map((source)=>source==='Mugô Pulse'?'Mugô Intelligence':source), mode: 'local', intention, intent:intention, handled, confidence:handled?100:0, ...extras })
 
 export function localBusinessAssistant(question, data = {}) {
   const q = norm(question)
@@ -48,6 +48,7 @@ export function localBusinessAssistant(question, data = {}) {
   const openProposals=proposals.filter((item)=>!['won','lost','cancelled','expired'].includes(norm(item.status||item.proposal_status)))
   const urgent=[...pulseAlerts].sort((a,b)=>Number(b.score||0)-Number(a.score||0)).filter((item)=>['critical','high'].includes(item.priority))
   const temporalHeader=`Agora são ${temporal.formattedTime} de ${temporal.weekday}, ${temporal.formattedDate}. ${temporal.isHoliday?`Hoje é feriado (${temporal.holidayName}).`:temporal.isWeekend?'Hoje é fim de semana.':`O horário comercial está ${temporal.businessStatus}.`}`
+  if(q.includes('tenho alertas'))return answer(`Encontrei ${pulseAlerts.length} itens que precisam da sua atenção.`,['Mugô Intelligence'],'attention_summary',true,{suggestions:pulseAlerts.length?['Mostre os itens críticos','Qual é o maior risco hoje?']:[]})
   if(q.includes('que horas')||q.includes('horario atual')||q.includes('momento atual'))return answer(`${temporalHeader}${!temporal.isBusinessHours?` Próximo expediente: ${temporal.nextBusinessLabel} às ${temporal.nextBusinessTime}.`:''}`,['Contexto temporal'],'temporal_context')
   if(q.includes('o que vence amanha')){const rows=[...contractsTomorrow.map((item)=>`• Contrato ${item.clients?.company_name||item.contract_number||item.id} vence amanhã.`),...dueTomorrow.map((item)=>`• Cobrança de ${money(openBalance(item))} vence amanhã.`)];return answer(`${temporalHeader}\n${rows.length?rows.join('\n'):'Nada com vencimento amanhã foi identificado nos dados atuais.'}`,['Contexto temporal','Contratos','Financeiro'],'tomorrow_due')}
   if(q.includes('urgente agora')||q.includes('algo urgente'))return answer(`${temporalHeader}\n${urgent.length?urgent.slice(0,8).map((item)=>`• ${item.title}: ${item.description}`).join('\n'):'Não há alertas críticos ou altos ativos agora.'}\n${operationalRecommendation(temporal,urgent.some((item)=>item.category==='Financeiro')?'cobrança':'prioridade')}`,['Contexto temporal','Mugô Pulse'],'urgent_now')

@@ -1,6 +1,5 @@
 import {
   Building2,
-  BrainCircuit,
   ChevronLeft,
   ClipboardCheck,
   FileText,
@@ -22,6 +21,12 @@ import {
   History,
   Scale,
   BellRing,
+  CalendarDays,
+  Lightbulb,
+  SearchCode,
+  MessageCircleQuestion,
+  TrendingUp,
+  Target,
   X,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -30,7 +35,17 @@ import { NAVIGATION_LABELS } from '../config/navigationLabels'
 import { statusLabel } from '../config/statusLabels'
 
 const groups = [
-  { label: 'Visão geral', links: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }, { id: 'intelligence', label: 'Mugô Intelligence', icon: BrainCircuit }] },
+  { label: 'Visão geral', links: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
+  { label: 'Mugô Intelligence', links: [
+    { id: 'intelligence-today', label: 'Hoje', icon: CalendarDays },
+    { id: 'intelligence-attention', label: 'Atenção', icon: BellRing, supabaseOnly: true },
+    { id: 'intelligence-insights', label: 'Insights', icon: Lightbulb },
+    { id: 'intelligence-recommendations', label: 'Recomendações', icon: Target },
+    { id: 'intelligence-trends', label: 'Tendências', icon: TrendingUp },
+    { id: 'intelligence-cross-analysis', label: 'Análise Cruzada', icon: SearchCode },
+    { id: 'intelligence-health', label: 'Saúde do Negócio', icon: HeartPulse },
+    { id: 'intelligence-ai', label: 'Pergunte à IA', icon: MessageCircleQuestion },
+  ] },
   {
     label: 'Comercial',
     links: [
@@ -51,7 +66,6 @@ const groups = [
     { id: 'commercial-trash', label: 'Lixeira comercial', icon: Trash2, supabaseOnly: true },
     { id: 'commercial-integrity', label: 'Integridade Comercial', icon: ShieldCheck, adminOnly: true, supabaseOnly: true },
     { id: 'system-audit', label: 'Auditoria', icon: ClipboardCheck, adminOnly: true, supabaseOnly: true },
-    { id: 'alerts', label: 'Alertas', icon: BellRing, supabaseOnly: true },
     { id: 'crm-health', label: 'Saúde do CRM', icon: HeartPulse, adminOnly: true, supabaseOnly: true },
     { id: 'backup', label: 'Backup', icon: DatabaseBackup, adminOnly: true, supabaseOnly: true },
     { id: 'restore', label: 'Restauração', icon: History, adminOnly: true, supabaseOnly: true },

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { BrainCircuit, CalendarClock, ChartNoAxesCombined, CircleDollarSign, HeartPulse, Lightbulb, Radar, Target } from 'lucide-react'
 import { AGENCY_GOALS } from '../config/agencyGoals'
 import { calculateCommercialPerformance } from '../lib/commercialMetrics'
@@ -24,8 +24,8 @@ const contractMonths = (contract) => {
 }
 const group = (rows, key, value) => [...rows.reduce((map, row) => { const label = key(row) || 'Não informado'; map.set(label, (map.get(label) || 0) + value(row)); return map }, new Map())].map(([label, amount]) => ({ label, amount })).sort((a, b) => b.amount - a.amount)
 
-function Section({ icon: Icon, eyebrow, title, children, className = '' }) {
-  return <section className={`intelligence-section ${className}`.trim()}><header><span><Icon size={18} aria-hidden="true" /></span><div><p>{eyebrow}</p><h2>{title}</h2></div></header>{children}</section>
+function Section({ icon: Icon, eyebrow, title, children, className = '', id }) {
+  return <section id={id} className={`intelligence-section ${className}`.trim()}><header><span><Icon size={18} aria-hidden="true" /></span><div><p>{eyebrow}</p><h2>{title}</h2></div></header>{children}</section>
 }
 
 function BarList({ rows, format = money }) {
@@ -34,7 +34,7 @@ function BarList({ rows, format = money }) {
   return <div className="intelligence-bars">{rows.slice(0, 7).map((row) => <div key={row.label}><div><span>{row.label}</span><strong>{format(row.amount)}</strong></div><i><b style={{ width: `${Math.max(row.amount / max * 100, 2)}%` }} /></i></div>)}</div>
 }
 
-export function MugoIntelligencePage({ data, loading, error }) {
+export function MugoIntelligencePage({ data, loading, error, section = 'today', onAskAI }) {
   const [revenueView, setRevenueView] = useState('service')
   const temporal=getTemporalContext()
   const intelligence = useMemo(() => {
@@ -68,13 +68,28 @@ export function MugoIntelligencePage({ data, loading, error }) {
     return { summary, insights, opportunities, health, forecast, timeline, recommendations, causal, maps }
   }, [data])
 
+  useEffect(() => {
+    const target = document.getElementById(`intelligence-${section}`)
+    if (target) requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }, [section])
+
+  const activeAlerts = (data.alerts || []).filter((item) => !['resolved', 'ignored'].includes(item.status))
+  const overdue = activeAlerts.filter((item) => item.rule === 'overdue-installment').length
+  const expiring = activeAlerts.filter((item) => item.rule === 'expiring-contract').length
+  const atRisk = activeAlerts.filter((item) => ['Clientes', 'Contratos'].includes(item.category)).length
+
   return <div className="intelligence-page">
     <PageHeader eyebrow="Inteligência comercial" title="Mugô Intelligence" description="Diagnósticos, prioridades e projeções calculados exclusivamente com os dados cadastrados no CRM." />
     {error && <FeedbackMessage type="error">{error}</FeedbackMessage>}
     {loading && <p className="intelligence-loading" role="status">Calculando inteligência comercial…</p>}
     <p className="data-scope-note">Número calculado apenas com os dados atualmente cadastrados.</p>
 
-    <Section icon={BrainCircuit} eyebrow="Causa, evidência e impacto" title="Análise Cruzada">
+    <Section id="intelligence-today" icon={CalendarClock} eyebrow="Centro de decisão" title="Hoje">
+      <p className="central-ai-copy"><strong>{temporal.greeting}.</strong> Hoje encontramos:</p>
+      <div className="intelligence-summary"><article><span>Cobranças vencidas</span><strong>{overdue}</strong></article><article><span>Contratos vencendo</span><strong>{expiring}</strong></article><article><span>Clientes em risco</span><strong>{atRisk}</strong></article><article><span>Itens que precisam de atenção</span><strong>{activeAlerts.length}</strong></article></div>
+    </Section>
+
+    <Section id="intelligence-cross-analysis" icon={BrainCircuit} eyebrow="Causa, evidência e impacto" title="Análise Cruzada">
       <div className="causal-insight-grid">{intelligence.causal.slice(0,12).map((item)=><article key={item.id}><span>{item.type}</span><h3>{item.statement}</h3><ul>{item.evidence.slice(0,4).map((evidence)=><li key={evidence}>{evidence}</li>)}</ul><small>Fontes: {item.sources.join(' · ')}</small></article>)}{!intelligence.causal.length&&<p className="intelligence-empty">Nenhuma relação causal confiável foi identificada com os dados atuais.</p>}</div>
     </Section>
 
@@ -83,10 +98,10 @@ export function MugoIntelligencePage({ data, loading, error }) {
     </Section>
 
     <div className="intelligence-grid two">
-      <Section icon={Radar} eyebrow="Prioridade automática" title="Radar Comercial">
+      <Section id="intelligence-insights" icon={Radar} eyebrow="Prioridade automática" title="Insights">
         <div className="insight-list">{intelligence.insights.slice(0, 12).map((item) => <article key={item.id} tabIndex="0"><span className={`severity ${normalize(item.severity)}`}>{item.severity}</span><div><strong>{item.title}</strong><p>{item.description}</p><small>Prioridade {item.score} · impacto {money(item.impact)} · confiança {item.confidence}%</small></div></article>)}{!intelligence.insights.length && <p className="intelligence-empty">Nenhuma atenção identificada com os dados atuais.</p>}</div>
       </Section>
-      <Section icon={Lightbulb} eyebrow="Próximas ações consultivas" title="Recomendações">
+      <Section id="intelligence-recommendations" icon={Lightbulb} eyebrow="Próximas ações consultivas" title="Recomendações">
         <ol className="recommendation-list">{intelligence.recommendations.map((item) => <li key={item.id}><strong>{item.title}</strong><span>{item.reason}</span></li>)}{!intelligence.recommendations.length && <li>Cadastre mais histórico para gerar recomendações.</li>}</ol>
       </Section>
     </div>
@@ -96,7 +111,7 @@ export function MugoIntelligencePage({ data, loading, error }) {
     </Section>
 
     <div className="intelligence-grid two health-forecast-grid">
-      <Section icon={HeartPulse} eyebrow="0 a 100" title="Saúde Comercial" className="health-section">
+      <Section id="intelligence-health" icon={HeartPulse} eyebrow="0 a 100" title="Saúde do Negócio" className="health-section">
         <div className="health-score" aria-label={`Saúde comercial ${intelligence.health.score} de 100`}><strong>{intelligence.health.score}</strong><span>/100</span></div>
         <div className="health-components">{intelligence.health.components.map((item) => <div key={item.label}><span>{item.label}</span><i><b style={{ width: `${item.score}%` }} /></i><strong>{item.score}</strong></div>)}</div>
       </Section>
@@ -110,12 +125,13 @@ export function MugoIntelligencePage({ data, loading, error }) {
       <BarList rows={intelligence.maps[revenueView]} />
     </Section>
 
-    <Section icon={CalendarClock} eyebrow="Ordem cronológica" title="Timeline Comercial">
+    <Section id="intelligence-trends" icon={CalendarClock} eyebrow="Ordem cronológica" title="Tendências">
       <div className="commercial-timeline">{intelligence.timeline.slice(0, 30).map((item) => <article key={item.id}><time dateTime={item.date}>{date(item.date)}</time><span>{item.type}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div></article>)}{!intelligence.timeline.length && <p className="intelligence-empty">Nenhum evento comercial disponível.</p>}</div>
     </Section>
 
-    <Section icon={BrainCircuit} eyebrow="Assistência consultiva" title="Central IA">
+    <Section id="intelligence-ai" icon={BrainCircuit} eyebrow="Assistência consultiva" title="Pergunte à IA">
       <p className="central-ai-copy">{temporal.greeting}. Agora são {temporal.formattedTime} de {temporal.weekday}. O horário comercial está {temporal.businessStatus}. Use “Pergunte à Mugô” para saber o que resolver hoje, o que vence amanhã, o que é urgente agora e o que pode aguardar. A Central IA não executa alterações.</p>
+      <button type="button" className="button" onClick={onAskAI}>Pergunte à IA</button>
     </Section>
   </div>
 }

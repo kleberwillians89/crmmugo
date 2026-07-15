@@ -152,8 +152,9 @@ export default function App() {
       resetForm()
       setFormDirty(false)
     }
+    if (page === 'intelligence') page = 'intelligence-today'
     setActivePage(page)
-    if (['dashboard', 'intelligence'].includes(page)) loadProposals()
+    if (page === 'dashboard' || page.startsWith('intelligence-')) loadProposals()
     setMessage('')
     setErrorMessage('')
   }
@@ -321,7 +322,7 @@ export default function App() {
         onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
       />
       <main className="main-content">
-        <PulseBell alerts={pulseAlerts} onOpen={()=>handleNavigate('alerts')} />
+        <PulseBell alerts={pulseAlerts} onOpen={()=>handleNavigate('intelligence-attention')} />
         <div className="mobile-topbar">
           <button type="button" className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="Abrir menu">
             <Menu size={20} />
@@ -331,8 +332,8 @@ export default function App() {
         </div>
         <div className="content-container">
         {loading && !hasLoaded ? <PageSkeleton type={activePage === 'nova' ? 'form' : activePage === 'proposals' ? 'proposals' : 'dashboard'} /> : <>
-        {errorMessage && !['nova', 'intelligence'].includes(activePage) && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
-        {activePage === 'dashboard' && <><PulseDailySummary alerts={pulseAlerts} onOpen={()=>handleNavigate('alerts')}/><Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible_id: contract.responsibleId, responsibleName: contract.responsibleName, main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} contracts={intelligenceData.contracts} installments={installments} teamMembers={teamMembers} /></>}
+        {errorMessage && activePage !== 'nova' && !activePage.startsWith('intelligence-') && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
+        {activePage === 'dashboard' && <><PulseDailySummary alerts={pulseAlerts} onOpen={()=>handleNavigate('intelligence-attention')}/><Dashboard proposals={dataProvider === 'supabase' ? supabaseContracts.map((contract)=>({ ...contract, proposal_status: contract.status === 'active' ? 'Fechada' : contract.status, contract_signed: contract.signed, contract_start_date: contract.start_date, contract_end_date: contract.end_date, responsible_id: contract.responsibleId, responsibleName: contract.responsibleName, main_service: contract.contract_services?.map((service)=>service.service_name).join(', ') || 'Serviço não informado' })) : proposals} contracts={intelligenceData.contracts} installments={installments} teamMembers={teamMembers} /></>}
         {activePage === 'nova' && (
           <ProposalForm
             form={form}
@@ -377,9 +378,9 @@ export default function App() {
         {activePage === 'crm-health' && <CrmHealthPage />}
         {activePage === 'backup' && <BackupPage />}
         {activePage === 'restore' && <RestorePage />}
-        {activePage === 'alerts' && <PulseAlertsPage alerts={pulseAlerts} teamMembers={teamMembers} onChanged={refreshPulse} onNavigate={handleNavigate} />}
+        {activePage === 'intelligence-attention' && <PulseAlertsPage alerts={pulseAlerts} teamMembers={teamMembers} onChanged={refreshPulse} onNavigate={handleNavigate} />}
         {activePage === 'performance' && <CommercialPerformancePage />}
-        {activePage === 'intelligence' && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} />}
+        {activePage.startsWith('intelligence-') && activePage !== 'intelligence-attention' && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} section={activePage.replace('intelligence-','')} onAskAI={()=>setAssistantOpen(true)} />}
         </>}
         </div>
         <button type="button" className="assistant-trigger" onClick={() => setAssistantOpen(true)}><Sparkles size={16}/>Pergunte à Mugô</button>
