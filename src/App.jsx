@@ -129,7 +129,7 @@ export default function App() {
       }
     } catch (error) {
       if(import.meta.env.DEV)console.error('[CRM] Initial load failed',{message:error?.message,code:error?.code,details:error?.details,hint:error?.hint})
-      setErrorMessage('Não foi possível carregar as propostas.')
+      setErrorMessage([error?.message, error?.code && `Código: ${error.code}`, error?.details && `Detalhes: ${error.details}`, error?.hint && `Orientação: ${error.hint}`].filter(Boolean).join(' · ') || 'Não foi possível carregar as propostas.')
     } finally {
       setLoading(false)
       setHasLoaded(true)
@@ -233,7 +233,7 @@ export default function App() {
       setActivePage('proposals')
     } catch (error) {
       console.error(error)
-      setErrorMessage('Erro ao salvar proposta. Verifique os dados e tente novamente.')
+      setErrorMessage([error?.message, error?.code && `Código: ${error.code}`, error?.details && `Detalhes: ${error.details}`, error?.hint && `Orientação: ${error.hint}`].filter(Boolean).join(' · ') || 'Erro ao salvar proposta. Verifique os dados e tente novamente.')
     } finally {
       proposalSubmitRef.current=false
       setLoading(false)

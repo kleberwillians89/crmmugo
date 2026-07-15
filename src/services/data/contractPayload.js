@@ -27,5 +27,6 @@ export function buildContractPayload(values,{partial=false}={}){
   return payload
 }
 export function contractToForm(contract){return Object.fromEntries(Object.keys(allowed).map((key)=>[key,contract[key]??'']))}
+export const sanitizeContractPayload=buildContractPayload
 export function assertContractId(value){if(!UUID.test(String(value||'')))throw new Error('ID de contrato inválido.');return value}
 export const CONTRACT_DB_FIELDS=Object.freeze(Object.keys(allowed))

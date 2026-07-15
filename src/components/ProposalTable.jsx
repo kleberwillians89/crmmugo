@@ -11,7 +11,7 @@ import {ProposalContractLinkModal} from './ProposalContractLinkModal'
 import {FeedbackMessage} from './FeedbackMessage'
 import {errorPresentation} from '../lib/userError'
 
-const initialFilters = { search: '', status: '', responsible: '', service: '', signed: '', term: '', sort: 'recent' }
+const initialFilters = { search: '', status: '', responsible: '', service: '', signed: '', term: '', sentFrom: '', sentTo: '', sort: 'recent' }
 const valueOf = (item) => Number(item.totalValue)||(Number(item.setupValue)||0)+(Number(item.monthlyValue)||0)
 const normalized = (value) => (value || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 const unique = (list) => [...new Set(list.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'))
@@ -43,7 +43,8 @@ export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading
     const search = normalized(filters.search)
     const result = proposals.filter((item) => {
       const searchable = [item.title,item.proposalNumber,item.clientName,item.companyName,item.contactName,item.responsibleName,item.clientDetails.email,item.clientDetails.phone,...item.services.map((service)=>service.name)].map(normalized).join(' ')
-      return (!search || searchable.includes(search)) && (!filters.status || item.status === filters.status) && (!filters.responsible || item.responsibleName === filters.responsible) && (!filters.service || item.services.some((service)=>service.name===filters.service)) && (!filters.signed || signedState(item.hasContract) === filters.signed) && (!filters.term || item.contractTermMonths?.toString() === filters.term)
+      const sentDate = String(item.sentAt || '').slice(0, 10)
+      return (!search || searchable.includes(search)) && (!filters.status || item.status === filters.status) && (!filters.responsible || item.responsibleName === filters.responsible) && (!filters.service || item.services.some((service)=>service.name===filters.service)) && (!filters.signed || signedState(item.hasContract) === filters.signed) && (!filters.term || item.contractTermMonths?.toString() === filters.term) && (!filters.sentFrom || sentDate >= filters.sentFrom) && (!filters.sentTo || sentDate <= filters.sentTo)
     })
     return [...result].sort((a, b) => {
       if (filters.sort === 'oldest') return new Date(a.createdAt||a.sentAt||0)-new Date(b.createdAt||b.sentAt||0)
@@ -51,12 +52,13 @@ export function ProposalTable({ proposals, onEdit, onQuickUpdate, onNew, loading
       if (filters.sort === 'lowest') return valueOf(a) - valueOf(b)
       if (filters.sort === 'az') return a.clientName.localeCompare(b.clientName,'pt-BR')
       if (filters.sort === 'za') return b.clientName.localeCompare(a.clientName,'pt-BR')
+      if (filters.sort === 'status') return String(a.status).localeCompare(String(b.status),'pt-BR')
       return new Date(b.createdAt||b.sentAt||0)-new Date(a.createdAt||a.sentAt||0)
     })
   }, [proposals, filters])
 
   const metrics = useMemo(() => {const result=filtered.reduce((acc,item)=>{const value=valueOf(item);const won=statusIs(item,['won','fechada','aprovado','contrato assinado','projeto iniciado']);const lost=statusIs(item,['lost','perdida']);const sent=!statusIs(item,['draft','rascunho']);if(sent){acc.sent++;acc.sentValue+=value}if(won){acc.closed++;acc.closedValue+=value}if(lost){acc.lost++;acc.lostValue+=value}return acc},{sent:0,sentValue:0,closed:0,closedValue:0,lost:0,lostValue:0});result.outcomeConversion=result.closed+result.lost?result.closed/(result.closed+result.lost)*100:0;result.sentConversion=result.sent?result.closed/result.sent*100:0;return result}, [filtered])
-  const activeCount = ['search', 'status', 'responsible', 'service', 'signed', 'term'].filter((key) => filters[key]).length
+  const activeCount = ['search', 'status', 'responsible', 'service', 'signed', 'term', 'sentFrom', 'sentTo'].filter((key) => filters[key]).length
   const run=async(proposal,operation,action)=>{if(busyId)return;setBusyId(proposal.id);setOperationError(null);try{await action();await onChanged()}catch(cause){setOperationError(errorPresentation(cause,`Não foi possível ${operation} a proposta.`,{operation,entity:'proposta',id:proposal.id}))}finally{setBusyId(null)}}
   const actions = {busyId,onDuplicate:(proposal)=>run(proposal,'duplicar',()=>duplicateProposal(proposal)),onConvert:(proposal)=>run(proposal,'converter',()=>convertProposalToContract(proposal)),onLink:setLinking,onArchive:async(proposal)=>{if(window.confirm(`Arquivar a proposta “${proposal.title}”?`))await run(proposal,'arquivar',async()=>{await archiveProposal(proposal);setSelected(null)})}}
 
