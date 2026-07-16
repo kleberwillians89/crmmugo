@@ -1,5 +1,6 @@
 import { getSupabaseClient } from '../../lib/supabase/client.js'
 import { getConversationIdentifier, RETRYABLE_WHATSAPP_CODES, WHATSAPP_OPERATION_CONTRACTS } from '../whatsapp/operationContracts.js'
+import { blockWhatsAppAuth, buildWhatsAppHeaders, isWhatsAppAuthBlocked, resolveWhatsAppSession } from '../whatsapp/authGuard.js'
 export { getConversationIdentifier, hasValidConversationIdentifier } from '../whatsapp/operationContracts.js'
 
 const clean = value => String(value ?? '').trim()
@@ -47,16 +48,31 @@ async function invoke(operation, payload = {}, options = {}) {
 
   const request = (async () => {
     const client = getSupabaseClient()
-    if (!client) throw new WhatsAppOperationError({ code: 'UNAUTHENTICATED', message: 'A área WhatsApp exige o ambiente Supabase autenticado.', status: 401 })
-    const { data: sessionData } = await client.auth.getSession()
-    const sessionUser = sessionData?.session?.user || {}
+    if (!client) throw new WhatsAppOperationError({ code: 'AUTH_SESSION_MISSING', message: 'Sua sessão expirou. Entre novamente no CRM.', status: 401 })
+    const { session, error: sessionError } = await resolveWhatsAppSession(client)
+    if (sessionError || !session?.access_token) {
+      blockWhatsAppAuth()
+      invalidateWhatsAppCache()
+      throw new WhatsAppOperationError({ code: 'AUTH_SESSION_MISSING', message: 'Sua sessão expirou. Entre novamente no CRM.', status: 401 })
+    }
+    if (isWhatsAppAuthBlocked()) throw new WhatsAppOperationError({ code: 'AUTH_BLOCKED', message: 'Sua sessão expirou. Entre novamente no CRM.', status: 403 })
+    const sessionUser = session.user || {}
     const workspaceId = clean(sessionUser.app_metadata?.workspace_id || sessionUser.workspace_id)
+    const publicKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
     const { data, error } = await client.functions.invoke('mugozap-api', {
       body: { operation, payload },
-      headers: workspaceId ? { 'X-Workspace-Id': workspaceId } : undefined,
+      headers: buildWhatsAppHeaders(session, publicKey, workspaceId),
     })
-    if (error) throw await operationError(error)
-    if (!data?.ok) throw await operationError(data)
+    if (error) {
+      const structured = await operationError(error)
+      if ([401,403].includes(structured.status)) { blockWhatsAppAuth(session.access_token);invalidateWhatsAppCache() }
+      throw structured
+    }
+    if (!data?.ok) {
+      const structured = await operationError(data)
+      if ([401,403].includes(structured.status)) { blockWhatsAppAuth(session.access_token);invalidateWhatsAppCache() }
+      throw structured
+    }
     if (contract.kind === 'read') cache.set(key, { value: data.data, expiresAt: Date.now() + contract.ttl })
     return data.data
   })().finally(() => inFlight.delete(key))

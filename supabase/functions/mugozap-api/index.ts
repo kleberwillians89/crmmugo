@@ -49,11 +49,15 @@ const upstreamFailure = (status: number) => {
 }
 
 Deno.serve(async request => {
+  const requestStartedAt = Date.now()
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (request.method !== 'POST') return fail('METHOD_NOT_ALLOWED', 'Método não permitido.', 405)
   try {
     const authorization = request.headers.get('Authorization')
-    if (!authorization) return fail('UNAUTHENTICATED', 'Sessão necessária.', 401)
+    if (!authorization) {
+      console.log(JSON.stringify({event:'mugozap_auth',operation:null,authenticated:false,hasProfile:false,hasOrganization:false,status:403,duration_ms:Date.now()-requestStartedAt}))
+      return fail('AUTH_SESSION_MISSING', 'Sua sessão expirou. Entre novamente no CRM.', 403)
+    }
     const supabaseUrl = Deno.env.get('SUPABASE_URL'), anonKey = Deno.env.get('SUPABASE_ANON_KEY')
     const apiUrl = text(Deno.env.get('MUGOZAP_API_URL'), 500).replace(/\/$/, '')
     const panelKey = Deno.env.get('PANEL_API_KEY')
@@ -63,16 +67,24 @@ Deno.serve(async request => {
 
     const client = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authorization } } })
     const { data: { user }, error: userError } = await client.auth.getUser()
-    if (userError || !user) return fail('UNAUTHENTICATED', 'Sua sessão expirou. Faça login novamente.', 401)
+    if (userError || !user) {
+      console.log(JSON.stringify({event:'mugozap_auth',operation:null,authenticated:false,hasProfile:false,hasOrganization:false,status:403,duration_ms:Date.now()-requestStartedAt}))
+      return fail('AUTH_INVALID_TOKEN', 'Sua sessão expirou. Entre novamente no CRM.', 403)
+    }
     const authorizedWorkspace = text(user.app_metadata?.workspace_id || (user as any).workspace_id, 120)
     if (workspaceId && (!authorizedWorkspace || workspaceId !== authorizedWorkspace)) return fail('FORBIDDEN', 'Seu usuário não possui acesso a este workspace.', 403)
     const { data: profile } = await client.from('profiles').select('organization_id,role,active').eq('id', user.id).single()
-    if (!profile) return fail('PROFILE_NOT_FOUND', 'Perfil do usuário não encontrado.', 403)
-    if (!profile.active || !profile.organization_id) return fail('FORBIDDEN', 'Seu usuário não possui acesso ativo.', 403)
+    if (!profile) {
+      console.log(JSON.stringify({event:'mugozap_auth',operation:null,authenticated:true,hasProfile:false,hasOrganization:false,status:403,duration_ms:Date.now()-requestStartedAt}))
+      return fail('PROFILE_NOT_FOUND', 'Perfil do usuário não encontrado.', 403)
+    }
+    if (!profile.organization_id) return fail('ORGANIZATION_NOT_FOUND', 'Organização do usuário não encontrada.', 403)
+    if (!profile.active) return fail('FORBIDDEN', 'Seu usuário não possui acesso ativo.', 403)
 
     const incoming = await request.json().catch(() => null)
     if (!incoming || JSON.stringify(incoming).length > 12000) return fail('INVALID_PAYLOAD', 'Payload inválido ou acima do limite.', 413)
     const operation = text(incoming.operation, 60), route = routes[operation]
+    console.log(JSON.stringify({event:'mugozap_auth',operation,authenticated:true,hasProfile:true,hasOrganization:true,status:200,duration_ms:Date.now()-requestStartedAt}))
     if (!route) return fail('INVALID_OPERATION', 'Operação não autorizada.', 400)
     if (route.write && !['admin','manager'].includes(profile.role)) return fail('FORBIDDEN', 'Seu perfil não pode alterar conversas.', 403)
     if (route.admin && profile.role !== 'admin') return fail('FORBIDDEN', 'Somente administradores podem consultar usuários do WhatsApp.', 403)

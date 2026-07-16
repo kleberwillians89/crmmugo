@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { getConversationIdentifier, hasValidConversationIdentifier, WHATSAPP_OPERATION_CONTRACTS } from '../src/services/whatsapp/operationContracts.js'
 import { formatPhoneForDisplay, isValidPhoneNumber, normalizePhoneToE164 } from '../src/services/whatsapp/phoneNormalization.js'
 import { callIfFunction } from '../src/lib/callbackSafety.js'
+import { blockWhatsAppAuth, buildWhatsAppHeaders, clearWhatsAppAuthBlock, isWhatsAppAuthBlocked, resetWhatsAppAuthBlock, resolveWhatsAppSession } from '../src/services/whatsapp/authGuard.js'
 
 assert.equal(getConversationIdentifier({ wa_id: '+55 (11) 99999-1234' }), '5511999991234')
 assert.equal(getConversationIdentifier({ waId: '5511988881234' }), '5511988881234')
@@ -15,6 +16,21 @@ assert.equal(normalizePhoneToE164('5511972769605'), '+5511972769605')
 assert.equal(formatPhoneForDisplay('5511972769605'), '+55 (11) 97276-9605')
 assert.equal(isValidPhoneNumber('abc'), false)
 for (const invalidCallback of ['callback', null, undefined, true]) assert.doesNotThrow(() => callIfFunction(invalidCallback, 'value'))
+let callbackCalls=0
+callIfFunction(()=>{callbackCalls+=1})
+assert.equal(callbackCalls,1)
+
+const missingSessionClient={auth:{getSession:async()=>({data:{session:null},error:null})}}
+assert.equal((await resolveWhatsAppSession(missingSessionClient)).session,null)
+const validSession={access_token:'test-access-token',user:{id:'user-test',app_metadata:{}}}
+const headers=buildWhatsAppHeaders(validSession,'public-anon-key')
+assert.equal(headers.Authorization,'Bearer test-access-token')
+assert.equal(headers.apikey,'public-anon-key')
+clearWhatsAppAuthBlock()
+blockWhatsAppAuth('old-token')
+assert.equal(isWhatsAppAuthBlocked(),true)
+resetWhatsAppAuthBlock('new-token')
+assert.equal(isWhatsAppAuthBlocked(),false)
 
 for (const operation of [
   'health','list_conversations','list_messages','send_manual_message','assign_conversation',
@@ -25,8 +41,8 @@ for (const operation of [
 
 const edge = fs.readFileSync(new URL('../supabase/functions/mugozap-api/index.ts', import.meta.url), 'utf8')
 for (const code of [
-  'INVALID_OPERATION','INVALID_PAYLOAD','INVALID_CONVERSATION_ID','UNAUTHENTICATED',
-  'PROFILE_NOT_FOUND','FORBIDDEN','DUPLICATE_ALERT','INSTALLMENT_PAID',
+  'INVALID_OPERATION','INVALID_PAYLOAD','INVALID_CONVERSATION_ID','AUTH_SESSION_MISSING',
+  'AUTH_INVALID_TOKEN','PROFILE_NOT_FOUND','ORGANIZATION_NOT_FOUND','FORBIDDEN','DUPLICATE_ALERT','INSTALLMENT_PAID',
   'TEMPLATE_NOT_CONFIGURED','TEMPLATE_PENDING','TEMPLATE_REJECTED','TEMPLATE_PAUSED',
   'UPSTREAM_UNAUTHORIZED','UPSTREAM_FORBIDDEN','UPSTREAM_NOT_FOUND',
   'UPSTREAM_UNAVAILABLE','UPSTREAM_TIMEOUT','UPSTREAM_COLD_START','MESSAGE_SEND_FAILED','INTERNAL_ERROR',
@@ -40,15 +56,23 @@ for (const logLine of edge.split('\n').filter(line => line.includes('console.log
 const page = fs.readFileSync(new URL('../src/components/WhatsAppPage.jsx', import.meta.url), 'utf8')
 const links = fs.readFileSync(new URL('../src/services/data/whatsappClientLinksRepository.js', import.meta.url), 'utf8')
 const repository = fs.readFileSync(new URL('../src/services/data/whatsappRepository.js', import.meta.url), 'utf8')
+const authGuard = fs.readFileSync(new URL('../src/services/whatsapp/authGuard.js', import.meta.url), 'utf8')
+const app = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 assert.doesNotMatch(page, /setInterval/)
 assert.match(page, /hasValidConversationIdentifier/)
 assert.match(page, /sendingRef\.current/)
 assert.match(page, /historyRequestRef/)
 assert.match(page, /cause\.status===403/)
 assert.match(page, /cause\.code==='UPSTREAM_TIMEOUT'/)
+assert.match(page, /dados anteriores foram preservados/)
 assert.match(links, /onConflict: 'organization_id,wa_id'/)
 assert.match(links, /já está vinculada a outro cliente/)
 assert.doesNotMatch(repository, /retry\s*:/)
+assert.match(repository, /isWhatsAppAuthBlocked/)
+assert.match(repository, /AUTH_SESSION_MISSING/)
+assert.match(authGuard, /Authorization/)
+assert.match(app, /pulseSyncUnavailable\.current=true/)
+assert.match(app, /sessionStorage\.setItem\('mugo:pulse-sync-unavailable'/)
 assert.doesNotMatch(page, /sendManualMessage\([^)]*['"`][^'"`]+['"`]\)/)
 
 console.log('WhatsApp stability contracts: OK')
