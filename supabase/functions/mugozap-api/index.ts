@@ -21,6 +21,12 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
   list_users: { method: 'GET', path: () => '/api/users', admin: true },
   get_dashboard_summary: { method: 'GET', path: () => '/api/dashboard/summary' },
   start_template_conversation: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
+  get_template_status: { method: 'GET', path: p => {
+    const allowed=['mugo_alerta_pagamento_pendente','mugo_pagamento_confirmado','mugo_solicitar_comprovante','mugo_aviso_renovacao_contrato','mugo_agendamento_confirmado','mugo_boas_vindas_diagnostico_v1','hello_world']
+    const name=text(p.template_name,100)
+    if(!allowed.includes(name))throw new Error('TEMPLATE_NOT_ALLOWED')
+    return `/api/templates/${encodeURIComponent(name)}?language=pt_BR`
+  } },
 }
 
 Deno.serve(async request => {
@@ -73,7 +79,7 @@ Deno.serve(async request => {
       if (!/^55[1-9]{2}9?\d{8}$/.test(normalizedPhone) || !storedPhones.includes(normalizedPhone)) return fail('PHONE_MISMATCH', 'O telefone não pertence ao cliente informado.', 403)
       const safeName = text(clientRow.contact_name || clientRow.trade_name || clientRow.company_name, 120).split(/\s+/)[0] || 'Cliente'
       verifiedPayload = {wa_id:normalizedPhone,template_name:templateName,language,parameters:[safeName],source:'collection',client_id:clientRow.id,installment_id:installment.id}
-      const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,wa_id:normalizedPhone,template_name:templateName,status:'sending',sent_by:user.id}).select('id').single()
+      const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,contract_id:installment.contract_id,wa_id:normalizedPhone,template_name:templateName,template_status:'CHECKING',collection_stage:'sending',action:'template_send_requested',status:'sending',sent_by:user.id}).select('id').single()
       if (reservation.error) return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
       alertReservationId = reservation.data.id
     }
@@ -90,21 +96,22 @@ Deno.serve(async request => {
     try {
       response = await fetch(`${apiUrl}${path}`, { method: route.method, signal: controller.signal, headers: mugoZapHeaders, body: body ? JSON.stringify(body) : undefined })
     } catch (error) {
-      if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed'}).eq('id',alertReservationId)
+      if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',error_code:'MUGOZAP_REQUEST_FAILED',error_message:'Serviço do WhatsApp indisponível.'}).eq('id',alertReservationId)
       throw error
     } finally {
       clearTimeout(timeout)
     }
     const responseBody = await response.json().catch(() => null)
     if (!response.ok) {
-      if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed'}).eq('id',alertReservationId)
-      const known = response.status === 403 ? 'Você não possui permissão para esta operação no MugoZap.' : response.status === 404 ? 'A conversa não foi encontrada.' : response.status === 429 ? 'Muitas solicitações. Aguarde e tente novamente.' : 'O MugoZap não conseguiu concluir a operação.'
+      if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',error_code:`MUGOZAP_${response.status}`,error_message:'O MugoZap não conseguiu concluir o envio.'}).eq('id',alertReservationId)
+      const detail = String(responseBody?.detail || '')
+      const known = detail === 'Template pending approval' ? 'O template de cobrança ainda está em aprovação na Meta.' : detail === 'Template unavailable' ? 'O template de cobrança ainda não está disponível na Meta.' : response.status === 403 ? 'Seu perfil não possui permissão para executar esta ação.' : response.status === 404 ? 'Nenhuma conversa anterior foi encontrada. Inicie uma nova conversa.' : response.status === 429 ? 'Muitas solicitações. Aguarde e tente novamente.' : 'O serviço do WhatsApp está temporariamente indisponível.'
       return fail(`MUGOZAP_${response.status}`, known, response.status)
     }
     if (operation === 'start_template_conversation') {
       const sent:any = responseBody || {}, conversation = sent.conversation || {}, normalizedPhone = text(payload.phone,40).replace(/\D/g,'')
       const linkResult = await client.from('whatsapp_conversation_links').upsert({organization_id:profile.organization_id,client_id:payload.client_id,wa_id:String(conversation.wa_id||normalizedPhone),phone:normalizedPhone,conversation_id:String(conversation.id||conversation.wa_id||normalizedPhone)},{onConflict:'organization_id,client_id'})
-      const alertResult = await client.from('whatsapp_collection_alerts').update({wa_id:String(conversation.wa_id||normalizedPhone),provider_message_id:sent.provider_message_id||null,status:'sent',sent_at:new Date().toISOString()}).eq('id',alertReservationId)
+      const alertResult = await client.from('whatsapp_collection_alerts').update({wa_id:String(conversation.wa_id||normalizedPhone),provider_message_id:sent.provider_message_id||null,template_status:'APPROVED',collection_stage:'waiting_customer',action:'template_sent',status:'sent',sent_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',alertReservationId)
       await client.from('commercial_events').insert({organization_id:profile.organization_id,client_id:payload.client_id,installment_id:payload.installment_id,event_type:'whatsapp_collection_alert_sent',title:'Alerta de cobrança enviado pelo WhatsApp',new_value:{wa_id:String(conversation.wa_id||normalizedPhone),template_name:'mugo_alerta_pagamento_pendente',provider_message_id:sent.provider_message_id||null},created_by:user.id})
       if (linkResult.error || alertResult.error) return fail('CRM_AUDIT_FAILED', 'O alerta foi enviado, mas o vínculo não pôde ser registrado. Não repita o envio.', 502)
     }

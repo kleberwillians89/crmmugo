@@ -86,6 +86,8 @@ export async function findConversationByPhone(phone) {
   }
 }
 export const startTemplateConversation = payload => invoke('start_template_conversation', payload)
+export async function getCollectionTemplateStatus(){return getTemplateStatus('mugo_alerta_pagamento_pendente')}
+export async function getTemplateStatus(templateName){const data=await invoke('get_template_status',{template_name:templateName});return data?.template||{name:templateName,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',error:'Resposta inválida.'}}
 export const sendManualMessage = (waId, text) => invoke('send_manual_message', { waId: clean(waId), text: clean(text) })
 export const updateConversation = (waId, payload) => invoke('update_conversation', { waId: clean(waId), changes: payload })
 export const assignConversation = (waId, userId) => invoke('assign_conversation', { waId: clean(waId), assignedTo: clean(userId) })
