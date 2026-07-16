@@ -10,9 +10,21 @@ const definitions={
   mugo_boas_vindas_diagnostico_v1:{display:'Boas-vindas e diagnóstico',purpose:'Novos leads',preview:'Olá {{cliente_nome}}! Aqui é a equipe da Mugô. Unimos tecnologia, consultoria e estratégia para destravar o potencial das marcas com automação e IA. Quer entender como podemos otimizar seus processos e resultados? Responda esta mensagem e comece sua jornada com a Mugô.',buttons:[],footer:'',enabled:false},
   hello_world:{display:'Template de teste da Meta',purpose:'Teste técnico',preview:'Template técnico padrão da Meta.',buttons:[],footer:'',enabled:false,technical:true},
 }
-let sessionCache=[],lastSync=null
+let sessionCache=[],lastSync=null,inFlight=null
 export function getConfiguredTemplates(){return TEMPLATE_NAMES.map(name=>({...definitions[name],name,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',lastSyncedAt:null,error:'',...(sessionCache.find(item=>item.name===name)||{})}))}
-export async function refreshTemplateStatuses(){const previous=new Map(sessionCache.map(item=>[item.name,item])),now=new Date().toISOString();const rows=await Promise.all(TEMPLATE_NAMES.map(async name=>{try{return{...definitions[name],...(await getTemplateStatus(name)),name,lastSyncedAt:now,error:''}}catch(error){const valid=previous.get(name);return valid?{...valid,error:error.message,lastSyncedAt:valid.lastSyncedAt}:{...definitions[name],name,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',lastSyncedAt:now,error:error.message}}}));sessionCache=rows;lastSync=now;return{templates:rows,lastSync,updated:rows.filter(item=>item.status!=='SYNC_ERROR').length,failed:rows.filter(item=>item.status==='SYNC_ERROR').length}}
+export async function refreshTemplateStatuses({force=false}={}){
+  if(!force&&!isTemplateSyncStale())return{templates:getConfiguredTemplates(),lastSync,updated:sessionCache.filter(item=>item.status!=='SYNC_ERROR').length,failed:sessionCache.filter(item=>item.status==='SYNC_ERROR').length}
+  if(inFlight)return inFlight
+  inFlight=(async()=>{
+    const previous=new Map(sessionCache.map(item=>[item.name,item])),now=new Date().toISOString(),rows=[]
+    let cursor=0
+    async function worker(){while(cursor<TEMPLATE_NAMES.length){const name=TEMPLATE_NAMES[cursor++];try{rows.push({...definitions[name],...(await getTemplateStatus(name,{force})),name,lastSyncedAt:now,error:''})}catch(error){const valid=previous.get(name);rows.push(valid?{...valid,error:error.message,lastSyncedAt:valid.lastSyncedAt}:{...definitions[name],name,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',lastSyncedAt:now,error:error.message})}}}
+    await Promise.all([worker(),worker(),worker()])
+    sessionCache=TEMPLATE_NAMES.map(name=>rows.find(item=>item.name===name));lastSync=now
+    return{templates:sessionCache,lastSync,updated:sessionCache.filter(item=>item.status!=='SYNC_ERROR').length,failed:sessionCache.filter(item=>item.status==='SYNC_ERROR').length}
+  })().finally(()=>{inFlight=null})
+  return inFlight
+}
 export function isTemplateAvailable(name,templates=sessionCache){const item=templates.find(template=>template.name===name);return item?.status==='APPROVED'&&item?.language==='pt_BR'}
 export const getLastTemplateSync=()=>lastSync
 export const isTemplateSyncStale=(maxAge=600000)=>!lastSync||Date.now()-new Date(lastSync).getTime()>maxAge

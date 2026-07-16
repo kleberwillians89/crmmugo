@@ -22,6 +22,7 @@
     "test:operations": "node scripts/test-sprint14-1-operations.mjs",
     "test:intelligence-causal": "node scripts/test-intelligence-causal.mjs",
     "test:pulse": "node scripts/test-sprint15-pulse.mjs",
+    "test:whatsapp": "node scripts/test-whatsapp-stability.mjs",
     "test:temporal": "node scripts/test-sprint15-1-temporal.mjs"
   },
   "dependencies": {

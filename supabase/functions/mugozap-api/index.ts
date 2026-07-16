@@ -2,21 +2,23 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type, x-workspace-id','Access-Control-Allow-Methods':'POST, OPTIONS','Content-Type':'application/json'}
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: corsHeaders })
-const fail = (code: string, message: string, status = 400) => json({ ok: false, code, message }, status)
+const fail = (code: string, message: string, status = 400, upstreamStatus = 0, retryable = false) => json({ ok: false, code, message, status, upstream_status: upstreamStatus, retryable }, status)
 const text = (value: unknown, max = 300) => String(value ?? '').trim().slice(0, max)
+const identifier = (value: unknown) => {
+  const normalized = text(value, 40).replace(/\D/g, '')
+  return /^\d{10,15}$/.test(normalized) ? normalized : ''
+}
 
 const routes: Record<string, { method: string, path: (payload: any) => string, body?: (payload: any) => unknown, write?: boolean, admin?: boolean }> = {
+  health: { method: 'GET', path: () => '/health' },
   list_conversations: { method: 'GET', path: () => '/api/conversations' },
   find_conversation_by_phone: { method: 'GET', path: p => `/api/conversations/by-phone/${encodeURIComponent(text(p.phone, 40))}` },
   list_messages: { method: 'GET', path: p => `/api/messages?wa_id=${encodeURIComponent(text(p.waId, 40))}&limit=${Math.min(Math.max(Number(p.limit) || 80, 1), 200)}` },
   send_manual_message: { method: 'POST', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}/send`, body: p => ({ text: text(p.text, 4000) }), write: true },
-  update_conversation: { method: 'PATCH', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}`, body: p => {
-    const allowed = ['name','status','stage','notes','tags','source','origem_lead','fila','attendance_mode','awaiting_human','automation_paused','bot_enabled']
-    return Object.fromEntries(allowed.filter(key => Object.prototype.hasOwnProperty.call(p.changes || {}, key)).map(key => [key, p.changes[key]]))
-  }, write: true },
   assign_conversation: { method: 'PATCH', path: p => `/api/attendance/conversations/${encodeURIComponent(text(p.waId, 40))}/assign`, body: p => ({ assigned_to: text(p.assignedTo, 120) }), write: true },
-  update_attendance_status: { method: 'PATCH', path: p => `/api/attendance/conversations/${encodeURIComponent(text(p.waId, 40))}/status`, body: p => ({ status: text(p.status, 80) }), write: true },
-  close_handoff: { method: 'POST', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}/handoff/close`, write: true },
+  pause_automation: { method: 'PATCH', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}`, body: () => ({ attendance_mode:'human', automation_paused:true, bot_enabled:false }), write: true },
+  resume_automation: { method: 'POST', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}/handoff/close`, write: true },
+  close_conversation: { method: 'PATCH', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}`, body: () => ({ status:'closed' }), write: true },
   get_attendance_meta: { method: 'GET', path: () => '/api/attendance/meta' },
   list_users: { method: 'GET', path: () => '/api/users', admin: true },
   get_dashboard_summary: { method: 'GET', path: () => '/api/dashboard/summary' },
@@ -27,7 +29,23 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
     if(!allowed.includes(name))throw new Error('TEMPLATE_NOT_ALLOWED')
     return `/api/templates/${encodeURIComponent(name)}?language=pt_BR`
   } },
-  get_whatsapp_usage: { method: 'GET', path: p => `/api/whatsapp/usage?days=${Math.min(Math.max(Number(p.days)||30,1),366)}` },
+  get_usage: { method: 'GET', path: p => `/api/whatsapp/usage?days=${Math.min(Math.max(Number(p.days)||30,1),366)}` },
+}
+
+const timeoutFor = (operation: string) => {
+  if (['health','get_template_status','find_conversation_by_phone','get_usage','get_attendance_meta','get_dashboard_summary'].includes(operation)) return 8_000
+  if (['list_conversations','list_messages','list_users'].includes(operation)) return 15_000
+  return 20_000
+}
+
+const upstreamFailure = (status: number) => {
+  if (status === 401) return ['UPSTREAM_UNAUTHORIZED','A autenticação com o MugoZap falhou.',false] as const
+  if (status === 403) return ['UPSTREAM_FORBIDDEN','O MugoZap recusou esta operação.',false] as const
+  if (status === 404) return ['UPSTREAM_NOT_FOUND','O recurso solicitado não foi encontrado no MugoZap.',false] as const
+  if ([502,503,504].includes(status)) return ['UPSTREAM_UNAVAILABLE','O MugoZap está temporariamente indisponível.',true] as const
+  if (status === 409) return ['DUPLICATE_ALERT','Esta operação já foi registrada.',false] as const
+  if (status === 422 || status === 400) return ['INVALID_PAYLOAD','O MugoZap recusou os dados enviados.',false] as const
+  return ['INTERNAL_ERROR','O MugoZap não conseguiu concluir a operação.',status >= 500] as const
 }
 
 Deno.serve(async request => {
@@ -35,28 +53,29 @@ Deno.serve(async request => {
   if (request.method !== 'POST') return fail('METHOD_NOT_ALLOWED', 'Método não permitido.', 405)
   try {
     const authorization = request.headers.get('Authorization')
-    if (!authorization) return fail('SESSION_REQUIRED', 'Sessão necessária.', 401)
+    if (!authorization) return fail('UNAUTHENTICATED', 'Sessão necessária.', 401)
     const supabaseUrl = Deno.env.get('SUPABASE_URL'), anonKey = Deno.env.get('SUPABASE_ANON_KEY')
     const apiUrl = text(Deno.env.get('MUGOZAP_API_URL'), 500).replace(/\/$/, '')
     const panelKey = Deno.env.get('PANEL_API_KEY')
     const workspaceId = text(request.headers.get('X-Workspace-Id'), 120)
-    if (!supabaseUrl || !anonKey || !apiUrl || !panelKey) return fail('SERVICE_NOT_CONFIGURED', 'A integração com o MugoZap ainda não foi configurada.', 503)
-    if (!/^https?:\/\//.test(apiUrl)) return fail('INVALID_API_URL', 'A URL interna do MugoZap é inválida.', 503)
+    if (!supabaseUrl || !anonKey || !apiUrl || !panelKey) return fail('INTERNAL_ERROR', 'A integração com o MugoZap ainda não foi configurada.', 503)
+    if (!/^https?:\/\//.test(apiUrl)) return fail('INTERNAL_ERROR', 'A URL interna do MugoZap é inválida.', 503)
 
     const client = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authorization } } })
     const { data: { user }, error: userError } = await client.auth.getUser()
-    if (userError || !user) return fail('SESSION_EXPIRED', 'Sua sessão expirou. Faça login novamente.', 401)
+    if (userError || !user) return fail('UNAUTHENTICATED', 'Sua sessão expirou. Faça login novamente.', 401)
     const authorizedWorkspace = text(user.app_metadata?.workspace_id || (user as any).workspace_id, 120)
-    if (workspaceId && (!authorizedWorkspace || workspaceId !== authorizedWorkspace)) return fail('WORKSPACE_NOT_ALLOWED', 'Seu usuário não possui acesso a este workspace.', 403)
+    if (workspaceId && (!authorizedWorkspace || workspaceId !== authorizedWorkspace)) return fail('FORBIDDEN', 'Seu usuário não possui acesso a este workspace.', 403)
     const { data: profile } = await client.from('profiles').select('organization_id,role,active').eq('id', user.id).single()
-    if (!profile?.active || !profile.organization_id) return fail('PROFILE_NOT_ALLOWED', 'Seu usuário não possui acesso ativo.', 403)
+    if (!profile) return fail('PROFILE_NOT_FOUND', 'Perfil do usuário não encontrado.', 403)
+    if (!profile.active || !profile.organization_id) return fail('FORBIDDEN', 'Seu usuário não possui acesso ativo.', 403)
 
     const incoming = await request.json().catch(() => null)
     if (!incoming || JSON.stringify(incoming).length > 12000) return fail('INVALID_PAYLOAD', 'Payload inválido ou acima do limite.', 413)
     const operation = text(incoming.operation, 60), route = routes[operation]
-    if (!route) return fail('OPERATION_NOT_ALLOWED', 'Operação não autorizada.', 403)
-    if (route.write && !['admin','manager'].includes(profile.role)) return fail('WRITE_NOT_ALLOWED', 'Seu perfil não pode alterar conversas.', 403)
-    if (route.admin && profile.role !== 'admin') return fail('ADMIN_REQUIRED', 'Somente administradores podem consultar usuários do WhatsApp.', 403)
+    if (!route) return fail('INVALID_OPERATION', 'Operação não autorizada.', 400)
+    if (route.write && !['admin','manager'].includes(profile.role)) return fail('FORBIDDEN', 'Seu perfil não pode alterar conversas.', 403)
+    if (route.admin && profile.role !== 'admin') return fail('FORBIDDEN', 'Somente administradores podem consultar usuários do WhatsApp.', 403)
     const payload = incoming.payload || {}
     let alertReservationId = ''
     let verifiedPayload: unknown = undefined
@@ -84,11 +103,14 @@ Deno.serve(async request => {
       if (reservation.error) return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
       alertReservationId = reservation.data.id
     }
+    const identifierOperations = ['list_messages','send_manual_message','assign_conversation','pause_automation','resume_automation','close_conversation']
+    if (identifierOperations.includes(operation) && !identifier(payload.waId)) return fail('INVALID_CONVERSATION_ID', 'Identificador da conversa ausente.', 400)
     const path = route.path(payload)
-    if (!path.startsWith('/api/')) return fail('INVALID_ROUTE', 'Rota não autorizada.', 403)
-    if (path.includes('undefined') || (operation !== 'get_attendance_meta' && operation !== 'list_conversations' && operation !== 'list_users' && operation !== 'get_dashboard_summary' && path.includes('wa_id=' + encodeURIComponent('')))) return fail('INVALID_IDENTIFIER', 'Identificador da conversa ausente.', 400)
+    if (!path.startsWith('/api/') && path !== '/health') return fail('INVALID_OPERATION', 'Rota não autorizada.', 403)
 
-    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15000)
+    const timeoutMs = timeoutFor(operation)
+    const startedAt = Date.now()
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), timeoutMs)
     const body = verifiedPayload || (route.body ? route.body(payload) : undefined)
     if (body && JSON.stringify(body).length > 8000) return fail('PAYLOAD_TOO_LARGE', 'Conteúdo acima do limite permitido.', 413)
     const mugoZapHeaders: Record<string,string> = { 'X-Panel-Key': panelKey, ...(body ? {'Content-Type':'application/json'} : {}) }
@@ -98,16 +120,26 @@ Deno.serve(async request => {
       response = await fetch(`${apiUrl}${path}`, { method: route.method, signal: controller.signal, headers: mugoZapHeaders, body: body ? JSON.stringify(body) : undefined })
     } catch (error) {
       if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',error_code:'MUGOZAP_REQUEST_FAILED',error_message:'Serviço do WhatsApp indisponível.'}).eq('id',alertReservationId)
-      throw error
+      const durationMs = Date.now() - startedAt
+      const timedOut = error instanceof DOMException && error.name === 'AbortError'
+      console.log(JSON.stringify({event:'mugozap_upstream',operation,method:route.method,upstream_path:path,duration_ms:durationMs,upstream_status:0,timeout_ms:timeoutMs,success:false}))
+      if (timedOut) return fail(operation === 'health' ? 'UPSTREAM_COLD_START' : 'UPSTREAM_TIMEOUT', operation === 'health' ? 'O serviço está inicializando. Tente novamente em alguns segundos.' : 'O MugoZap demorou para responder.', 504, 0, true)
+      return fail('UPSTREAM_UNAVAILABLE', 'O MugoZap está temporariamente indisponível.', 503, 0, true)
     } finally {
       clearTimeout(timeout)
     }
     const responseBody = await response.json().catch(() => null)
+    console.log(JSON.stringify({event:'mugozap_upstream',operation,method:route.method,upstream_path:path,duration_ms:Date.now()-startedAt,upstream_status:response.status,timeout_ms:timeoutMs,success:response.ok}))
     if (!response.ok) {
       if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',error_code:`MUGOZAP_${response.status}`,error_message:'O MugoZap não conseguiu concluir o envio.'}).eq('id',alertReservationId)
       const detail = String(responseBody?.detail || '')
-      const known = detail === 'Template pending approval' ? 'O template de cobrança ainda está em aprovação na Meta.' : detail === 'Template unavailable' ? 'O template de cobrança ainda não está disponível na Meta.' : response.status === 403 ? 'Seu perfil não possui permissão para executar esta ação.' : response.status === 404 ? 'Nenhuma conversa anterior foi encontrada. Inicie uma nova conversa.' : response.status === 429 ? 'Muitas solicitações. Aguarde e tente novamente.' : 'O serviço do WhatsApp está temporariamente indisponível.'
-      return fail(`MUGOZAP_${response.status}`, known, response.status)
+      if (detail === 'Template pending approval') return fail('TEMPLATE_PENDING', 'O template ainda está em aprovação na Meta.', 409, response.status)
+      if (detail === 'Template unavailable') return fail('TEMPLATE_NOT_CONFIGURED', 'O template ainda não está disponível na Meta.', 404, response.status)
+      if (/template rejected/i.test(detail)) return fail('TEMPLATE_REJECTED', 'O template foi rejeitado pela Meta.', 409, response.status)
+      if (/template paused/i.test(detail)) return fail('TEMPLATE_PAUSED', 'O template está pausado na Meta.', 409, response.status)
+      if (operation === 'send_manual_message') return fail('MESSAGE_SEND_FAILED', 'Não foi possível enviar a mensagem.', response.status, response.status, response.status >= 500)
+      const [code,message,retryable] = upstreamFailure(response.status)
+      return fail(code, message, response.status, response.status, retryable)
     }
     if (operation === 'start_template_conversation') {
       const sent:any = responseBody || {}, conversation = sent.conversation || {}, normalizedPhone = text(payload.phone,40).replace(/\D/g,'')
@@ -118,7 +150,6 @@ Deno.serve(async request => {
     }
     return json({ ok: true, data: responseBody })
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') return fail('MUGOZAP_TIMEOUT', 'O MugoZap demorou mais que o esperado.', 504)
     return fail('INTERNAL_ERROR', 'A integração com o WhatsApp está temporariamente indisponível.', 500)
   }
 })
