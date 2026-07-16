@@ -36,7 +36,7 @@ import {BackupPage} from './components/BackupPage'
 import {RestorePage} from './components/RestorePage'
 import {initializeMonitoring} from './lib/observability'
 import {generatePulseAlerts} from './services/pulse/pulseEngine'
-import {listPulseAlerts,syncPulseAlerts} from './services/data/pulseRepository'
+import {listPulseAlerts,syncPulseAlerts as rawSyncPulseAlerts} from './services/data/pulseRepository'
 import {PulseAlertsPage} from './components/PulseAlertsPage'
 import {PulseBell} from './components/PulseBell'
 import {PulseDailySummary} from './components/PulseDailySummary'
@@ -117,6 +117,7 @@ export default function App() {
   const [pulseAlerts, setPulseAlerts] = useState([])
   const loadPromise=useRef(null)
   const proposalSubmitRef=useRef(false)
+  const pulseSyncUnavailable=useRef(sessionStorage.getItem('mugo:pulse-sync-unavailable')==='1')
 
   useEffect(() => {
     loadProposals()
@@ -333,7 +334,7 @@ export default function App() {
     alerts: pulseAlerts,
   }), [proposals, supabaseContracts, clients, installments, documents, documentAnalyses, commercialEvents, teamMembers, pulseAlerts])
 
-  useEffect(()=>{if(!hasLoaded||dataProvider!=='supabase')return undefined;let mounted=true;const canSynchronize=['admin','manager'].includes(profile?.role);const monitor=async()=>{const generated=generatePulseAlerts({proposals,contracts:supabaseContracts,clients,installments,documents,events:commercialEvents,teamMembers});try{if(canSynchronize)await syncPulseAlerts(generated,{executionScope:'full'});const persisted=await listPulseAlerts({status:'all'});if(mounted)setPulseAlerts(persisted)}catch{if(mounted&&canSynchronize)setPulseAlerts(generated.map((alert)=>({...alert,id:alert.fingerprint,status:'open',detected_at:new Date().toISOString()})))}};monitor();const timer=canSynchronize?setInterval(monitor,300000):null;return()=>{mounted=false;if(timer)clearInterval(timer)}},[hasLoaded,proposals,supabaseContracts,clients,installments,documents,commercialEvents,teamMembers,profile?.role])
+  useEffect(()=>{if(!hasLoaded||dataProvider!=='supabase')return undefined;let mounted=true;const canSynchronize=['admin','manager'].includes(profile?.role);const monitor=async()=>{const syncPulseAlerts=pulseSyncUnavailable.current?async()=>{}:rawSyncPulseAlerts,generated=generatePulseAlerts({proposals,contracts:supabaseContracts,clients,installments,documents,events:commercialEvents,teamMembers});try{if(canSynchronize)await syncPulseAlerts(generated,{executionScope:'full'});const persisted=await listPulseAlerts({status:'all'});if(mounted)setPulseAlerts(persisted)}catch(error){const missingRpc=error?.code==='PGRST202'||error?.status===404||/sync_pulse_alerts|schema cache/i.test(`${error?.message||''} ${error?.details||''}`);if(missingRpc){pulseSyncUnavailable.current=true;sessionStorage.setItem('mugo:pulse-sync-unavailable','1')}if(mounted&&canSynchronize)setPulseAlerts(generated.map((alert)=>({...alert,id:alert.fingerprint,status:'open',detected_at:new Date().toISOString()})))}};monitor();const timer=canSynchronize?setInterval(monitor,300000):null;return()=>{mounted=false;if(timer)clearInterval(timer)}},[hasLoaded,proposals,supabaseContracts,clients,installments,documents,commercialEvents,teamMembers,profile?.role])
 
   async function refreshPulse(){try{setPulseAlerts(await listPulseAlerts({status:'all'}))}catch{return}}
 

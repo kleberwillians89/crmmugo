@@ -15,12 +15,23 @@ create table if not exists public.whatsapp_collection_alerts(
   organization_id uuid not null references public.organizations(id),
   client_id uuid not null references public.clients(id) on delete cascade,
   installment_id uuid not null references public.invoice_installments(id) on delete restrict,
+  contract_id uuid references public.contracts(id) on delete set null,
   wa_id text not null,
   template_name text not null,
   provider_message_id text,
-  status text not null default 'sent' check(status in('sending','sent','failed','responded')),
+  template_status text,
+  collection_stage text not null default 'alert',
+  action text not null default 'template_sent',
+  status text not null default 'sent' check(status in('sending','sent','failed','responded','waiting_finance','negotiating','paid')),
   sent_by uuid references auth.users(id),
   sent_at timestamptz,
+  delivered_at timestamptz,
+  read_at timestamptz,
+  customer_replied_at timestamptz,
+  attended_at timestamptz,
+  paid_at timestamptz,
+  error_code text,
+  error_message text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(organization_id,installment_id,template_name)
@@ -35,4 +46,3 @@ create index if not exists whatsapp_links_phone_idx on public.whatsapp_conversat
 create index if not exists whatsapp_alerts_status_idx on public.whatsapp_collection_alerts(organization_id,status,created_at desc);
 create trigger set_updated_at before update on public.whatsapp_conversation_links for each row execute function public.set_updated_at();
 create trigger set_updated_at before update on public.whatsapp_collection_alerts for each row execute function public.set_updated_at();
-
