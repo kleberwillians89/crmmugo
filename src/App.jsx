@@ -41,6 +41,7 @@ import {PulseAlertsPage} from './components/PulseAlertsPage'
 import {PulseBell} from './components/PulseBell'
 import {PulseDailySummary} from './components/PulseDailySummary'
 import {useAuth} from './contexts/AuthContext'
+import {WhatsAppPage} from './components/WhatsAppPage'
 
 const initialFormState = {
   client_name: '',
@@ -70,6 +71,7 @@ const PAGE_PATHS = {
   contracts: '/contratos',
   clients: '/clientes',
   finance: '/financeiro',
+  whatsapp: '/whatsapp',
   services: '/servicos',
   documents: '/documentos',
   'organization-settings': '/configuracoes',
@@ -90,7 +92,7 @@ function buildDateValue(value) {
 }
 
 export default function App() {
-  const {profile}=useAuth()
+  const {profile,canWrite,isAdmin}=useAuth()
   const [activePage, setActivePage] = useState(pageFromLocation)
   const [proposals, setProposals] = useState([])
   const [supabaseContracts, setSupabaseContracts] = useState([])
@@ -392,6 +394,7 @@ export default function App() {
         {activePage === 'clients' && <ClientsPage />}
         {activePage === 'team' && <TeamPage />}
         {activePage === 'finance' && <FinancePage />}
+        {activePage === 'whatsapp' && <WhatsAppPage clients={clients} contracts={intelligenceData.contracts} installments={installments} proposals={proposals} onNavigate={handleNavigate} canWrite={canWrite} isAdmin={isAdmin} />}
         {activePage === 'financial-reconciliation' && <FinancialReconciliationPage />}
         {activePage === 'documents' && <ImportDocumentPage onImported={handleDocumentImported} />}
         {activePage === 'diagnostic' && <SupabaseDiagnosticPage />}

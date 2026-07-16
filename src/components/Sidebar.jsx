@@ -16,6 +16,7 @@ import {
   Lightbulb,
   SearchCode,
   MessageCircleQuestion,
+  MessageCircle,
   TrendingUp,
   Target,
   X,
@@ -28,6 +29,7 @@ import { statusLabel } from '../config/statusLabels'
 const groups = [
   { label: 'Visão geral', links: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
   { label: 'Gestão comercial', links: [
+    { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, supabaseOnly: true },
     { id: 'clients', label: 'Clientes', icon: Users },
     { id: 'proposals', label: 'Propostas', icon: FileText },
     { id: 'contracts', label: 'Contratos', icon: ClipboardCheck },
