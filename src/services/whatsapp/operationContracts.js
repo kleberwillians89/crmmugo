@@ -26,22 +26,32 @@ export const RETRYABLE_WHATSAPP_CODES = new Set([
 ])
 
 const clean = value => String(value ?? '').trim()
-const digits = value => clean(value).replace(/\D/g, '')
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const identifier = value => {
+  const input = clean(value)
+  if (!input || uuid.test(input)) return ''
+  const normalized = input.replace(/@(s\.whatsapp\.net|c\.us)$/i, '').replace(/\D/g, '')
+  return /^\d{10,15}$/.test(normalized) ? normalized : ''
+}
 
 export function getConversationIdentifier(conversation = {}) {
   const candidates = [
     conversation.wa_id,
+    conversation.contact_wa_id,
     conversation.waId,
     conversation.phone,
-    conversation.telefone,
     conversation.contact_phone,
+    conversation.customer_phone,
+    conversation.recipient_phone,
+    conversation.remote_jid,
+    conversation.telefone,
   ]
   for (const candidate of candidates) {
-    const normalized = digits(candidate)
-    if (/^\d{10,15}$/.test(normalized)) return normalized
+    const normalized = identifier(candidate)
+    if (normalized) return normalized
   }
   const id = clean(conversation.id)
-  return /^\d{10,15}$/.test(id) ? id : ''
+  return identifier(id)
 }
 
 export const hasValidConversationIdentifier = conversation => Boolean(getConversationIdentifier(conversation))

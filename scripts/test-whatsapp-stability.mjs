@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { getConversationIdentifier, hasValidConversationIdentifier, WHATSAPP_OPERATION_CONTRACTS } from '../src/services/whatsapp/operationContracts.js'
+import { formatPhoneForDisplay, isValidPhoneNumber, normalizePhoneToE164 } from '../src/services/whatsapp/phoneNormalization.js'
+import { callIfFunction } from '../src/lib/callbackSafety.js'
 
 assert.equal(getConversationIdentifier({ wa_id: '+55 (11) 99999-1234' }), '5511999991234')
 assert.equal(getConversationIdentifier({ waId: '5511988881234' }), '5511988881234')
 assert.equal(getConversationIdentifier({ contact_phone: '11 97777-1234' }), '11977771234')
+assert.equal(getConversationIdentifier({ contact_wa_id: '5511972769605@s.whatsapp.net' }), '5511972769605')
+assert.equal(getConversationIdentifier({ remote_jid: '5511972769605@s.whatsapp.net' }), '5511972769605')
 assert.equal(getConversationIdentifier({ id: '57a90ce4-d88f-4dc4-8b69-5aa25d08a94c' }), '')
 assert.equal(hasValidConversationIdentifier({ telefone: '' }), false)
+assert.equal(normalizePhoneToE164('5511972769605'), '+5511972769605')
+assert.equal(formatPhoneForDisplay('5511972769605'), '+55 (11) 97276-9605')
+assert.equal(isValidPhoneNumber('abc'), false)
+for (const invalidCallback of ['callback', null, undefined, true]) assert.doesNotThrow(() => callIfFunction(invalidCallback, 'value'))
 
 for (const operation of [
   'health','list_conversations','list_messages','send_manual_message','assign_conversation',
@@ -30,9 +38,17 @@ for (const logLine of edge.split('\n').filter(line => line.includes('console.log
 }
 
 const page = fs.readFileSync(new URL('../src/components/WhatsAppPage.jsx', import.meta.url), 'utf8')
+const links = fs.readFileSync(new URL('../src/services/data/whatsappClientLinksRepository.js', import.meta.url), 'utf8')
+const repository = fs.readFileSync(new URL('../src/services/data/whatsappRepository.js', import.meta.url), 'utf8')
 assert.doesNotMatch(page, /setInterval/)
 assert.match(page, /hasValidConversationIdentifier/)
 assert.match(page, /sendingRef\.current/)
 assert.match(page, /historyRequestRef/)
+assert.match(page, /cause\.status===403/)
+assert.match(page, /cause\.code==='UPSTREAM_TIMEOUT'/)
+assert.match(links, /onConflict: 'organization_id,wa_id'/)
+assert.match(links, /já está vinculada a outro cliente/)
+assert.doesNotMatch(repository, /retry\s*:/)
+assert.doesNotMatch(page, /sendManualMessage\([^)]*['"`][^'"`]+['"`]\)/)
 
 console.log('WhatsApp stability contracts: OK')
