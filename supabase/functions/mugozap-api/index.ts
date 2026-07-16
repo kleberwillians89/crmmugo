@@ -27,6 +27,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
     if(!allowed.includes(name))throw new Error('TEMPLATE_NOT_ALLOWED')
     return `/api/templates/${encodeURIComponent(name)}?language=pt_BR`
   } },
+  get_whatsapp_usage: { method: 'GET', path: p => `/api/whatsapp/usage?days=${Math.min(Math.max(Number(p.days)||30,1),366)}` },
 }
 
 Deno.serve(async request => {

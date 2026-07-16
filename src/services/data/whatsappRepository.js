@@ -31,12 +31,12 @@ async function invoke(operation, payload = {}) {
 }
 
 function normalizeConversation(item = {}) {
-  const waId = clean(item.wa_id || item.phone || item.telefone)
+  const waId = getConversationIdentifier(item)
   return {
     ...item,
     waId,
     phone: digits(waId || item.telefone),
-    name: clean(item.name || item.contact_name || item.push_name) || 'Contato sem nome',
+    name: clean(item.name || item.contact_name || item.push_name) || (waId ? `Contato • final ${waId.slice(-4)}` : 'Contato sem identificação'),
     preview: clean(item.last_message || item.last_message_text || item.preview),
     updatedAt: item.updated_at || item.last_message_at || item.created_at || null,
     unread: Number(item.unread_count || item.unread || 0),
@@ -49,6 +49,16 @@ function normalizeConversation(item = {}) {
     awaitingHuman: Boolean(item.awaiting_human || item.handoff_pending || item.handoff_active),
     collection: Boolean(item.collection_pending || item.cobranca || item.billing_status),
   }
+}
+
+export function getConversationIdentifier(conversation = {}) {
+  const candidates = [conversation.wa_id, conversation.waId, conversation.phone, conversation.telefone]
+  for (const candidate of candidates) {
+    const normalized = digits(candidate)
+    if (normalized) return normalized
+  }
+  const id = clean(conversation.id)
+  return /^\d{10,15}$/.test(id) ? id : ''
 }
 
 function normalizeMessage(item = {}) {
@@ -70,8 +80,9 @@ export async function listConversations(filters = {}) {
   return asArray(data?.items || data).map(normalizeConversation).sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
 }
 export async function listMessages(waId, limit = 80) {
-  if (!clean(waId)) throw new Error('Selecione uma conversa.')
-  const data = await invoke('list_messages', { waId: clean(waId), limit: Math.min(Math.max(Number(limit) || 80, 1), 200) })
+  const identifier=getConversationIdentifier({wa_id:waId})
+  if (!identifier) {const error=new Error('Esta conversa não possui um identificador válido.');error.code='INVALID_CONVERSATION_ID';throw error}
+  const data = await invoke('list_messages', { waId: identifier, limit: Math.min(Math.max(Number(limit) || 80, 1), 200) })
   return asArray(data?.items || data).map(normalizeMessage).sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
 }
 export async function findConversationByPhone(phone) {
@@ -88,11 +99,13 @@ export async function findConversationByPhone(phone) {
 export const startTemplateConversation = payload => invoke('start_template_conversation', payload)
 export async function getCollectionTemplateStatus(){return getTemplateStatus('mugo_alerta_pagamento_pendente')}
 export async function getTemplateStatus(templateName){const data=await invoke('get_template_status',{template_name:templateName});return data?.template||{name:templateName,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',error:'Resposta inválida.'}}
-export const sendManualMessage = (waId, text) => invoke('send_manual_message', { waId: clean(waId), text: clean(text) })
-export const updateConversation = (waId, payload) => invoke('update_conversation', { waId: clean(waId), changes: payload })
-export const assignConversation = (waId, userId) => invoke('assign_conversation', { waId: clean(waId), assignedTo: clean(userId) })
-export const updateConversationStatus = (waId, status) => invoke('update_attendance_status', { waId: clean(waId), status: clean(status) })
-export const closeHandoff = (waId) => invoke('close_handoff', { waId: clean(waId) })
+export async function getWhatsAppUsage(days=30){const data=await invoke('get_whatsapp_usage',{days});return data?.usage||{}}
+const requireIdentifier=value=>{const identifier=getConversationIdentifier({wa_id:value});if(!identifier){const error=new Error('Esta conversa não possui um identificador válido.');error.code='INVALID_CONVERSATION_ID';throw error}return identifier}
+export const sendManualMessage = (waId, text) => invoke('send_manual_message', { waId: requireIdentifier(waId), text: clean(text) })
+export const updateConversation = (waId, payload) => invoke('update_conversation', { waId: requireIdentifier(waId), changes: payload })
+export const assignConversation = (waId, userId) => invoke('assign_conversation', { waId: requireIdentifier(waId), assignedTo: clean(userId) })
+export const updateConversationStatus = (waId, status) => invoke('update_attendance_status', { waId: requireIdentifier(waId), status: clean(status) })
+export const closeHandoff = (waId) => invoke('close_handoff', { waId: requireIdentifier(waId) })
 export const getAttendanceMeta = () => invoke('get_attendance_meta')
 export async function listWhatsAppUsers() { const data = await invoke('list_users'); return asArray(data?.items || data) }
 export async function getWhatsAppSummary() { const data = await invoke('get_dashboard_summary'); return data?.summary || data || {} }

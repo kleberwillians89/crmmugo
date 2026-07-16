@@ -42,6 +42,8 @@ import {PulseBell} from './components/PulseBell'
 import {PulseDailySummary} from './components/PulseDailySummary'
 import {useAuth} from './contexts/AuthContext'
 import {WhatsAppPage} from './components/WhatsAppPage'
+import {NotFoundPage} from './components/NotFoundPage'
+import {VersionBadge} from './components/VersionBadge'
 
 const initialFormState = {
   client_name: '',
@@ -85,7 +87,7 @@ const PAGE_PATHS = {
   'intelligence-ai': '/intelligence/ia',
 }
 const PATH_PAGES = {...Object.fromEntries(Object.entries(PAGE_PATHS).map(([page, path]) => [path, page])), '/importar':'documents'}
-const pageFromLocation = () => PATH_PAGES[window.location.pathname.replace(/\/$/, '') || '/'] || 'dashboard'
+const pageFromLocation = () => PATH_PAGES[window.location.pathname.replace(/\/$/, '') || '/'] || 'not-found'
 
 function buildDateValue(value) {
   return value ? value.toString().slice(0, 10) : ''
@@ -406,6 +408,7 @@ export default function App() {
         {activePage === 'crm-health' && <CrmHealthPage />}
         {activePage === 'backup' && <BackupPage />}
         {activePage === 'restore' && <RestorePage />}
+        {activePage === 'not-found' && <NotFoundPage />}
         {activePage === 'intelligence-attention' && <PulseAlertsPage alerts={pulseAlerts} teamMembers={teamMembers} onChanged={refreshPulse} onNavigate={handleNavigate} />}
         {activePage === 'performance' && <CommercialPerformancePage />}
         {activePage.startsWith('intelligence-') && activePage !== 'intelligence-attention' && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} section={activePage.replace('intelligence-','')} onAskAI={()=>setAssistantOpen(true)} />}
@@ -413,6 +416,7 @@ export default function App() {
         </div>
         <button type="button" className="assistant-trigger" onClick={() => setAssistantOpen(true)}><Sparkles size={16}/>Pergunte à Mugô</button>
         <MugoAssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} data={intelligenceData} activePage={activePage} />
+        <VersionBadge />
       </main>
     </div>
   )

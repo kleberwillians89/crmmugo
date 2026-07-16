@@ -1,0 +1,1 @@
+export function NotFoundPage(){return <section className="not-found-page"><span>404</span><h1>Página não encontrada</h1><p>Esta rota não existe no CRM Mugô.</p><button className="button" onClick={()=>{window.history.pushState({},'','/');window.dispatchEvent(new PopStateEvent('popstate'))}}>Voltar ao painel</button></section>}
