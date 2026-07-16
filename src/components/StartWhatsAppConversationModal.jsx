@@ -1,0 +1,12 @@
+import { useEffect, useRef } from 'react'
+import { FeedbackMessage } from './FeedbackMessage'
+import { isValidBrazilianPhone } from '../lib/whatsapp'
+
+const preview=name=>`Olá, ${name}. Tudo bem?\n\nTemos uma informação financeira referente aos serviços da Mugô que precisa da sua atenção.\n\nPara consultar os detalhes e as opções de pagamento, toque no botão abaixo.\n\nCaso já tenha tratado esse assunto com nossa equipe, desconsidere esta mensagem.`
+const money=value=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(value||0))
+export function StartWhatsAppConversationModal({ client, installment, phone, canWrite, loading, templateConfigured=true, onClose, onStart }) {
+  const dialog=useRef(null),name=String(client.contact_name||client.trade_name||client.company_name||'Cliente').trim().split(/\s+/)[0]
+  useEffect(()=>{dialog.current?.focus()},[])
+  const paid=installment.status==='paid',invalid=!isValidBrazilianPhone(phone),disabled=invalid||!templateConfigured||paid||loading||!canWrite
+  return <div className="modal-overlay" onMouseDown={event=>event.target===event.currentTarget&&onClose()}><section className="whatsapp-modal start-conversation-modal" role="dialog" aria-modal="true" tabIndex="-1" ref={dialog}><h2>Iniciar conversa</h2><dl><div><dt>Cliente</dt><dd>{client.contact_name||client.company_name}</dd></div><div><dt>Empresa</dt><dd>{client.company_name}</dd></div><div><dt>Telefone</dt><dd>{phone}</dd></div><div><dt>Parcela</dt><dd>{installment.reference_month||installment.id}</dd></div><div><dt>Vencimento</dt><dd>{installment.due_date}</dd></div><div><dt>Valor pendente</dt><dd>{money(installment.amount)}</dd></div><div><dt>Template</dt><dd>mugo_alerta_pagamento_pendente · pt_BR</dd></div></dl><label>Prévia do alerta<textarea rows="9" readOnly value={preview(name)}/></label><FeedbackMessage type="warning">Os detalhes financeiros, valor, vencimento e PIX serão enviados somente após a interação do cliente.</FeedbackMessage>{paid&&<FeedbackMessage type="error">Esta parcela já foi paga e não pode ser cobrada.</FeedbackMessage>}{!templateConfigured&&<FeedbackMessage type="error">O template de cobrança ainda não está disponível na Meta.</FeedbackMessage>}<footer><button className="button secondary" onClick={onClose}>Cancelar</button><button className="button" disabled={disabled} onClick={onStart}>{loading?'Iniciando…':'Iniciar conversa'}</button></footer></section></div>
+}

@@ -4,10 +4,11 @@ const clean = (value) => String(value ?? '').trim()
 const digits = (value) => clean(value).replace(/\D/g, '')
 const asArray = (value) => Array.isArray(value) ? value : []
 
-function operationError(error) {
-  const message = error?.context?.body?.message || error?.message || 'Não foi possível acessar o WhatsApp.'
+async function operationError(error) {
+  const body = typeof error?.context?.json === 'function' ? await error.context.json().catch(()=>null) : error?.context?.body
+  const message = body?.message || error?.message || 'Não foi possível acessar o WhatsApp.'
   const result = new Error(message)
-  result.code = error?.context?.body?.code || error?.code || 'MUGOZAP_REQUEST_FAILED'
+  result.code = body?.code || error?.code || 'MUGOZAP_REQUEST_FAILED'
   return result
 }
 
@@ -17,16 +18,15 @@ async function invoke(operation, payload = {}) {
   const { data: sessionData } = await client.auth.getSession()
   const sessionUser = sessionData?.session?.user || {}
   const workspaceId = clean(
-    sessionUser.user_metadata?.workspace_id
-    || sessionUser.app_metadata?.workspace_id
+    sessionUser.app_metadata?.workspace_id
     || sessionUser.workspace_id
   )
   const { data, error } = await client.functions.invoke('mugozap-api', {
     body: { operation, payload },
     headers: workspaceId ? { 'X-Workspace-Id': workspaceId } : undefined,
   })
-  if (error) throw operationError(error)
-  if (!data?.ok) throw operationError(data)
+  if (error) throw await operationError(error)
+  if (!data?.ok) throw await operationError(data)
   return data.data
 }
 
@@ -60,8 +60,8 @@ function normalizeMessage(item = {}) {
     createdAt: item.created_at || item.timestamp || null,
     direction: ['out', 'outbound', 'sent'].includes(direction) ? 'out' : 'in',
     status: clean(item.status || item.delivery_status),
-    template: Boolean(item.template_name || item.is_template),
-    collection: Boolean(item.collection || item.event === 'collection_reminder'),
+    template: Boolean(item.template_name || item.is_template || item.meta?.template_name),
+    collection: Boolean(item.collection || item.event === 'collection_reminder' || item.meta?.outbound_source === 'collection'),
   }
 }
 
@@ -74,6 +74,18 @@ export async function listMessages(waId, limit = 80) {
   const data = await invoke('list_messages', { waId: clean(waId), limit: Math.min(Math.max(Number(limit) || 80, 1), 200) })
   return asArray(data?.items || data).map(normalizeMessage).sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
 }
+export async function findConversationByPhone(phone) {
+  const normalized = normalizePhone(phone)
+  if (!/^55[1-9]{2}9?\d{8}$/.test(normalized)) throw new Error('Informe um número de WhatsApp válido com DDD.')
+  try {
+    const data = await invoke('find_conversation_by_phone', { phone: normalized })
+    return data?.conversation ? normalizeConversation(data.conversation) : null
+  } catch (error) {
+    if (error.code === 'MUGOZAP_404' || /não foi encontrada|not found/i.test(error.message)) return null
+    throw error
+  }
+}
+export const startTemplateConversation = payload => invoke('start_template_conversation', payload)
 export const sendManualMessage = (waId, text) => invoke('send_manual_message', { waId: clean(waId), text: clean(text) })
 export const updateConversation = (waId, payload) => invoke('update_conversation', { waId: clean(waId), changes: payload })
 export const assignConversation = (waId, userId) => invoke('assign_conversation', { waId: clean(waId), assignedTo: clean(userId) })
@@ -82,3 +94,10 @@ export const closeHandoff = (waId) => invoke('close_handoff', { waId: clean(waId
 export const getAttendanceMeta = () => invoke('get_attendance_meta')
 export async function listWhatsAppUsers() { const data = await invoke('list_users'); return asArray(data?.items || data) }
 export async function getWhatsAppSummary() { const data = await invoke('get_dashboard_summary'); return data?.summary || data || {} }
+
+function normalizePhone(value) {
+  let phone = digits(value)
+  if (phone.startsWith('00')) phone = phone.slice(2)
+  if (!phone.startsWith('55') && (phone.length === 10 || phone.length === 11)) phone = `55${phone}`
+  return phone
+}

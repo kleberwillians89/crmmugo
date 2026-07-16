@@ -7,6 +7,7 @@ const text = (value: unknown, max = 300) => String(value ?? '').trim().slice(0, 
 
 const routes: Record<string, { method: string, path: (payload: any) => string, body?: (payload: any) => unknown, write?: boolean, admin?: boolean }> = {
   list_conversations: { method: 'GET', path: () => '/api/conversations' },
+  find_conversation_by_phone: { method: 'GET', path: p => `/api/conversations/by-phone/${encodeURIComponent(text(p.phone, 40))}` },
   list_messages: { method: 'GET', path: p => `/api/messages?wa_id=${encodeURIComponent(text(p.waId, 40))}&limit=${Math.min(Math.max(Number(p.limit) || 80, 1), 200)}` },
   send_manual_message: { method: 'POST', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}/send`, body: p => ({ text: text(p.text, 4000) }), write: true },
   update_conversation: { method: 'PATCH', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}`, body: p => {
@@ -19,6 +20,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
   get_attendance_meta: { method: 'GET', path: () => '/api/attendance/meta' },
   list_users: { method: 'GET', path: () => '/api/users', admin: true },
   get_dashboard_summary: { method: 'GET', path: () => '/api/dashboard/summary' },
+  start_template_conversation: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
 }
 
 Deno.serve(async request => {
@@ -37,6 +39,8 @@ Deno.serve(async request => {
     const client = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authorization } } })
     const { data: { user }, error: userError } = await client.auth.getUser()
     if (userError || !user) return fail('SESSION_EXPIRED', 'Sua sessão expirou. Faça login novamente.', 401)
+    const authorizedWorkspace = text(user.app_metadata?.workspace_id || (user as any).workspace_id, 120)
+    if (workspaceId && (!authorizedWorkspace || workspaceId !== authorizedWorkspace)) return fail('WORKSPACE_NOT_ALLOWED', 'Seu usuário não possui acesso a este workspace.', 403)
     const { data: profile } = await client.from('profiles').select('organization_id,role,active').eq('id', user.id).single()
     if (!profile?.active || !profile.organization_id) return fail('PROFILE_NOT_ALLOWED', 'Seu usuário não possui acesso ativo.', 403)
 
@@ -46,20 +50,63 @@ Deno.serve(async request => {
     if (!route) return fail('OPERATION_NOT_ALLOWED', 'Operação não autorizada.', 403)
     if (route.write && !['admin','manager'].includes(profile.role)) return fail('WRITE_NOT_ALLOWED', 'Seu perfil não pode alterar conversas.', 403)
     if (route.admin && profile.role !== 'admin') return fail('ADMIN_REQUIRED', 'Somente administradores podem consultar usuários do WhatsApp.', 403)
-    const payload = incoming.payload || {}, path = route.path(payload)
+    const payload = incoming.payload || {}
+    let alertReservationId = ''
+    let verifiedPayload: unknown = undefined
+    if (operation === 'start_template_conversation') {
+      const clientId = text(payload.client_id, 80), installmentId = text(payload.installment_id, 80)
+      const templateName = text(payload.template_name, 100), language = text(payload.language, 20)
+      if (!clientId || !installmentId || templateName !== 'mugo_alerta_pagamento_pendente' || language !== 'pt_BR') return fail('INVALID_TEMPLATE_REQUEST', 'Os dados para iniciar a conversa são inválidos.', 400)
+      const [clientResult, installmentResult, duplicateResult] = await Promise.all([
+        client.from('clients').select('id,organization_id,company_name,trade_name,contact_name,phone,billing_contact_phone').eq('id',clientId).eq('organization_id',profile.organization_id).single(),
+        client.from('invoice_installments').select('id,organization_id,client_id,contract_id,status,due_date,amount').eq('id',installmentId).eq('organization_id',profile.organization_id).single(),
+        client.from('whatsapp_collection_alerts').select('id,status').eq('organization_id',profile.organization_id).eq('installment_id',installmentId).eq('template_name',templateName).maybeSingle(),
+      ])
+      if (clientResult.error || !clientResult.data || installmentResult.error || !installmentResult.data) return fail('COLLECTION_NOT_FOUND', 'Cliente ou parcela não encontrado.', 404)
+      const clientRow:any = clientResult.data, installment:any = installmentResult.data
+      if (installment.client_id !== clientRow.id) return fail('CLIENT_MISMATCH', 'A parcela não pertence ao cliente informado.', 403)
+      if (installment.status === 'paid') return fail('INSTALLMENT_PAID', 'Esta parcela já foi paga e não pode ser cobrada.', 409)
+      if (duplicateResult.data && duplicateResult.data.status !== 'failed') return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
+      if (duplicateResult.data?.status === 'failed') await client.from('whatsapp_collection_alerts').delete().eq('id',duplicateResult.data.id)
+      const normalizedPhone = text(payload.phone, 40).replace(/\D/g,'')
+      const storedPhones = [clientRow.phone,clientRow.billing_contact_phone].map((value:string)=>String(value||'').replace(/\D/g,'')).filter(Boolean)
+      if (!/^55[1-9]{2}9?\d{8}$/.test(normalizedPhone) || !storedPhones.includes(normalizedPhone)) return fail('PHONE_MISMATCH', 'O telefone não pertence ao cliente informado.', 403)
+      const safeName = text(clientRow.contact_name || clientRow.trade_name || clientRow.company_name, 120).split(/\s+/)[0] || 'Cliente'
+      verifiedPayload = {wa_id:normalizedPhone,template_name:templateName,language,parameters:[safeName],source:'collection',client_id:clientRow.id,installment_id:installment.id}
+      const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,wa_id:normalizedPhone,template_name:templateName,status:'sending',sent_by:user.id}).select('id').single()
+      if (reservation.error) return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
+      alertReservationId = reservation.data.id
+    }
+    const path = route.path(payload)
     if (!path.startsWith('/api/')) return fail('INVALID_ROUTE', 'Rota não autorizada.', 403)
     if (path.includes('undefined') || (operation !== 'get_attendance_meta' && operation !== 'list_conversations' && operation !== 'list_users' && operation !== 'get_dashboard_summary' && path.includes('wa_id=' + encodeURIComponent('')))) return fail('INVALID_IDENTIFIER', 'Identificador da conversa ausente.', 400)
 
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15000)
-    const body = route.body ? route.body(payload) : undefined
+    const body = verifiedPayload || (route.body ? route.body(payload) : undefined)
     if (body && JSON.stringify(body).length > 8000) return fail('PAYLOAD_TOO_LARGE', 'Conteúdo acima do limite permitido.', 413)
     const mugoZapHeaders: Record<string,string> = { 'X-Panel-Key': panelKey, ...(body ? {'Content-Type':'application/json'} : {}) }
     if (workspaceId) mugoZapHeaders['X-Workspace-Id'] = workspaceId
-    const response = await fetch(`${apiUrl}${path}`, { method: route.method, signal: controller.signal, headers: mugoZapHeaders, body: body ? JSON.stringify(body) : undefined }).finally(() => clearTimeout(timeout))
+    let response: Response
+    try {
+      response = await fetch(`${apiUrl}${path}`, { method: route.method, signal: controller.signal, headers: mugoZapHeaders, body: body ? JSON.stringify(body) : undefined })
+    } catch (error) {
+      if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed'}).eq('id',alertReservationId)
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
     const responseBody = await response.json().catch(() => null)
     if (!response.ok) {
+      if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed'}).eq('id',alertReservationId)
       const known = response.status === 403 ? 'Você não possui permissão para esta operação no MugoZap.' : response.status === 404 ? 'A conversa não foi encontrada.' : response.status === 429 ? 'Muitas solicitações. Aguarde e tente novamente.' : 'O MugoZap não conseguiu concluir a operação.'
       return fail(`MUGOZAP_${response.status}`, known, response.status)
+    }
+    if (operation === 'start_template_conversation') {
+      const sent:any = responseBody || {}, conversation = sent.conversation || {}, normalizedPhone = text(payload.phone,40).replace(/\D/g,'')
+      const linkResult = await client.from('whatsapp_conversation_links').upsert({organization_id:profile.organization_id,client_id:payload.client_id,wa_id:String(conversation.wa_id||normalizedPhone),phone:normalizedPhone,conversation_id:String(conversation.id||conversation.wa_id||normalizedPhone)},{onConflict:'organization_id,client_id'})
+      const alertResult = await client.from('whatsapp_collection_alerts').update({wa_id:String(conversation.wa_id||normalizedPhone),provider_message_id:sent.provider_message_id||null,status:'sent',sent_at:new Date().toISOString()}).eq('id',alertReservationId)
+      await client.from('commercial_events').insert({organization_id:profile.organization_id,client_id:payload.client_id,installment_id:payload.installment_id,event_type:'whatsapp_collection_alert_sent',title:'Alerta de cobrança enviado pelo WhatsApp',new_value:{wa_id:String(conversation.wa_id||normalizedPhone),template_name:'mugo_alerta_pagamento_pendente',provider_message_id:sent.provider_message_id||null},created_by:user.id})
+      if (linkResult.error || alertResult.error) return fail('CRM_AUDIT_FAILED', 'O alerta foi enviado, mas o vínculo não pôde ser registrado. Não repita o envio.', 502)
     }
     return json({ ok: true, data: responseBody })
   } catch (error) {
