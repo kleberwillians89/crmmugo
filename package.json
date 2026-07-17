@@ -12,6 +12,7 @@
     "test:sprint12": "node scripts/test-sprint12-billing.mjs",
     "test:sprint12-2": "node scripts/test-sprint12-2-services.mjs",
     "test:contracts": "node scripts/test-contract-reliability.mjs",
+    "test:contract-relationships": "node scripts/test-contract-relationships.mjs",
     "test:archiving": "node scripts/test-safe-archiving.mjs",
     "test:integration": "node scripts/test-commercial-integration.mjs",
     "test:trigger-fix": "node scripts/test-financial-trigger-fix.mjs",

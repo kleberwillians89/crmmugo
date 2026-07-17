@@ -60,7 +60,7 @@ export function MugoIntelligencePage({ data, loading, error, section = 'today', 
     ]
     const maps = {
       service: group(active.flatMap((contract) => (contract.contract_services?.length ? contract.contract_services.map((service) => ({ ...contract, service: service.service_name })) : [{ ...contract, service: 'Serviço não informado' }])), (row) => row.service, (row) => Number(row.monthly_value || 0)),
-      responsible: group(active, (row) => row.responsibleName || row.team_members?.name || 'Sem responsável', (row) => Number(row.monthly_value || 0)),
+      responsible: group(active, (row) => row.commercialResponsible?.name || row.responsibleName || 'Não definido', (row) => Number(row.monthly_value || 0)),
       client: group(active, (row) => row.clients?.company_name || row.client_name || 'Cliente não informado', (row) => Number(row.monthly_value || 0)),
       period: group(active, (row) => row.start_date ? String(row.start_date).slice(0, 7) : 'Sem período', (row) => Number(row.monthly_value || 0)),
       duration: group(active, (row) => { const months = contractMonths(row); return !months ? 'Prazo não informado' : months <= 3 ? 'Até 3 meses' : months <= 6 ? '4 a 6 meses' : months <= 12 ? '7 a 12 meses' : 'Mais de 12 meses' }, (row) => Number(row.monthly_value || 0)),
