@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import './operations.css'
 import { listProposals as getProposals, createProposal, updateProposal } from './services/data/proposalsRepository'
 import { Sidebar } from './components/Sidebar'
 import { Dashboard } from './components/Dashboard'
@@ -44,8 +45,11 @@ import {useAuth} from './contexts/AuthContext'
 import {WhatsAppPage} from './components/WhatsAppPage'
 import {NotFoundPage} from './components/NotFoundPage'
 import {VersionBadge} from './components/VersionBadge'
+import {GlobalSearch} from './components/GlobalSearch'
+import {TodayPage} from './components/TodayPage'
 
 const initialFormState = {
+  client_id: '',
   client_name: '',
   company: '',
   phone: '',
@@ -206,7 +210,8 @@ export default function App() {
   }
 
   function validateForm() {
-    if (!form.client_name.trim()) return 'Nome do cliente é obrigatório.'
+    if (dataProvider==='supabase'&&!form.client_id) return 'Selecione um cliente existente.'
+    if (dataProvider!=='supabase'&&!form.client_name.trim()) return 'Nome do cliente é obrigatório.'
     if (!form.main_service.trim()) return 'Serviço principal é obrigatório.'
     if (!form.proposal_status) return 'Status da proposta é obrigatório.'
     if (!form.responsible_id) return 'Responsável é obrigatório.'
@@ -271,6 +276,7 @@ export default function App() {
 
   function handleEdit(proposal) {
     setForm({
+      client_id: proposal.clientId || proposal.client_id || '',
       client_name: proposal.clientName || proposal.client_name || '',
       company: proposal.companyName || proposal.company || '',
       phone: proposal.clientDetails?.phone || proposal.phone || '',
@@ -360,12 +366,15 @@ export default function App() {
           <span aria-hidden="true" />
         </div>
         <div className="content-container">
+        <GlobalSearch clients={clients} proposals={proposals} contracts={supabaseContracts} installments={installments} onOpen={(page)=>handleNavigate(page)}/>
         {loading && !hasLoaded ? <PageSkeleton type={activePage === 'nova' ? 'form' : activePage === 'proposals' ? 'proposals' : 'dashboard'} /> : <>
         {errorMessage && activePage !== 'nova' && !activePage.startsWith('intelligence-') && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
         {activePage === 'dashboard' && <><PulseDailySummary alerts={pulseAlerts} onOpen={()=>handleNavigate('intelligence-attention')}/><Dashboard proposals={proposals.map((proposal)=>({ ...proposal, proposal_status:proposal.status==='won'?'Fechada':proposal.status, contract_signed:Boolean(proposal.linkedContract?.signed), contract_start_date:proposal.linkedContract?.start_date||null, contract_end_date:proposal.linkedContract?.end_date||null, contract_term:proposal.contractTermMonths?`${proposal.contractTermMonths} meses`:'', contract_file_url:proposal.linkedContract?.id||null, setup_value:proposal.setupValue, monthly_value:proposal.monthlyValue, responsible_id:proposal.responsibleId, main_service:proposal.mainService }))} contracts={intelligenceData.contracts} installments={installments} teamMembers={teamMembers} /></>}
         {activePage === 'nova' && (
           <ProposalForm
             form={form}
+            clients={clients}
+            structuredClients={dataProvider==='supabase'}
             teamMembers={teamMembers}
             onChange={handleChange}
             onSubmit={handleSubmit}
@@ -410,8 +419,9 @@ export default function App() {
         {activePage === 'restore' && <RestorePage />}
         {activePage === 'not-found' && <NotFoundPage />}
         {activePage === 'intelligence-attention' && <PulseAlertsPage alerts={pulseAlerts} teamMembers={teamMembers} onChanged={refreshPulse} onNavigate={handleNavigate} />}
+        {activePage === 'intelligence-today' && <TodayPage teamMembers={teamMembers} onNavigate={handleNavigate}/>}
         {activePage === 'performance' && <CommercialPerformancePage />}
-        {activePage.startsWith('intelligence-') && activePage !== 'intelligence-attention' && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} section={activePage.replace('intelligence-','')} onAskAI={()=>setAssistantOpen(true)} />}
+        {activePage.startsWith('intelligence-') && !['intelligence-attention','intelligence-today'].includes(activePage) && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} section={activePage.replace('intelligence-','')} onAskAI={()=>setAssistantOpen(true)} />}
         </>}
         </div>
         <button type="button" className="assistant-trigger" onClick={() => setAssistantOpen(true)}><Sparkles size={16}/>Pergunte à Mugô</button>

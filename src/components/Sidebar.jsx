@@ -10,15 +10,10 @@ import {
   LogOut,
   SlidersHorizontal,
   LayoutDashboard,
-  HeartPulse,
   BellRing,
   CalendarDays,
   Lightbulb,
-  SearchCode,
-  MessageCircleQuestion,
   MessageCircle,
-  TrendingUp,
-  Target,
   X,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -27,27 +22,22 @@ import { NAVIGATION_LABELS } from '../config/navigationLabels'
 import { statusLabel } from '../config/statusLabels'
 
 const groups = [
-  { label: 'Visão geral', links: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
-  { label: 'Gestão comercial', links: [
-    { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, supabaseOnly: true },
+  { label: 'Operação', links: [
+    { id: 'dashboard', label: 'Painel', icon: LayoutDashboard },
     { id: 'clients', label: 'Clientes', icon: Users },
     { id: 'proposals', label: 'Propostas', icon: FileText },
     { id: 'contracts', label: 'Contratos', icon: ClipboardCheck },
     { id: 'finance', label: 'Financeiro', icon: WalletCards },
-    { id: 'services', label: 'Serviços', icon: Library },
-    { id: 'documents', label: 'Documentos', icon: Upload },
   ] },
-  { label: 'Mugô Intelligence', links: [
+  { label: 'Comunicação', links: [{ id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, supabaseOnly: true }] },
+  { label: 'Gestão', links: [
     { id: 'intelligence-today', label: 'Hoje', icon: CalendarDays },
     { id: 'intelligence-attention', label: 'Atenção', icon: BellRing, supabaseOnly: true },
     { id: 'intelligence-insights', label: 'Insights', icon: Lightbulb },
-    { id: 'intelligence-recommendations', label: 'Recomendações', icon: Target },
-    { id: 'intelligence-trends', label: 'Tendências', icon: TrendingUp },
-    { id: 'intelligence-cross-analysis', label: 'Análise Cruzada', icon: SearchCode },
-    { id: 'intelligence-health', label: 'Saúde do Negócio', icon: HeartPulse },
-    { id: 'intelligence-ai', label: 'Pergunte à IA', icon: MessageCircleQuestion },
   ] },
-  { label: 'Administração', links: [
+  { label: 'Configuração', links: [
+    { id: 'services', label: 'Serviços', icon: Library },
+    { id: 'documents', label: 'Documentos', icon: Upload },
     { id: 'organization-settings', label: 'Configurações', icon: SlidersHorizontal, adminOnly: true, supabaseOnly: true },
   ] },
 ]

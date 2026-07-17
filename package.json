@@ -19,6 +19,7 @@
     "test:stability": "node scripts/test-sprint14-stability.mjs",
     "test:financial-truth": "node scripts/test-financial-source-truth.mjs && node scripts/test-revenue-distribution.mjs",
     "test:revenue-distribution": "node scripts/test-revenue-distribution.mjs",
+    "test:information-architecture": "node scripts/test-information-architecture.mjs",
     "test:stress": "node scripts/stress-sprint14-1.mjs",
     "test:operations": "node scripts/test-sprint14-1-operations.mjs",
     "test:intelligence-causal": "node scripts/test-intelligence-causal.mjs",
