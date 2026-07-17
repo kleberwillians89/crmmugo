@@ -3,7 +3,7 @@ const money = (value) => Math.round((number(value) + Number.EPSILON) * 100) / 10
 const inactiveStatuses = new Set(['cancelled', 'refunded', 'failed'])
 const openStatuses = new Set(['pending', 'open', 'overdue', 'partial', 'partially_paid'])
 
-const installmentType = (item) => item.installment_type === 'setup' ? 'setup' : 'monthly'
+const installmentType = (item) => item.installment_type === 'setup' || item.installment_type === 'project' ? 'setup' : item.installment_type === 'monthly' ? 'monthly' : 'other'
 const isActiveInstallment = (item) => !inactiveStatuses.has(item.status)
 const installmentReceived = (item) => Math.max(number(item.received_amount), 0)
 const installmentBalance = (item) => isActiveInstallment(item) ? Math.max(number(item.amount) - installmentReceived(item), 0) : 0
@@ -32,7 +32,7 @@ export function calculateFinancialSummary(contracts = [], installments = [], opt
   const rowsByContract = new Map()
   installments.forEach((item) => {
     const key = item.contract_id ?? (contracts.length === 1 ? contracts[0].id : null)
-    const group = rowsByContract.get(key) || { setup: [], monthly: [] }
+    const group = rowsByContract.get(key) || { setup: [], monthly: [], other: [] }
     group[installmentType(item)].push(item)
     rowsByContract.set(key, group)
   })
@@ -40,11 +40,12 @@ export function calculateFinancialSummary(contracts = [], installments = [], opt
   const totals = {
     setupContracted: 0, setupReceived: 0, setupPending: 0, setupOverdue: 0, setupFuture: 0,
     monthlyExpected: 0, monthlyEstimated: 0, monthlyReceived: 0, monthlyPending: 0, monthlyOverdue: 0, monthlyFuture: 0,
+    otherExpected: 0, otherReceived: 0, otherPending: 0, otherOverdue: 0, otherFuture: 0,
     legacySetupContracts: [], legacyMonthlyContracts: [],
   }
 
   contracts.forEach((contract) => {
-    const group = rowsByContract.get(contract.id) || { setup: [], monthly: [] }
+    const group = rowsByContract.get(contract.id) || { setup: [], monthly: [], other: [] }
     if (group.setup.length) {
       const setup = summarizeRows(group.setup, today)
       totals.setupContracted += setup.expected
@@ -73,16 +74,25 @@ export function calculateFinancialSummary(contracts = [], installments = [], opt
       totals.monthlyEstimated += number(contract.monthly_value) * cycles
       totals.legacyMonthlyContracts.push(contract.id)
     }
+
+    if (group.other.length) {
+      const other = summarizeRows(group.other, today)
+      totals.otherExpected += other.expected
+      totals.otherReceived += other.received
+      totals.otherPending += other.open
+      totals.otherOverdue += other.overdue
+      totals.otherFuture += other.future
+    }
   })
 
   Object.keys(totals).forEach((key) => { if (typeof totals[key] === 'number') totals[key] = money(totals[key]) })
   totals.legacySetupCount = totals.legacySetupContracts.length
   totals.legacyMonthlyCount = totals.legacyMonthlyContracts.length
-  totals.totalExpected = money(totals.setupContracted + totals.monthlyExpected + totals.monthlyEstimated)
-  totals.totalReceived = money(totals.setupReceived + totals.monthlyReceived)
-  totals.totalOpen = money(totals.setupPending + totals.monthlyPending)
-  totals.totalOverdue = money(totals.setupOverdue + totals.monthlyOverdue)
-  totals.totalFuture = money(totals.setupFuture + totals.monthlyFuture)
+  totals.totalExpected = money(totals.setupContracted + totals.monthlyExpected + totals.monthlyEstimated + totals.otherExpected)
+  totals.totalReceived = money(totals.setupReceived + totals.monthlyReceived + totals.otherReceived)
+  totals.totalOpen = money(totals.setupPending + totals.monthlyPending + totals.otherPending)
+  totals.totalOverdue = money(totals.setupOverdue + totals.monthlyOverdue + totals.otherOverdue)
+  totals.totalFuture = money(totals.setupFuture + totals.monthlyFuture + totals.otherFuture)
   totals.hasEstimatedMonthlyRevenue = totals.legacyMonthlyCount > 0
   return totals
 }

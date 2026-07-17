@@ -50,6 +50,10 @@ result=summary([contract('estimated',{monthly_value:900,minimum_term_months:3})]
 assert.deepEqual([result.monthlyExpected,result.monthlyEstimated,result.monthlyPending,result.totalExpected],[0,2700,0,2700])
 assert.equal(result.hasEstimatedMonthlyRevenue,true)
 
+// Projeto pontual acompanha setup; outras receitas permanecem separadas e entram apenas no consolidado.
+result=summary([contract('new-types')],[row('project','new-types',{installment_type:'project',amount:600,received_amount:600,status:'paid'}),row('other','new-types',{installment_type:'other',amount:200,received_amount:50,status:'partial'})])
+assert.deepEqual([result.setupContracted,result.setupReceived,result.otherExpected,result.otherReceived,result.otherPending,result.totalExpected,result.totalReceived],[600,600,200,50,150,800,650])
+
 // 12 e 13. Rateio deve fechar no centavo e expor diferença quando não fecha.
 let allocations=calculateAllocationIntegrity([{id:'ok',amount:100,invoice_installment_allocations:[{amount:33.33},{amount:33.33},{amount:33.34}]}])
 assert.deepEqual(allocations[0],{installmentId:'ok',amount:100,allocated:100,difference:0,valid:true})
