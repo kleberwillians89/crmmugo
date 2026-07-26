@@ -8,6 +8,69 @@ const identifier = (value: unknown) => {
   const normalized = text(value, 40).replace(/\D/g, '')
   return /^\d{10,15}$/.test(normalized) ? normalized : ''
 }
+const brazilianPhone = (value: unknown) => {
+  let normalized=text(value,40).replace(/\D/g,'')
+  if(normalized.startsWith('00'))normalized=normalized.slice(2)
+  if(!normalized.startsWith('55')&&(normalized.length===10||normalized.length===11))normalized=`55${normalized}`
+  return /^55[1-9]{2}\d{8,9}$/.test(normalized)?normalized:''
+}
+const metaStatus = (value: unknown) => text(value, 30).toUpperCase()
+const availableTemplate = (value: unknown) => ['ACTIVE','APPROVED'].includes(metaStatus(value))
+const templateVariables = (component: any) => {
+  const content = text(component?.text, 8000)
+  const positional = [...content.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map(match => Number(match[1]))
+  return positional.length ? Math.max(...positional) : 0
+}
+const sanitizedMetaError = (body: any) => ({
+  code: Number(body?.error?.code || 0),
+  error_subcode: Number(body?.error?.error_subcode || 0),
+  message: text(body?.error?.message, 500),
+  details: text(body?.error?.error_data?.details, 500),
+  fbtrace_id: text(body?.error?.fbtrace_id, 120),
+})
+const metaFailure = (status: number, body: any) => {
+  const error = sanitizedMetaError(body)
+  console.log(JSON.stringify({event:'meta_whatsapp_error',status,...error}))
+  if (status === 401 || error.code === 190) return fail('META_TOKEN_EXPIRED', 'A credencial da Meta expirou. Solicite a renovação ao administrador.', 401, status)
+  if (status === 403 || [10,200,299].includes(error.code)) return fail('META_PERMISSION_MISSING', 'A credencial da Meta não possui permissão para consultar o WhatsApp.', 403, status)
+  if (status === 404 || error.code === 100) return fail('META_RESOURCE_INVALID', 'A conta ou o número do WhatsApp configurado não foi encontrado.', 404, status)
+  return fail('META_API_ERROR', error.details || 'A Meta não conseguiu concluir a consulta.', status || 502, status, status >= 500)
+}
+const metaConfig = () => {
+  const wabaId = text(Deno.env.get('WABA_ID'), 80)
+  const phoneNumberId = text(Deno.env.get('PHONE_NUMBER_ID'), 80)
+  const accessToken = Deno.env.get('META_ACCESS_TOKEN') || ''
+  const version = text(Deno.env.get('GRAPH_API_VERSION'), 20)
+  if (!wabaId) return { error: fail('WABA_ID_MISSING', 'O WABA ID não foi configurado no backend.', 503) }
+  if (!phoneNumberId) return { error: fail('PHONE_NUMBER_ID_MISSING', 'O Phone Number ID não foi configurado no backend.', 503) }
+  if (!accessToken) return { error: fail('META_ACCESS_TOKEN_MISSING', 'A credencial da Meta não foi configurada no backend.', 503) }
+  if (!/^v\d+\.\d+$/.test(version)) return { error: fail('GRAPH_API_VERSION_INVALID', 'A versão da Graph API não foi configurada corretamente.', 503) }
+  if (!/^\d+$/.test(wabaId)) return { error: fail('WABA_ID_INVALID', 'O WABA ID configurado é inválido.', 503) }
+  if (!/^\d+$/.test(phoneNumberId)) return { error: fail('PHONE_NUMBER_ID_INVALID', 'O Phone Number ID configurado é inválido.', 503) }
+  return { wabaId, phoneNumberId, accessToken, version }
+}
+const fetchMeta = async (url: string, accessToken: string) => {
+  const response = await fetch(url, {headers:{Authorization:`Bearer ${accessToken}`}})
+  const body = await response.json().catch(() => null)
+  return {response,body}
+}
+const fetchTemplates = async (config: any) => {
+  const fields = 'id,name,language,status,category,components,quality_score'
+  let url = `https://graph.facebook.com/${config.version}/${config.wabaId}/message_templates?fields=${encodeURIComponent(fields)}&limit=100`
+  const templates:any[] = []
+  for (let page=0; url && page<20; page++) {
+    const {response,body}=await fetchMeta(url,config.accessToken)
+    if(!response.ok)return {error:metaFailure(response.status,body)}
+    templates.push(...(Array.isArray(body?.data)?body.data:[]))
+    url=text(body?.paging?.next,2000)
+  }
+  return {templates:templates.map(item=>({
+    id:text(item.id,80),name:text(item.name,100),language:text(item.language,20),
+    status:metaStatus(item.status),category:text(item.category,40),
+    components:Array.isArray(item.components)?item.components:[],
+    quality:text(item.quality_score?.score || item.quality_score,30).toUpperCase() || 'UNKNOWN',
+  }))}
+}
 
 const routes: Record<string, { method: string, path: (payload: any) => string, body?: (payload: any) => unknown, write?: boolean, admin?: boolean }> = {
   health: { method: 'GET', path: () => '/health' },
@@ -23,6 +86,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
   list_users: { method: 'GET', path: () => '/api/users', admin: true },
   get_dashboard_summary: { method: 'GET', path: () => '/api/dashboard/summary' },
   start_template_conversation: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
+  sync_templates: { method: 'GET', path: () => '/meta/templates' },
   get_template_status: { method: 'GET', path: p => {
     const allowed=['mugo_alerta_pagamento_pendente','mugo_pagamento_confirmado','mugo_solicitar_comprovante','mugo_aviso_renovacao_contrato','mugo_agendamento_confirmado','mugo_boas_vindas_diagnostico_v1','hello_world']
     const name=text(p.template_name,100)
@@ -33,7 +97,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
 }
 
 const timeoutFor = (operation: string) => {
-  if (['health','get_template_status','find_conversation_by_phone','get_usage','get_attendance_meta','get_dashboard_summary'].includes(operation)) return 8_000
+  if (['health','sync_templates','get_template_status','find_conversation_by_phone','get_usage','get_attendance_meta','get_dashboard_summary'].includes(operation)) return 8_000
   if (['list_conversations','list_messages','list_users'].includes(operation)) return 15_000
   return 20_000
 }
@@ -89,6 +153,23 @@ Deno.serve(async request => {
     if (route.write && !['admin','manager'].includes(profile.role)) return fail('FORBIDDEN', 'Seu perfil não pode alterar conversas.', 403)
     if (route.admin && profile.role !== 'admin') return fail('FORBIDDEN', 'Somente administradores podem consultar usuários do WhatsApp.', 403)
     const payload = incoming.payload || {}
+    if (operation === 'sync_templates' || operation === 'get_template_status') {
+      const config:any=metaConfig()
+      if(config.error)return config.error
+      const result:any=await fetchTemplates(config)
+      if(result.error)return result.error
+      const now=new Date().toISOString()
+      const templateRows=result.templates.map((item:any)=>({organization_id:profile.organization_id,meta_template_id:item.id,name:item.name,language:item.language,status:item.status,category:item.category,components:item.components,quality_score:item.quality,last_synced_at:now,sync_error:null}))
+      const persisted=templateRows.length?await client.from('whatsapp_message_templates').upsert(templateRows,{onConflict:'organization_id,name,language'}):{error:null}
+      if(persisted.error)console.log(JSON.stringify({event:'whatsapp_template_persist_failed',organization_id:profile.organization_id,code:text(persisted.error.code,40)}))
+      if(operation==='get_template_status'){
+        const name=text(payload.template_name,100),language=text(payload.language||'pt_BR',20)
+        const template=result.templates.find((item:any)=>item.name===name&&item.language===language)
+        if(!template)return fail('TEMPLATE_NOT_FOUND', `O template ${name} não foi encontrado na Meta para o idioma ${language}.`, 404)
+        return json({ok:true,data:{template,last_sync:now}})
+      }
+      return json({ok:true,data:{templates:result.templates,last_sync:now}})
+    }
     let alertReservationId = ''
     let verifiedPayload: unknown = undefined
     if (operation === 'start_template_conversation') {
@@ -106,12 +187,31 @@ Deno.serve(async request => {
       if (installment.status === 'paid') return fail('INSTALLMENT_PAID', 'Esta parcela já foi paga e não pode ser cobrada.', 409)
       if (duplicateResult.data && duplicateResult.data.status !== 'failed') return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
       if (duplicateResult.data?.status === 'failed') await client.from('whatsapp_collection_alerts').delete().eq('id',duplicateResult.data.id)
-      const normalizedPhone = text(payload.phone, 40).replace(/\D/g,'')
-      const storedPhones = [clientRow.phone,clientRow.billing_contact_phone].map((value:string)=>String(value||'').replace(/\D/g,'')).filter(Boolean)
-      if (!/^55[1-9]{2}9?\d{8}$/.test(normalizedPhone) || !storedPhones.includes(normalizedPhone)) return fail('PHONE_MISMATCH', 'O telefone não pertence ao cliente informado.', 403)
+      const normalizedPhone = brazilianPhone(payload.phone)
+      const storedPhones = [clientRow.phone,clientRow.billing_contact_phone].map(brazilianPhone).filter(Boolean)
+      if (!normalizedPhone) return fail('INVALID_PHONE', 'Informe um número de WhatsApp válido com DDD.', 422)
+      if (!storedPhones.includes(normalizedPhone)) return fail('PHONE_MISMATCH', 'O telefone não pertence ao cliente informado.', 403)
       const safeName = text(clientRow.contact_name || clientRow.trade_name || clientRow.company_name, 120).split(/\s+/)[0] || 'Cliente'
-      verifiedPayload = {wa_id:normalizedPhone,template_name:templateName,language,parameters:[safeName],source:'collection',client_id:clientRow.id,installment_id:installment.id}
-      const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,contract_id:installment.contract_id,wa_id:normalizedPhone,template_name:templateName,template_status:'CHECKING',collection_stage:'sending',action:'template_send_requested',status:'sending',sent_by:user.id}).select('id').single()
+      const config:any=metaConfig()
+      if(config.error)return config.error
+      const phoneCheck=await fetchMeta(`https://graph.facebook.com/${config.version}/${config.phoneNumberId}?fields=id,account_mode`,config.accessToken)
+      if(!phoneCheck.response.ok)return metaFailure(phoneCheck.response.status,phoneCheck.body)
+      const templateResult:any=await fetchTemplates(config)
+      if(templateResult.error)return templateResult.error
+      const officialTemplate=templateResult.templates.find((item:any)=>item.name===templateName&&item.language===language)
+      if(!officialTemplate)return fail('TEMPLATE_NOT_FOUND', `O template ${templateName} não foi encontrado na Meta para o idioma ${language}.`, 404)
+      if(!availableTemplate(officialTemplate.status)){
+        if(officialTemplate.status==='PENDING')return fail('TEMPLATE_PENDING','O template ainda está em análise na Meta.',409)
+        if(officialTemplate.status==='REJECTED')return fail('TEMPLATE_REJECTED','O template foi rejeitado pela Meta.',409)
+        if(officialTemplate.status==='PAUSED')return fail('TEMPLATE_PAUSED','O template está pausado na Meta.',409)
+        return fail('TEMPLATE_DISABLED','O template está desativado na Meta.',409)
+      }
+      const requiredBodyParameters=officialTemplate.components.filter((item:any)=>metaStatus(item.type)==='BODY').reduce((total:number,item:any)=>total+templateVariables(item),0)
+      const requiredHeaderParameters=officialTemplate.components.filter((item:any)=>metaStatus(item.type)==='HEADER').reduce((total:number,item:any)=>total+templateVariables(item),0)
+      if(requiredHeaderParameters>0)return fail('TEMPLATE_PARAMETERS_MISSING','O template exige parâmetros no cabeçalho que não foram informados.',422)
+      if(requiredBodyParameters>1)return fail('TEMPLATE_PARAMETERS_MISSING',`O template exige ${requiredBodyParameters} parâmetros no corpo, mas este fluxo fornece apenas o nome do cliente.`,422)
+      verifiedPayload = {wa_id:normalizedPhone,template_name:templateName,language,parameters:requiredBodyParameters?[safeName]:[],source:'collection',client_id:clientRow.id,installment_id:installment.id}
+      const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,contract_id:installment.contract_id,wa_id:normalizedPhone,recipient:normalizedPhone,company_name:text(clientRow.company_name,200),template_name:templateName,template_language:language,template_status:'CHECKING',collection_stage:'sending',action:'template_send_requested',status:'sending',sent_by:user.id,origin:'collection',sanitized_payload:{to:normalizedPhone,template:{name:templateName,language,parameter_count:requiredBodyParameters},source:'collection'}}).select('id').single()
       if (reservation.error) return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
       alertReservationId = reservation.data.id
     }
@@ -154,10 +254,15 @@ Deno.serve(async request => {
       return fail(code, message, response.status, response.status, retryable)
     }
     if (operation === 'start_template_conversation') {
-      const sent:any = responseBody || {}, conversation = sent.conversation || {}, normalizedPhone = text(payload.phone,40).replace(/\D/g,'')
+      const sent:any = responseBody || {}, conversation = sent.conversation || {}, normalizedPhone = brazilianPhone(payload.phone)
+      const providerMessageId=text(sent.provider_message_id || sent.messages?.[0]?.id,200)
+      if(!providerMessageId){
+        await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_unconfirmed',error_code:'META_MESSAGE_ID_MISSING',error_message:'A resposta do provedor não confirmou o envio.'}).eq('id',alertReservationId)
+        return fail('MESSAGE_SEND_UNCONFIRMED','A Meta não confirmou o envio. Verifique o histórico antes de tentar novamente.',502)
+      }
       const linkResult = await client.from('whatsapp_conversation_links').upsert({organization_id:profile.organization_id,client_id:payload.client_id,wa_id:String(conversation.wa_id||normalizedPhone),phone:normalizedPhone,conversation_id:String(conversation.id||conversation.wa_id||normalizedPhone)},{onConflict:'organization_id,client_id'})
-      const alertResult = await client.from('whatsapp_collection_alerts').update({wa_id:String(conversation.wa_id||normalizedPhone),provider_message_id:sent.provider_message_id||null,template_status:'APPROVED',collection_stage:'waiting_customer',action:'template_sent',status:'sent',sent_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',alertReservationId)
-      await client.from('commercial_events').insert({organization_id:profile.organization_id,client_id:payload.client_id,installment_id:payload.installment_id,event_type:'whatsapp_collection_alert_sent',title:'Alerta de cobrança enviado pelo WhatsApp',new_value:{wa_id:String(conversation.wa_id||normalizedPhone),template_name:'mugo_alerta_pagamento_pendente',provider_message_id:sent.provider_message_id||null},created_by:user.id})
+      const alertResult = await client.from('whatsapp_collection_alerts').update({wa_id:String(conversation.wa_id||normalizedPhone),provider_message_id:providerMessageId,template_status:'ACTIVE',collection_stage:'waiting_customer',action:'template_sent',status:'sent',sent_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',alertReservationId)
+      await client.from('commercial_events').insert({organization_id:profile.organization_id,client_id:payload.client_id,installment_id:payload.installment_id,event_type:'whatsapp_collection_alert_sent',title:'Alerta de cobrança enviado pelo WhatsApp',new_value:{wa_id:String(conversation.wa_id||normalizedPhone),template_name:'mugo_alerta_pagamento_pendente',provider_message_id:providerMessageId,language:'pt_BR',source:'collection'},created_by:user.id})
       if (linkResult.error || alertResult.error) return fail('CRM_AUDIT_FAILED', 'O alerta foi enviado, mas o vínculo não pôde ser registrado. Não repita o envio.', 502)
     }
     return json({ ok: true, data: responseBody })

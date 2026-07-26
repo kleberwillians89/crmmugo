@@ -1,4 +1,6 @@
-import { getTemplateStatus } from '../data/whatsappRepository'
+import { syncWhatsAppTemplates } from '../data/whatsappRepository.js'
+import { isTemplateAvailable } from './templateStatus.js'
+export { isTemplateAvailable } from './templateStatus.js'
 
 export const TEMPLATE_NAMES=Object.freeze(['mugo_alerta_pagamento_pendente','mugo_pagamento_confirmado','mugo_solicitar_comprovante','mugo_aviso_renovacao_contrato','mugo_agendamento_confirmado','mugo_boas_vindas_diagnostico_v1','hello_world'])
 const definitions={
@@ -17,14 +19,21 @@ export async function refreshTemplateStatuses({force=false}={}){
   if(inFlight)return inFlight
   inFlight=(async()=>{
     const previous=new Map(sessionCache.map(item=>[item.name,item])),now=new Date().toISOString(),rows=[]
-    let cursor=0
-    async function worker(){while(cursor<TEMPLATE_NAMES.length){const name=TEMPLATE_NAMES[cursor++];try{rows.push({...definitions[name],...(await getTemplateStatus(name,{force})),name,lastSyncedAt:now,error:''})}catch(error){const valid=previous.get(name);rows.push(valid?{...valid,error:error.message,lastSyncedAt:valid.lastSyncedAt}:{...definitions[name],name,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',lastSyncedAt:now,error:error.message})}}}
-    await Promise.all([worker(),worker(),worker()])
+    try {
+      const result=await syncWhatsAppTemplates({force})
+      const official=Array.isArray(result?.templates)?result.templates:[]
+      for(const name of TEMPLATE_NAMES){
+        const found=official.find(item=>item.name===name&&item.language==='pt_BR')
+        rows.push(found?{...definitions[name],...found,name,lastSyncedAt:result.last_sync||now,error:''}:{...definitions[name],name,language:'pt_BR',status:'NOT_CONFIGURED',category:'',quality:'UNKNOWN',lastSyncedAt:result.last_sync||now,error:'Template não encontrado na Meta para o idioma pt_BR.'})
+      }
+    } catch(error) {
+      for(const name of TEMPLATE_NAMES){const valid=previous.get(name);rows.push(valid?{...valid,error:error.message}:{...definitions[name],name,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',lastSyncedAt:now,error:error.message})}
+    }
     sessionCache=TEMPLATE_NAMES.map(name=>rows.find(item=>item.name===name));lastSync=now
     return{templates:sessionCache,lastSync,updated:sessionCache.filter(item=>item.status!=='SYNC_ERROR').length,failed:sessionCache.filter(item=>item.status==='SYNC_ERROR').length}
   })().finally(()=>{inFlight=null})
   return inFlight
 }
-export function isTemplateAvailable(name,templates=sessionCache){const item=templates.find(template=>template.name===name);return item?.status==='APPROVED'&&item?.language==='pt_BR'}
+export function isConfiguredTemplateAvailable(name,templates=sessionCache){return isTemplateAvailable(name,templates)}
 export const getLastTemplateSync=()=>lastSync
 export const isTemplateSyncStale=(maxAge=600000)=>!lastSync||Date.now()-new Date(lastSync).getTime()>maxAge

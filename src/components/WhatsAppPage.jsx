@@ -31,7 +31,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   const [tab,setTab]=useState('inbox'),[conversations,setConversations]=useState([]),[selectedId,setSelectedId]=useState(''),[messages,setMessages]=useState([])
   const [summary,setSummary]=useState({}),[meta,setMeta]=useState({queues:[],statuses:[]}),[users,setUsers]=useState([]),[query,setQuery]=useState(''),[filter,setFilter]=useState('all')
   const [loading,setLoading]=useState(true),[messagesLoading,setMessagesLoading]=useState(false),[sending,setSending]=useState(false),[error,setError]=useState(''),[draft,setDraft]=useState('')
-  const [collectionTarget,setCollectionTarget]=useState(null),[phoneModal,setPhoneModal]=useState(false),[startModal,setStartModal]=useState(false),[starting,setStarting]=useState(false)
+  const [collectionTarget,setCollectionTarget]=useState(null),[phoneModal,setPhoneModal]=useState(false),[startModal,setStartModal]=useState(false),[starting,setStarting]=useState(false),[templateSyncing,setTemplateSyncing]=useState(false)
   const [templateStatus,setTemplateStatus]=useState({name:'mugo_alerta_pagamento_pendente',language:'pt_BR',status:'SYNC_ERROR'})
   const [collectionAlerts,setCollectionAlerts]=useState([]),[settings,setSettings]=useState({})
   const [conversationLinks,setConversationLinks]=useState([]),[linkModal,setLinkModal]=useState(false),[actionFeedback,setActionFeedback]=useState('')
@@ -106,8 +106,16 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     try{
       const result=await startTemplateConversation({client_id:collectionTarget.client.id,installment_id:collectionTarget.installment.id,phone:collectionTarget.phone,template_name:'mugo_alerta_pagamento_pendente',language:'pt_BR'})
       const waId=getConversationIdentifier(result?.conversation||{phone:collectionTarget.phone})
-      setStartModal(false);await refresh(true,true);setSelectedId(waId);setTab('inbox')
+      const recipient=collectionTarget.client.contact_name||collectionTarget.client.company_name||'o cliente'
+      setStartModal(false);setActionFeedback(`Alerta enviado com sucesso para ${recipient}.`);await refresh(true,true);setSelectedId(waId);setTab('inbox')
     }catch(cause){setError(cause.message||'Não foi possível iniciar a conversa pelo WhatsApp.')}finally{setStarting(false)}
+  }
+  async function syncCollectionTemplate(){
+    if(templateSyncing)return
+    setTemplateSyncing(true);setError('')
+    try{const result=await refreshTemplateStatuses({force:true}),template=result.templates.find(row=>row.name==='mugo_alerta_pagamento_pendente'&&row.language==='pt_BR');if(template)setTemplateStatus(template)}
+    catch(cause){setError(cause.message||'Não foi possível consultar o template na Meta.')}
+    finally{setTemplateSyncing(false)}
   }
   function suggestCollectionDetails(){
     if(!client||!activeCollectionInstallment)return
@@ -147,7 +155,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     {tab==='templates'&&<WhatsAppTemplatesPanel onStatusesChanged={templates=>{const template=templates.find(item=>item.name==='mugo_alerta_pagamento_pendente');if(template)setTemplateStatus(template)}}/>}
     {tab==='usage'&&<WhatsAppUsagePanel/>}
     {phoneModal&&collectionTarget&&<WhatsAppPhoneModal client={collectionTarget.client} onClose={()=>setPhoneModal(false)} onSave={savePhone}/>}
-    {startModal&&collectionTarget&&<StartWhatsAppConversationModal client={collectionTarget.client} installment={collectionTarget.installment} phone={collectionTarget.phone} canWrite={canWrite} loading={starting} templateConfigured={isTemplateAvailable('mugo_alerta_pagamento_pendente',[templateStatus])} templateStatus={templateStatus.status} onClose={()=>setStartModal(false)} onStart={startCollection}/>}
+    {startModal&&collectionTarget&&<StartWhatsAppConversationModal client={collectionTarget.client} installment={collectionTarget.installment} phone={collectionTarget.phone} canWrite={canWrite} loading={starting} syncing={templateSyncing} templateConfigured={isTemplateAvailable('mugo_alerta_pagamento_pendente',[templateStatus])} templateStatus={templateStatus.status} templateError={templateStatus.error} onClose={()=>setStartModal(false)} onStart={startCollection} onSync={syncCollectionTemplate}/>}
     {batchOpen&&<WhatsAppBatchModal installments={installments} clients={clients} contracts={contracts} alerts={collectionAlerts} templateStatus={templateStatus.status} templateAvailable={isTemplateAvailable('mugo_alerta_pagamento_pendente',[templateStatus])} onClose={()=>setBatchOpen(false)} onSend={sendBatch}/>}
     {linkModal&&selected&&<WhatsAppClientLinkModal conversation={selected} clients={clients} onClose={()=>setLinkModal(false)} onLink={linkClient}/>}
   </section>

@@ -9,6 +9,7 @@ export const WHATSAPP_OPERATION_CONTRACTS = Object.freeze({
   close_conversation: { kind: 'write', identifier: true },
   find_conversation_by_phone: { kind: 'read', ttl: 30_000 },
   start_template_conversation: { kind: 'write' },
+  sync_templates: { kind: 'read', ttl: 600_000 },
   get_template_status: { kind: 'read', ttl: 600_000 },
   get_usage: { kind: 'read', ttl: 300_000 },
   batch_collection_alerts: { kind: 'write' },

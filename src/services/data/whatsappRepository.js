@@ -8,6 +8,7 @@ const digits = value => clean(value).replace(/\D/g, '')
 const asArray = value => Array.isArray(value) ? value : []
 const cache = new Map()
 const inFlight = new Map()
+const crmAuthCodes = new Set(['AUTH_SESSION_MISSING','AUTH_INVALID_TOKEN','AUTH_BLOCKED'])
 
 export class WhatsAppOperationError extends Error {
   constructor(body = {}, fallback = 'Não foi possível acessar o WhatsApp.') {
@@ -65,12 +66,12 @@ async function invoke(operation, payload = {}, options = {}) {
     })
     if (error) {
       const structured = await operationError(error)
-      if ([401,403].includes(structured.status)) { blockWhatsAppAuth(session.access_token);invalidateWhatsAppCache() }
+      if (crmAuthCodes.has(structured.code)) { blockWhatsAppAuth(session.access_token);invalidateWhatsAppCache() }
       throw structured
     }
     if (!data?.ok) {
       const structured = await operationError(data)
-      if ([401,403].includes(structured.status)) { blockWhatsAppAuth(session.access_token);invalidateWhatsAppCache() }
+      if (crmAuthCodes.has(structured.code)) { blockWhatsAppAuth(session.access_token);invalidateWhatsAppCache() }
       throw structured
     }
     if (contract.kind === 'read') cache.set(key, { value: data.data, expiresAt: Date.now() + contract.ttl })
@@ -148,6 +149,7 @@ export async function findConversationByPhone(phone, options) {
   }
 }
 export const startTemplateConversation = payload => invoke('start_template_conversation', payload)
+export const syncWhatsAppTemplates = options => invoke('sync_templates', {}, options)
 export const getTemplateStatus = (templateName, options) => invoke('get_template_status', { template_name: templateName }, options).then(data => data?.template || { name: templateName, language: 'pt_BR', status: 'SYNC_ERROR', category: '', quality: 'UNKNOWN', error: 'Resposta inválida.' })
 export const getCollectionTemplateStatus = options => getTemplateStatus('mugo_alerta_pagamento_pendente', options)
 export const getWhatsAppUsage = (days = 30, options) => invoke('get_usage', { days }, options).then(data => data?.usage || {})
