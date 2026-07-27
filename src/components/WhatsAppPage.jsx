@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCheck, CircleDollarSign, Copy, ExternalLink, Link2, MessageCircle, MoreHorizontal, RefreshCw, Search, Send, UsersRound } from 'lucide-react'
+import { AlertCircle, CheckCheck, CircleDollarSign, Copy, ExternalLink, FileText, Link2, MessageCircle, MoreHorizontal, RefreshCw, Search, Send, UsersRound } from 'lucide-react'
 import { FeedbackMessage } from './FeedbackMessage'
 import { PageSkeleton } from './PageSkeleton'
 import { normalizeBrazilianPhone } from '../lib/whatsapp'
@@ -16,6 +16,8 @@ import { isTemplateAvailable, isTemplateSyncStale, refreshTemplateStatuses } fro
 import { formatPhoneForDisplay } from '../services/whatsapp/phoneNormalization'
 import { linkConversationToClient, listConversationLinks, unlinkConversation } from '../services/data/whatsappClientLinksRepository'
 import { WhatsAppClientLinkModal } from './WhatsAppClientLinkModal'
+import { WhatsAppConversationTemplateDrawer } from './WhatsAppConversationTemplateDrawer'
+import { whatsappVisualConversations, whatsappVisualMessages, whatsappVisualTemplates } from '../services/whatsapp/visualFixtures'
 import { getSupabaseClient } from '../lib/supabase/client'
 import './WhatsAppPage.css'
 
@@ -27,13 +29,21 @@ const modeLabel = item => item?.status === 'customer_replied' ? 'Cliente respond
 const auditFrontend = (stage, operation, detail = {}) => console.info('[whatsapp_audit]', {event:'whatsapp_operation_trace',stage,operation,occurred_at:new Date().toISOString(),...detail})
 const realtimeLog=(event,detail={})=>{if(import.meta.env.DEV)console.info(`[WhatsAppRealtime] ${event}`,detail)}
 const mergeMessages=(current,incoming)=>{
-  const rows=new Map(current.map(item=>[String(item.provider_message_id||item.id),item]))
-  for(const item of incoming)rows.set(String(item.provider_message_id||item.id),{...rows.get(String(item.provider_message_id||item.id)),...item})
+  const rows=new Map(current.map(item=>[String(item.provider_message_id||item.idempotencyKey||item.id),item]))
+  for(const item of incoming){
+    const key=String(item.provider_message_id||item.idempotencyKey||item.id)
+    const optimistic=[...rows.entries()].find(([,row])=>item.provider_message_id&&row.provider_message_id===item.provider_message_id||item.idempotencyKey&&row.idempotencyKey===item.idempotencyKey)
+    if(optimistic&&optimistic[0]!==key)rows.delete(optimistic[0])
+    rows.set(key,{...(optimistic?.[1]||rows.get(key)),...item})
+  }
   return [...rows.values()].sort((a,b)=>new Date(a.createdAt||0)-new Date(b.createdAt||0))
 }
 
 export function WhatsAppPage({ clients = [], contracts = [], installments = [], proposals = [], onNavigate = () => {}, canWrite = false, isAdmin = false }) {
-  const [tab,setTab]=useState('inbox'),[conversations,setConversations]=useState([]),[selectedId,setSelectedId]=useState(''),[messages,setMessages]=useState([])
+  const visualMock=import.meta.env.DEV&&new URLSearchParams(window.location.search).has('whatsapp_mock')
+  const visualWindowClosed=visualMock&&new URLSearchParams(window.location.search).get('window')==='closed'
+  const visualConversations=useMemo(()=>visualMock?whatsappVisualConversations.map((item,index)=>index===0?{...item,serviceWindowOpen:!visualWindowClosed}:item):[],[visualMock,visualWindowClosed])
+  const [tab,setTab]=useState('inbox'),[conversations,setConversations]=useState(visualConversations),[selectedId,setSelectedId]=useState(visualMock?visualConversations[0].waId:''),[messages,setMessages]=useState(visualMock?whatsappVisualMessages:[])
   const [summary,setSummary]=useState({}),[meta,setMeta]=useState({queues:[],statuses:[]}),[users,setUsers]=useState([]),[query,setQuery]=useState(''),[filter,setFilter]=useState('all')
   const [loading,setLoading]=useState(true),[messagesLoading,setMessagesLoading]=useState(false),[sending,setSending]=useState(false),[error,setError]=useState(''),[draft,setDraft]=useState('')
   const [collectionTarget,setCollectionTarget]=useState(null),[phoneModal,setPhoneModal]=useState(false),[startModal,setStartModal]=useState(false),[starting,setStarting]=useState(false),[templateSyncing,setTemplateSyncing]=useState(false)
@@ -41,6 +51,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   const [collectionAlerts,setCollectionAlerts]=useState([]),[settings,setSettings]=useState({})
   const [conversationLinks,setConversationLinks]=useState([]),[linkModal,setLinkModal]=useState(false),[contextOpen,setContextOpen]=useState(false),[actionFeedback,setActionFeedback]=useState('')
   const [actionsOpen,setActionsOpen]=useState(false)
+  const [templateDrawerOpen,setTemplateDrawerOpen]=useState(false)
   const [batchOpen,setBatchOpen]=useState(false)
   const sendingRef=useRef(false)
   const actionRef=useRef(false)
@@ -52,8 +63,10 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   const shouldAutoScrollRef=useRef(true)
   const conversationsRef=useRef([])
   const [connection,setConnection]=useState('initializing')
+  const templateSendEnabled=import.meta.env.VITE_WHATSAPP_TEMPLATE_SEND_ENABLED==='true'
 
   const refresh = useCallback(async (quiet=false, force=false) => {
+    if(visualMock){setConversations(visualConversations);setSummary({conversations_open:visualConversations.length});setLoading(false);return}
     if(!quiet)setLoading(true)
     try {
       auditFrontend('frontend_sent','list_conversations',{payload:{limit:200},force})
@@ -62,8 +75,9 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
       setConversations(rows);setSummary({conversations_open:rows.length});setError('')
       setSelectedId(current=>current&&rows.some(item=>item.waId===current&&hasValidConversationIdentifier(item))?current:'')
     } catch (cause) { handleOperationError(cause) } finally { if(!quiet)setLoading(false) }
-  },[])
+  },[visualMock,visualConversations])
   const loadHistory=useCallback(async (conversation,force=false)=>{
+    if(visualMock){setMessages(whatsappVisualMessages);setMessagesLoading(false);return}
     const requestId=++historyRequestRef.current
     historyControllerRef.current?.abort()
     const controller=new AbortController()
@@ -78,13 +92,13 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     }
     catch(cause){if(cause.name!=='AbortError'&&requestId===historyRequestRef.current){if(cause.status===403)setConnection('auth-error');if(cause.code==='UPSTREAM_TIMEOUT'||cause.status===504)setConnection('unstable');setError(cause.status===403?'Sua sessão expirou. Entre novamente no CRM.':cause.code==='UPSTREAM_TIMEOUT'||cause.status===504?'O MugoZap demorou mais que o esperado. Os dados anteriores foram preservados.':cause.message)}}
     finally{if(requestId===historyRequestRef.current)setMessagesLoading(false)}
-  },[])
+  },[visualMock])
   useEffect(()=>{refresh();Promise.allSettled([listCollectionAlerts(),getOrganizationSettings(),listConversationLinks()]).then(([alertsResult,settingsResult,linksResult])=>{if(alertsResult.status==='fulfilled')setCollectionAlerts(alertsResult.value);if(settingsResult.status==='fulfilled')setSettings(settingsResult.value);if(linksResult.status==='fulfilled')setConversationLinks(linksResult.value)})},[refresh])
   useEffect(()=>{let active=true;health().then(()=>active&&setConnection('connected')).catch(error=>active&&setConnection(error.code==='UPSTREAM_COLD_START'?'initializing':error.code==='UPSTREAM_UNAUTHORIZED'?'auth-error':'unavailable'));return()=>{active=false}},[])
   useEffect(()=>{conversationsRef.current=conversations},[conversations])
   useEffect(()=>{setMessages([]);shouldAutoScrollRef.current=true;const conversation=conversationsRef.current.find(item=>item.waId===selectedId);if(conversation)loadHistory(conversation)},[selectedId,loadHistory])
   useEffect(()=>{
-    if(!selectedId)return
+    if(!selectedId||visualMock)return
     let active=true,timer
     const poll=async()=>{
       const conversation=conversationsRef.current.find(item=>item.waId===selectedId)
@@ -94,15 +108,17 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     realtimeLog('fallback_polling',{resource:'active_conversation'})
     timer=setTimeout(poll,5000)
     return()=>{active=false;clearTimeout(timer)}
-  },[selectedId,loadHistory])
+  },[selectedId,loadHistory,visualMock])
   useEffect(()=>{
+    if(visualMock)return
     let active=true,timer
     const poll=async()=>{if(document.visibilityState==='visible')await refresh(true,true);if(active)timer=setTimeout(poll,document.visibilityState==='visible'?15000:60000)}
     realtimeLog('fallback_polling',{resource:'conversation_list'})
     timer=setTimeout(poll,15000)
     return()=>{active=false;clearTimeout(timer)}
-  },[refresh])
+  },[refresh,visualMock])
   useEffect(()=>{
+    if(visualMock)return
     const supabase=getSupabaseClient()
     if(!supabase)return
     const onChange=payload=>{realtimeLog(payload.table==='whatsapp_collection_alerts'?'message_insert':'conversation_update',{eventType:payload.eventType});refresh(true,true);const conversation=conversationsRef.current.find(item=>item.waId===selectedId);if(conversation)loadHistory(conversation,true)}
@@ -111,7 +127,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
       .on('postgres_changes',{event:'*',schema:'public',table:'whatsapp_conversation_links'},onChange)
       .subscribe(status=>realtimeLog(status==='SUBSCRIBED'?'connected':status==='CLOSED'?'disconnected':'fallback_polling',{status}))
     return()=>{realtimeLog('disconnected');supabase.removeChannel(channel)}
-  },[loadHistory,refresh,selectedId])
+  },[loadHistory,refresh,selectedId,visualMock])
   useEffect(()=>{if(shouldAutoScrollRef.current)historyEndRef.current?.scrollIntoView({block:'end'})},[messages])
   useEffect(()=>{if(selectedId)auditFrontend('react_rendered','get_conversation_messages',{selected_id:selectedId,row_count:messages.length,message_ids:messages.map(item=>item.id)})},[selectedId,messages])
   useEffect(()=>()=>historyControllerRef.current?.abort(),[])
@@ -137,7 +153,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     event?.preventDefault()
     const text=(retryMessage?.text||draft).trim()
     if(!selected||!hasValidConversationIdentifier(selected)||!text||sendingRef.current||!canWrite)return
-    if(selected.serviceWindowOpen===false){setError('A janela de atendimento de 24 horas está encerrada. Use um template aprovado para retomar a conversa.');setTab('templates');return}
+    if(selected.serviceWindowOpen===false){setError('A janela de atendimento está encerrada. Use um modelo aprovado para retomar a conversa.');setTemplateDrawerOpen(true);return}
     sendingRef.current=true;setSending(true);optimisticIdRef.current+=1
     const idempotencyKey=retryMessage?.idempotencyKey||crypto.randomUUID()
     const optimistic={id:retryMessage?.id||`optimistic-${optimisticIdRef.current}`,text,createdAt:new Date().toISOString(),direction:'out',status:'sending',idempotencyKey}
@@ -196,14 +212,20 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   }
   async function sendBatch(rows){const result={checked:rows.length,eligible:rows.length,sent:0,failed:0,skipped:0,reasons:[]};for(const row of rows){try{await startTemplateConversation({client_id:row.client.id,installment_id:row.item.id,phone:row.phone,template_name:'mugo_alerta_pagamento_pendente',language:'pt_BR'});result.sent+=1}catch(cause){result.failed+=1;result.reasons.push({installment_id:row.item.id,reason:cause.message})}}await refresh(true);return result}
   async function sendApprovedTemplate(payload){
-    const result=await sendTemplateMessage({...payload,idempotency_key:crypto.randomUUID(),contract_mode:'minimal'})
+    if(!selected||!isAdmin||!templateSendEnabled)throw Object.assign(new Error('A homologação de modelos não está habilitada para este perfil.'),{code:'TEMPLATE_SEND_DISABLED'})
+    const idempotencyKey=crypto.randomUUID(),optimisticId=`template-${idempotencyKey}`
+    const optimistic={id:optimisticId,idempotencyKey,conversation_id:selectedIdentifier,text:payload.preview?.body||`Modelo: ${payload.template_name}`,template_name:payload.template_name,template_display:payload.template?.display||payload.template_name,template:true,type:'template',direction:'out',status:'sending',createdAt:new Date().toISOString()}
+    setMessages(current=>mergeMessages(current,[optimistic]))
+    let result
+    try{result=await sendTemplateMessage({...payload,idempotency_key:idempotencyKey,contract_mode:'minimal'})}
+    catch(cause){setMessages(current=>current.map(item=>item.id===optimisticId?{...item,status:cause.code==='UPSTREAM_TIMEOUT'||cause.status===504?'unknown':'failed',error_message:cause.message}:item));throw cause}
     const waId=getConversationIdentifier(result?.conversation||{phone:payload.recipient})
-    const optimistic={id:result.message_id,provider_message_id:result.message_id,conversation_id:waId,text:`Template: ${payload.template_name}`,template_name:payload.template_name,template:true,type:'template',direction:'out',status:'accepted',createdAt:new Date().toISOString()}
-    setMessages(current=>current.some(item=>item.id===optimistic.id)?current:[...current,optimistic])
-    setActionFeedback('Template enviado com sucesso.')
+    const providerMessageId=result?.provider_message_id||result?.message_id
+    setMessages(current=>mergeMessages(current,[{...optimistic,id:providerMessageId||optimisticId,provider_message_id:providerMessageId||'',conversation_id:waId,status:'sent'}]))
+    setActionFeedback('Modelo confirmado pelo provedor.')
     await refresh(true,true)
     if(waId)setSelectedId(waId)
-    setTab('inbox')
+    await loadHistory(selected,true)
     return result
   }
 
@@ -213,16 +235,16 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     {error&&<FeedbackMessage type="error">{error}</FeedbackMessage>}
     {connection==='auth-error'&&<button className="button whatsapp-sign-in-again" onClick={signInAgain}>Entrar novamente</button>}
     {actionFeedback&&<FeedbackMessage type="success">{actionFeedback}</FeedbackMessage>}
-    {loading?<PageSkeleton type="dashboard"/>:tab==='inbox'?<div className={`whatsapp-workspace${selected?' has-selection':''}`}>
+    {loading?<PageSkeleton type="dashboard"/>:tab==='inbox'?<div className={`whatsapp-workspace${selected?' has-selection':''}${client?' has-context':''}`}>
       <aside className="conversation-list">
         <div className="conversation-tools"><label><Search size={15}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar conversa"/></label><select value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">Todas</option><option value="collection">Cobranças</option><option value="waiting_customer">Aguardando cliente</option><option value="customer_replied">Cliente respondeu</option><option value="waiting_finance">Aguardando financeiro</option><option value="negotiating">Em negociação</option><option value="paid">Pagas</option><option value="failed">Falha de envio</option></select></div>
         <div className="conversation-scroll">{filtered.length?filtered.map(item=>{const valid=hasValidConversationIdentifier(item);return <button key={item.id||item.waId} disabled={!valid} className={`conversation-item status-${item.status}${selectedId===item.waId?' active':''}`} onClick={()=>valid&&setSelectedId(item.waId)}><span className="contact-avatar">{item.name.slice(0,1).toUpperCase()}</span><span className="conversation-copy"><span><strong>{item.name}</strong><time>{fmtTime(item.updatedAt)}</time></span><small>{valid?formatPhoneForDisplay(getConversationIdentifier(item)):'Identificador da conversa ausente'}</small><p>{item.preview||'Sem prévia de mensagem'}</p><span className="conversation-badges"><i>{modeLabel(item)}</i>{item.owner&&<i>{item.owner}</i>}{item.collection&&<i className="collection">Cobrança</i>}</span></span>{item.unread>0&&<b>{item.unread}</b>}</button>}):<div className="whatsapp-empty">Nenhuma conversa encontrada.</div>}</div>
       </aside>
       <main className="chat-panel">{selected?<><header><div className="chat-contact"><button className="mobile-back" onClick={()=>setSelectedId('')}>Voltar</button><span className="contact-avatar">{selected.name.slice(0,1).toUpperCase()}</span><div><strong>{selected.name}</strong><small>{formatPhoneForDisplay(selectedIdentifier)} · {modeLabel(selected)}{selected.owner?` · ${selected.owner}`:''}</small></div></div><div className="chat-actions"><button className="context-toggle" onClick={()=>setContextOpen(true)}>Contato</button>{canWrite&&<div className="chat-action-menu"><button aria-label="Mais ações" aria-expanded={actionsOpen} onClick={()=>setActionsOpen(current=>!current)}><MoreHorizontal size={17}/></button>{actionsOpen&&<div><button disabled={actionRef.current} onClick={()=>mutate(()=>assignConversation(selected,''),'Conversa assumida.')}>Assumir</button><button disabled={actionRef.current} onClick={()=>mutate(()=>pauseAutomation(selected),'Automação pausada.')}>Pausar bot</button><button disabled={actionRef.current} onClick={()=>mutate(()=>resumeAutomation(selected),'Automação retomada.')}>Retomar bot</button><button disabled={actionRef.current} onClick={()=>mutate(()=>closeConversation(selected),'Conversa encerrada.')}>Encerrar</button><button disabled={actionRef.current} onClick={()=>setLinkModal(true)}><Link2 size={13}/>{client?'Alterar vínculo':'Vincular cliente'}</button>{selectedLink&&<button disabled={actionRef.current} onClick={unlinkClient}>Desvincular</button>}<button onClick={()=>navigator.clipboard.writeText(`+${selectedIdentifier}`)}><Copy size={13}/>Copiar número</button><a className="whatsapp-action-link" href={`https://wa.me/${selectedIdentifier}`} target="_blank" rel="noreferrer"><ExternalLink size={13}/>Abrir WhatsApp</a></div>}</div>}</div></header>
-        {isAdmin&&users.length>0&&<div className="chat-management"><label>Responsável<select value={selected.owner||''} onChange={e=>mutate(()=>assignConversation(selected,e.target.value))}><option value="">Sem responsável</option>{users.map(user=><option key={user.id||user.email} value={user.name||user.email}>{user.name||user.email}</option>)}</select></label>{meta.statuses?.length>0&&<small>Status disponíveis: {meta.statuses.join(', ')}</small>}</div>}
-        <div className="message-history" ref={historyContainerRef} onScroll={event=>{const element=event.currentTarget;shouldAutoScrollRef.current=element.scrollHeight-element.scrollTop-element.clientHeight<120}}>{messagesLoading&&!messages.length?<div className="whatsapp-empty">Carregando histórico…</div>:messages.length?messages.map(message=><article key={message.id} className={message.direction==='out'?'out':'in'}><p>{message.text||`Mensagem ${message.type||'sem conteúdo textual'}`}</p><footer>{message.template&&<span>Template</span>}{message.collection&&<span>Cobrança</span>}<time>{fmtTime(message.createdAt)}</time>{message.direction==='out'&&<CheckCheck size={13} aria-label={message.status||'enviada'}/>} {message.status==='failed'&&<button type="button" onClick={event=>send(event,message)}>Tentar novamente</button>}</footer>{message.error_message&&<small>{message.error_message}</small>}</article>):<div className="whatsapp-empty whatsapp-chat-empty"><MessageCircle/><strong>Nenhuma mensagem confirmada pela API.</strong><span>O MugoZap respondeu com zero mensagens para esta conversa.</span></div>}<span ref={historyEndRef}/></div>
-        {selected.serviceWindowOpen===false&&<FeedbackMessage type="warning">A janela de 24 horas terminou. Selecione um template aprovado para retomar o contato.</FeedbackMessage>}
-        <form className="message-composer" onSubmit={send}><textarea value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={handleComposerKeyDown} placeholder={!canWrite?'Seu perfil possui acesso somente para leitura.':selected.serviceWindowOpen===false?'Use um template aprovado para retomar a conversa.':'Escreva uma resposta manual…'} disabled={!canWrite||sending||selected.serviceWindowOpen===false} maxLength={4000}/><button className="button button-primary" disabled={!canWrite||sending||selected.serviceWindowOpen===false||!draft.trim()}><Send size={16}/>{sending?'Enviando…':'Enviar'}</button></form></>:<div className="whatsapp-empty">Selecione uma conversa para abrir o atendimento.</div>}</main>
+        <div className="chat-management">{isAdmin&&users.length>0&&<><label>Responsável<select value={selected.owner||''} onChange={e=>mutate(()=>assignConversation(selected,e.target.value))}><option value="">Sem responsável</option>{users.map(user=><option key={user.id||user.email} value={user.name||user.email}>{user.name||user.email}</option>)}</select></label>{meta.statuses?.length>0&&<small>Status disponíveis: {meta.statuses.join(', ')}</small>}</>}</div>
+        <div className="message-history" ref={historyContainerRef} onScroll={event=>{const element=event.currentTarget;shouldAutoScrollRef.current=element.scrollHeight-element.scrollTop-element.clientHeight<120}}>{messagesLoading&&!messages.length?<div className="whatsapp-empty">Carregando histórico…</div>:messages.length?messages.map(message=><article key={message.provider_message_id||message.idempotencyKey||message.id} className={`${message.direction==='out'?'out':'in'} status-${message.status||'unknown'}`}><p>{message.text||`Mensagem ${message.type||'sem conteúdo textual'}`}</p><footer>{message.template&&<span>Modelo: {message.template_display||message.template_name||'WhatsApp'}</span>}{message.collection&&<span>Cobrança</span>}<time>{fmtTime(message.createdAt)}</time>{message.direction==='out'&&<><CheckCheck size={13} aria-label={message.status||'enviada'}/><em>{message.status==='sending'?'enviando':message.status==='sent'||message.status==='accepted'?'enviado':message.status==='delivered'?'entregue':message.status==='read'?'lido':message.status==='unknown'?'resultado desconhecido':message.status==='failed'?'falhou':message.status}</em></>}</footer>{message.error_message&&<small>{message.error_message}</small>}</article>):<div className="whatsapp-empty whatsapp-chat-empty"><MessageCircle/><strong>Nenhuma mensagem confirmada pela API.</strong><span>O MugoZap respondeu com zero mensagens para esta conversa.</span></div>}<span ref={historyEndRef}/></div>
+        {selected.serviceWindowOpen===false&&<FeedbackMessage type="warning">A janela de atendimento está encerrada. Use um modelo aprovado para retomar a conversa.</FeedbackMessage>}
+        <form className={`message-composer${selected.serviceWindowOpen===false?' window-closed':''}`} onSubmit={send}><button type="button" className="composer-attachment" aria-label="Anexar arquivo" title="Anexos ainda não disponíveis">+</button><button type="button" className="composer-template" onClick={()=>setTemplateDrawerOpen(true)} aria-label="Enviar modelo aprovado"><FileText size={15}/><span>Enviar modelo</span></button><textarea value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={handleComposerKeyDown} placeholder={!canWrite?'Seu perfil possui acesso somente para leitura.':selected.serviceWindowOpen===false?'Use um modelo aprovado para retomar a conversa.':'Escreva uma resposta manual…'} disabled={!canWrite||sending||selected.serviceWindowOpen===false} maxLength={4000} aria-label="Mensagem"/><button className="button button-primary" aria-label="Enviar mensagem" disabled={!canWrite||sending||selected.serviceWindowOpen===false||!draft.trim()}><Send size={16}/><span>{sending?'Enviando…':'Enviar'}</span></button></form></>:<div className="whatsapp-empty">Selecione uma conversa para abrir o atendimento.</div>}</main>
       {contextOpen&&<button className="client-context-backdrop" onClick={()=>setContextOpen(false)} aria-label="Fechar informações do contato"/>}<aside className={`client-context${contextOpen?' open':''}`}>{selected?<><button className="client-context-close" onClick={()=>setContextOpen(false)}>Fechar</button><header><span>Contexto do cliente</span><strong>{client?.trade_name||client?.company_name||selected.name}</strong><small>{client?'Cliente cadastrado':'Contato não vinculado ao CRM'}</small></header>{client?<><dl><div><dt>Contato</dt><dd>{client.contact_name||'Não informado'}</dd></div><div><dt>Status comercial</dt><dd>{client.status||'Não informado'}</dd></div><div><dt>Contratos</dt><dd>{clientContracts.length}</dd></div><div><dt>Propostas</dt><dd>{clientProposals.length}</dd></div><div><dt>Parcelas pendentes</dt><dd>{openInstallments.length}</dd></div><div><dt>Total em atraso</dt><dd>{money(overdue.reduce((sum,item)=>sum+Number(item.amount||0),0))}</dd></div><div><dt>Próximo vencimento</dt><dd>{openInstallments[0]?.due_date||'Nenhum'}</dd></div></dl>{activeAlert&&activeCollectionInstallment&&<section className="collection-context"><h3>Cobrança vinculada</h3><dl><div><dt>Parcela</dt><dd>{activeCollectionInstallment.reference_month}</dd></div><div><dt>Vencimento</dt><dd>{activeCollectionInstallment.due_date}</dd></div><div><dt>Valor pendente</dt><dd>{money(Math.max(Number(activeCollectionInstallment.amount||0)-Number(activeCollectionInstallment.received_amount||0),0))}</dd></div><div><dt>Status</dt><dd>{activeAlert.status}</dd></div><div><dt>Último alerta</dt><dd>{fmtTime(activeAlert.sent_at)}</dd></div></dl><div className="context-actions"><button onClick={()=>navigator.clipboard.writeText(settings.pix_key||'')} disabled={!settings.pix_key}>Copiar PIX</button><button onClick={suggestCollectionDetails}>Enviar detalhes</button><button onClick={async()=>{await updateCollectionStage(activeAlert.id,'negotiating');await refresh(true)}}>Marcar em negociação</button><button onClick={markPaid}>Marcar como pago</button></div></section>}<div className="context-actions"><button onClick={()=>onNavigate('clients')}>Abrir cliente</button>{clientContracts.length>0&&<button onClick={()=>onNavigate('contracts')}>Abrir contrato</button>}<button onClick={()=>onNavigate('finance')}>Abrir financeiro</button></div></>:<div className="context-empty"><AlertCircle size={18}/><p>O telefone não corresponde a um cliente cadastrado.</p><button onClick={()=>onNavigate('clients')}>Criar cliente</button></div>}</>:null}</aside>
     </div>:tab==='collections'?<div className="whatsapp-table-card"><header><div><CircleDollarSign/><div><strong>Cobranças</strong><small>Base financeira oficial: parcelas do CRM. O primeiro contato utiliza exclusivamente o template aprovado.</small></div></div></header>{collections.length?<div className="whatsapp-table">{collections.map(item=>{const rowClient=clients.find(row=>row.id===item.client_id),phone=rowClient?.billing_contact_phone||rowClient?.phone,known=conversations.some(c=>samePhone(c.phone,phone));return <article key={item.id}><div><strong>{rowClient?.company_name||item.clients?.company_name||'Cliente não informado'}</strong><small>{item.due_date} · {item.status}</small></div><strong>{money(item.amount)}</strong><button onClick={()=>openCollection(item)} disabled={!canWrite} title={!canWrite?'Seu perfil possui acesso somente para leitura.':phone?(known?'Abrir a conversa existente':'Localizar ou iniciar conversa'):'Cadastrar número e continuar'}>{phone?(known?'Abrir conversa':'Iniciar conversa'):'Cadastrar número'}</button><button onClick={()=>openCollection(item)} disabled={!canWrite} title={!canWrite?'Seu perfil não pode enviar alertas.':'Revisar e enviar o template aprovado'}>Enviar alerta</button></article>})}</div>:<div className="whatsapp-empty">Nenhuma parcela pendente encontrada.</div>}</div>:tab==='contacts'?<div className="whatsapp-table-card"><header><div><UsersRound/><div><strong>Contatos</strong><small>Clientes do CRM relacionados às conversas pelo telefone normalizado.</small></div></div></header><div className="whatsapp-table">{clients.map(item=>{const conversation=conversations.find(c=>samePhone(c.phone,item.phone)||samePhone(c.phone,item.billing_contact_phone));return <article key={item.id}><div><strong>{item.trade_name||item.company_name}</strong><small>{item.contact_name||'Sem contato'} · {item.phone||item.billing_contact_phone||'Sem telefone'}</small></div><span>{item.status}</span><button disabled={!conversation} onClick={()=>{setSelectedId(conversation.waId);setTab('inbox')}}>Abrir conversa</button><button onClick={()=>onNavigate('clients')}>Abrir cliente</button></article>})}</div></div>:<div className="template-card"><header><strong>mugo_alerta_pagamento_pendente</strong><span>Utilidade · pt_BR</span></header><p>Finalidade: iniciar alerta financeiro. Interação esperada: Consultar cobrança.</p><dl><div><dt>Uso</dt><dd>Alertas financeiros revisados pela equipe</dd></div><div><dt>Variáveis</dt><dd>Primeiro nome seguro do cliente</dd></div><div><dt>Ação</dt><dd>Consultar cobrança</dd></div></dl><FeedbackMessage type="warning">A aprovação e o status oficial do template continuam sendo gerenciados na Meta.</FeedbackMessage></div>}
     {tab==='collections'&&<button className="button secondary whatsapp-batch-trigger" onClick={()=>setBatchOpen(true)}>Envio em lote</button>}
@@ -232,5 +254,6 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     {startModal&&collectionTarget&&<StartWhatsAppConversationModal client={collectionTarget.client} installment={collectionTarget.installment} phone={collectionTarget.phone} canWrite={canWrite} loading={starting} syncing={templateSyncing} templateConfigured={isTemplateAvailable('mugo_alerta_pagamento_pendente',[templateStatus])} templateStatus={templateStatus.status} templateError={templateStatus.error} onClose={()=>setStartModal(false)} onStart={startCollection} onSync={syncCollectionTemplate}/>}
     {batchOpen&&<WhatsAppBatchModal installments={installments} clients={clients} contracts={contracts} alerts={collectionAlerts} templateStatus={templateStatus.status} templateAvailable={isTemplateAvailable('mugo_alerta_pagamento_pendente',[templateStatus])} onClose={()=>setBatchOpen(false)} onSend={sendBatch}/>}
     {linkModal&&selected&&<WhatsAppClientLinkModal conversation={selected} clients={clients} onClose={()=>setLinkModal(false)} onLink={linkClient}/>}
+    <WhatsAppConversationTemplateDrawer open={templateDrawerOpen} conversation={selected} client={client||{contact_name:selected?.name}} contract={clientContracts[0]} installment={openInstallments[0]} owner={selected?.owner} enabled={templateSendEnabled} authorized={isAdmin&&canWrite} templatesOverride={visualMock?whatsappVisualTemplates:null} onClose={()=>setTemplateDrawerOpen(false)} onSend={sendApprovedTemplate}/>
   </section>
 }

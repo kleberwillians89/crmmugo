@@ -28,6 +28,7 @@
     "test:whatsapp": "node scripts/test-whatsapp-stability.mjs",
     "test:whatsapp-templates": "node scripts/test-whatsapp-templates.mjs",
     "test:whatsapp-incremental": "node scripts/test-whatsapp-incremental.mjs",
+    "test:whatsapp-contextual-templates": "node scripts/test-whatsapp-contextual-templates.mjs",
     "test:temporal": "node scripts/test-sprint15-1-temporal.mjs"
   },
   "dependencies": {

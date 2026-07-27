@@ -2,6 +2,72 @@ const clean = value => String(value ?? '').trim()
 const type = value => clean(value).toUpperCase()
 const variables = text => [...new Set([...clean(text).matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)].map(match => clean(match[1])))]
 
+export const templateSearchText = template => clean([
+  template.display,
+  template.name,
+  template.category,
+  template.purpose,
+  template.preview,
+].join(' ')).toLocaleLowerCase('pt-BR')
+
+export const templateCategory = template => {
+  const category = type(template?.category)
+  if (category === 'MARKETING') return 'marketing'
+  if (category === 'AUTHENTICATION') return 'authentication'
+  return 'utility'
+}
+
+export const maskTemplateRecipient = value => {
+  const normalized = clean(value).replace(/\D/g, '')
+  return normalized ? `${'•'.repeat(Math.max(6, normalized.length - 4))}${normalized.slice(-4)}` : 'telefone não informado'
+}
+
+export function suggestTemplateValues(fields = [], context = {}) {
+  const client = context.client || {}
+  const contract = context.contract || {}
+  const installment = context.installment || {}
+  const suggestions = {}
+  const candidates = {
+    nome: client.contact_name || client.trade_name || client.company_name || context.contactName,
+    cliente: client.contact_name || client.trade_name || client.company_name || context.contactName,
+    cliente_nome: client.contact_name || client.trade_name || client.company_name || context.contactName,
+    empresa: client.trade_name || client.company_name,
+    responsavel: context.owner,
+    valor: installment.amount,
+    vencimento: installment.due_date,
+    link: context.link,
+    codigo: context.code,
+    pedido: context.orderNumber,
+    numero_pedido: context.orderNumber,
+    contrato: contract.number || contract.contract_number || contract.id,
+    numero_contrato: contract.number || contract.contract_number || contract.id,
+  }
+  for (const field of fields) {
+    const variable = clean(field.variable).toLocaleLowerCase('pt-BR')
+    let value = candidates[variable]
+    if (!value && /^\d+$/.test(variable) && Number(variable) === 1) value = candidates.nome
+    if (value !== undefined && value !== null && clean(value)) suggestions[field.key] = clean(value)
+  }
+  return suggestions
+}
+
+export function renderTemplatePreview(template = {}, fields = [], values = {}) {
+  const component = componentType => (Array.isArray(template.components) ? template.components : []).find(item => type(item.type) === componentType)
+  const replace = text => {
+    let output = clean(text)
+    for (const field of fields.filter(item => item.variable)) {
+      output = output.replace(new RegExp(`\\{\\{\\s*${String(field.variable).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}\\}`, 'g'), clean(values[field.key]) || `{{${field.variable}}}`)
+    }
+    return output
+  }
+  return {
+    header: replace(component('HEADER')?.text),
+    body: replace(component('BODY')?.text || template.preview),
+    footer: replace(component('FOOTER')?.text || template.footer),
+    buttons: Array.isArray(component('BUTTONS')?.buttons) ? component('BUTTONS').buttons.map(button => ({ type: type(button.type), text: clean(button.text), url: replace(button.url) })) : [],
+  }
+}
+
 export function describeTemplateFields(template = {}) {
   const fields = []
   for (const component of Array.isArray(template.components) ? template.components : []) {
