@@ -14,6 +14,7 @@ Fonte de verdade: `src/services/whatsapp/operationContracts.js` e `supabase/func
 | `close_conversation` | `{ waId }` | `PATCH /api/conversations/{waId}` | 20 s | Define `status: closed` |
 | `find_conversation_by_phone` | `{ phone }` | `GET /api/conversations/by-phone/{phone}` | 8 s | Cache de 30 s |
 | `start_template_conversation` | IDs do cliente/parcela, telefone, template e idioma | `POST /api/conversations/start-template` | 20 s | Validação financeira e reserva contra duplicidade |
+| `list_templates` | — | Supabase `whatsapp_message_templates` | 10 min | Exibe o último catálogo salvo antes de consultar a Meta |
 | `sync_templates` | — | `GET /{WABA_ID}/message_templates` (Meta, server-side) | 8 s | Nome + idioma; cache de 10 min |
 | `get_template_status` | `{ template_name }` | Catálogo oficial da Meta por `WABA_ID` | 8 s | Busca por nome + `pt_BR`; cache de 10 min |
 | `get_usage` | `{ days }` | `GET /api/whatsapp/usage?days=...` | 8 s | Cache de 5 min |

@@ -1,4 +1,4 @@
-import { syncWhatsAppTemplates } from '../data/whatsappRepository.js'
+import { listStoredWhatsAppTemplates, syncWhatsAppTemplates } from '../data/whatsappRepository.js'
 import { isTemplateAvailable } from './templateStatus.js'
 export { isTemplateAvailable } from './templateStatus.js'
 
@@ -13,23 +13,40 @@ const definitions={
   hello_world:{display:'Template de teste da Meta',purpose:'Teste técnico',preview:'Template técnico padrão da Meta.',buttons:[],footer:'',enabled:false,technical:true},
 }
 let sessionCache=[],lastSync=null,inFlight=null
-export function getConfiguredTemplates(){return TEMPLATE_NAMES.map(name=>({...definitions[name],name,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',lastSyncedAt:null,error:'',...(sessionCache.find(item=>item.name===name)||{})}))}
+const key=item=>`${item.name}:${item.language||''}`
+const component=(item,type)=>Array.isArray(item.components)?item.components.find(row=>String(row.type||'').toUpperCase()===type):null
+const decorate=item=>{
+  const known=definitions[item.name]||{},body=component(item,'BODY'),footer=component(item,'FOOTER'),buttons=component(item,'BUTTONS')?.buttons
+  return {...known,...item,display:known.display||item.name,purpose:known.purpose||item.category||'Template da Meta',preview:body?.text||known.preview||'',footer:footer?.text||known.footer||'',buttons:Array.isArray(buttons)?buttons.map(button=>button.text||button.type).filter(Boolean):(known.buttons||[]),enabled:known.enabled??true,language:item.language||'pt_BR',quality:item.quality||item.quality_score||'UNKNOWN',lastSyncedAt:item.lastSyncedAt||item.last_synced_at||null,error:item.error||''}
+}
+const configuredFallback=()=>TEMPLATE_NAMES.map(name=>decorate({...definitions[name],name,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',lastSyncedAt:null,error:''}))
+const mergeRows=(rows,includeFallback=false)=>{
+  const incoming=(Array.isArray(rows)?rows:[]).map(decorate),byKey=new Map(incoming.map(item=>[key(item),item]))
+  if(includeFallback)for(const fallback of configuredFallback())if(!byKey.has(key(fallback)))byKey.set(key(fallback),fallback)
+  return [...byKey.values()].sort((a,b)=>a.name.localeCompare(b.name)||a.language.localeCompare(b.language))
+}
+export function getConfiguredTemplates(){return sessionCache.length?sessionCache:configuredFallback()}
+export async function loadStoredTemplateStatuses({force=false}={}){
+  const result=await listStoredWhatsAppTemplates({force})
+  sessionCache=mergeRows(result?.templates,!result?.templates?.length)
+  lastSync=result?.last_sync||lastSync
+  return{templates:sessionCache,lastSync,source:'supabase'}
+}
 export async function refreshTemplateStatuses({force=false}={}){
   if(!force&&!isTemplateSyncStale())return{templates:getConfiguredTemplates(),lastSync,updated:sessionCache.filter(item=>item.status!=='SYNC_ERROR').length,failed:sessionCache.filter(item=>item.status==='SYNC_ERROR').length}
   if(inFlight)return inFlight
   inFlight=(async()=>{
-    const previous=new Map(sessionCache.map(item=>[item.name,item])),now=new Date().toISOString(),rows=[]
+    const previous=new Map(sessionCache.map(item=>[key(item),item])),now=new Date().toISOString()
     try {
       const result=await syncWhatsAppTemplates({force})
       const official=Array.isArray(result?.templates)?result.templates:[]
-      for(const name of TEMPLATE_NAMES){
-        const found=official.find(item=>item.name===name&&item.language==='pt_BR')
-        rows.push(found?{...definitions[name],...found,name,lastSyncedAt:result.last_sync||now,error:''}:{...definitions[name],name,language:'pt_BR',status:'NOT_CONFIGURED',category:'',quality:'UNKNOWN',lastSyncedAt:result.last_sync||now,error:'Template não encontrado na Meta para o idioma pt_BR.'})
-      }
+      sessionCache=mergeRows(official.map(item=>({...item,lastSyncedAt:result.last_sync||now,error:''})))
+      lastSync=result.last_sync||now
     } catch(error) {
-      for(const name of TEMPLATE_NAMES){const valid=previous.get(name);rows.push(valid?{...valid,error:error.message}:{...definitions[name],name,language:'pt_BR',status:'SYNC_ERROR',category:'',quality:'UNKNOWN',lastSyncedAt:now,error:error.message})}
+      const message=`${error.message}${error.requestId?` (protocolo ${error.requestId})`:''}`
+      sessionCache=sessionCache.length?sessionCache.map(item=>({...item,error:message})):configuredFallback().map(item=>({...item,error:message}))
+      if(!previous.size)lastSync=null
     }
-    sessionCache=TEMPLATE_NAMES.map(name=>rows.find(item=>item.name===name));lastSync=now
     return{templates:sessionCache,lastSync,updated:sessionCache.filter(item=>item.status!=='SYNC_ERROR').length,failed:sessionCache.filter(item=>item.status==='SYNC_ERROR').length}
   })().finally(()=>{inFlight=null})
   return inFlight

@@ -18,6 +18,8 @@ export class WhatsAppOperationError extends Error {
     this.status = Number(body.status || 0)
     this.upstreamStatus = Number(body.upstream_status || 0)
     this.retryable = Boolean(body.retryable || RETRYABLE_WHATSAPP_CODES.has(this.code))
+    this.requestId = clean(body.request_id)
+    this.details = body.details || {}
   }
 }
 
@@ -149,7 +151,15 @@ export async function findConversationByPhone(phone, options) {
   }
 }
 export const startTemplateConversation = payload => invoke('start_template_conversation', payload)
-export const syncWhatsAppTemplates = options => invoke('sync_templates', {}, options)
+export const listStoredWhatsAppTemplates = options => invoke('list_templates', {}, options)
+export const syncWhatsAppTemplates = async options => {
+  invalidateWhatsAppCache('list_templates:')
+  invalidateWhatsAppCache('get_template_status:')
+  const result=await invoke('sync_templates', {}, {...options,force:true})
+  invalidateWhatsAppCache('list_templates:')
+  invalidateWhatsAppCache('get_template_status:')
+  return result
+}
 export const getTemplateStatus = (templateName, options) => invoke('get_template_status', { template_name: templateName }, options).then(data => data?.template || { name: templateName, language: 'pt_BR', status: 'SYNC_ERROR', category: '', quality: 'UNKNOWN', error: 'Resposta inválida.' })
 export const getCollectionTemplateStatus = options => getTemplateStatus('mugo_alerta_pagamento_pendente', options)
 export const getWhatsAppUsage = (days = 30, options) => invoke('get_usage', { days }, options).then(data => data?.usage || {})

@@ -35,7 +35,7 @@ assert.equal(isWhatsAppAuthBlocked(),false)
 for (const operation of [
   'health','list_conversations','list_messages','send_manual_message','assign_conversation',
   'pause_automation','resume_automation','close_conversation','find_conversation_by_phone',
-  'start_template_conversation','get_template_status','get_usage','batch_collection_alerts',
+  'start_template_conversation','list_templates','sync_templates','get_template_status','get_usage','batch_collection_alerts',
   'mark_collection_negotiation','mark_installment_paid',
 ]) assert.ok(WHATSAPP_OPERATION_CONTRACTS[operation], `Contrato ausente: ${operation}`)
 
