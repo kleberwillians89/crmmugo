@@ -16,6 +16,22 @@ const brazilianPhone = (value: unknown) => {
 }
 const metaStatus = (value: unknown) => text(value, 30).toUpperCase()
 const availableTemplate = (value: unknown) => metaStatus(value) === 'APPROVED'
+const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation'])
+const publicOperation = (operation: string) => operation === 'list_messages' ? 'get_conversation_messages' : operation
+const auditValue = (value: any, depth = 0): any => {
+  if(depth>5)return '[depth-limited]'
+  if(typeof value==='string')return value.slice(0,4000)
+  if(Array.isArray(value))return value.slice(0,200).map(item=>auditValue(item,depth+1))
+  if(!value||typeof value!=='object')return value
+  return Object.fromEntries(Object.entries(value).map(([key,item])=>[
+    key,
+    /authorization|token|jwt|secret|apikey|api_key|panel_key/i.test(key)?'[redacted]':auditValue(item,depth+1),
+  ]))
+}
+const auditOperation = (stage: string, operation: string, detail: Record<string,unknown>) => {
+  if(!auditedOperations.has(operation))return
+  console.log(JSON.stringify(auditValue({event:'whatsapp_operation_trace',stage,operation:publicOperation(operation),internal_operation:operation,...detail})))
+}
 const templateVariables = (component: any) => {
   const content = text(component?.text, 8000)
   const positional = [...content.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map(match => Number(match[1]))
@@ -160,6 +176,7 @@ const handleRequest = async (request: Request, requestId: string) => {
     const incoming = await request.json().catch(() => null)
     if (!incoming || JSON.stringify(incoming).length > 12000) return fail('INVALID_PAYLOAD', 'Payload inválido ou acima do limite.', 413)
     const operation = text(incoming.operation, 60), route = routes[operation]
+    auditOperation('edge_received',operation,{request_id:requestId,organization_id:profile.organization_id,payload_received:incoming.payload||{}})
     console.log(JSON.stringify({event:'mugozap_request',request_id:requestId,operation,user_id:user.id,organization_id:profile.organization_id,role:profile.role,authenticated:true,status:200,duration_ms:Date.now()-requestStartedAt}))
     if (!route) return fail('INVALID_OPERATION', 'Operação não autorizada.', 400)
     if (route.write && !['admin','manager'].includes(profile.role)) return fail('FORBIDDEN', operation==='sync_templates'?'Seu perfil não pode sincronizar templates.':'Seu perfil não pode alterar conversas.', 403)
@@ -171,14 +188,18 @@ const handleRequest = async (request: Request, requestId: string) => {
       const local=await client.from('whatsapp_message_templates').select('*').eq('organization_id',profile.organization_id).eq('waba_id',wabaId).order('name')
       if(local.error)return fail('TEMPLATE_STORAGE_READ_FAILED','Não foi possível ler os templates salvos.',500)
       const templates=(local.data||[]).map((item:any)=>({...item,id:item.meta_template_id||item.id,quality:item.quality_score,lastSyncedAt:item.last_synced_at}))
-      return json({ok:true,data:{templates,last_sync:templates.reduce((latest:any,item:any)=>!latest||String(item.last_synced_at)>latest?item.last_synced_at:latest,null),source:'supabase'}})
+      const frontendBody={templates,last_sync:templates.reduce((latest:any,item:any)=>!latest||String(item.last_synced_at)>latest?item.last_synced_at:latest,null),source:'supabase'}
+      auditOperation('edge_frontend_response',operation,{request_id:requestId,organization_id:profile.organization_id,status_http:200,body_returned_to_frontend:frontendBody})
+      return json({ok:true,data:frontendBody})
     }
     if (operation === 'sync_templates' || operation === 'get_template_status') {
       const config:any=metaConfig(false)
       if(config.error)return config.error
       config.requestId=requestId
+      auditOperation('edge_upstream_request',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:`https://graph.facebook.com/${config.version}/${config.wabaId}/message_templates`,payload_sent:{fields:'template metadata',limit:100}})
       const result:any=await fetchTemplates(config)
       if(result.error)return result.error
+      auditOperation('upstream_received',operation,{request_id:requestId,organization_id:profile.organization_id,status_http:200,body_received:{templates:result.templates,pages:result.pages}})
       const now=new Date().toISOString()
       console.log(JSON.stringify({event:'meta_template_sync',request_id:requestId,operation,user_id:user.id,organization_id:profile.organization_id,waba_id:config.wabaId,meta_status:200,result:'success',templates:result.templates.length,pages:result.pages,duration_ms:Date.now()-requestStartedAt}))
       if(operation==='get_template_status'){
@@ -198,7 +219,10 @@ const handleRequest = async (request: Request, requestId: string) => {
         const deactivated=await client.from('whatsapp_message_templates').update({is_active:false,last_synced_at:now}).in('id',absentIds)
         if(deactivated.error)return fail('TEMPLATE_RECONCILIATION_FAILED','A sincronização foi salva, mas templates ausentes não puderam ser reconciliados.',500)
       }
-      return json({ok:true,data:{templates:result.templates.map((item:any)=>({...item,waba_id:config.wabaId,is_active:true,last_synced_at:now})),last_sync:now,pages:result.pages,deactivated:absentIds.length,source:'meta'}})
+      const frontendBody={templates:result.templates.map((item:any)=>({...item,waba_id:config.wabaId,is_active:true,last_synced_at:now})),last_sync:now,pages:result.pages,deactivated:absentIds.length,source:'meta'}
+      auditOperation('edge_transformed',operation,{request_id:requestId,organization_id:profile.organization_id,body_transformed:frontendBody})
+      auditOperation('edge_frontend_response',operation,{request_id:requestId,organization_id:profile.organization_id,status_http:200,body_returned_to_frontend:frontendBody})
+      return json({ok:true,data:frontendBody})
     }
     if (!apiUrl || !panelKey) return fail('MUGOZAP_CONFIGURATION_MISSING', 'A integração com o MugoZap ainda não foi configurada.', 503)
     if (!/^https?:\/\//.test(apiUrl)) return fail('MUGOZAP_CONFIGURATION_INVALID', 'A URL interna do MugoZap é inválida.', 503)
@@ -268,6 +292,7 @@ const handleRequest = async (request: Request, requestId: string) => {
     const mugoZapHeaders: Record<string,string> = { 'X-Panel-Key': panelKey, ...(body ? {'Content-Type':'application/json'} : {}) }
     if (workspaceId) mugoZapHeaders['X-Workspace-Id'] = workspaceId
     let response: Response
+    auditOperation('edge_upstream_request',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:path,payload_sent:body||null})
     try {
       response = await fetch(`${apiUrl}${path}`, { method: route.method, signal: controller.signal, headers: mugoZapHeaders, body: body ? JSON.stringify(body) : undefined })
     } catch (error) {
@@ -281,6 +306,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       clearTimeout(timeout)
     }
     const responseBody = await response.json().catch(() => null)
+    auditOperation('upstream_received',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:path,status_http:response.status,body_received:responseBody})
     console.log(JSON.stringify({event:'mugozap_upstream',request_id:requestId,operation,user_id:user.id,organization_id:profile.organization_id,method:route.method,upstream_path:path,duration_ms:Date.now()-startedAt,upstream_status:response.status,timeout_ms:timeoutMs,success:response.ok}))
     if (!response.ok) {
       if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',error_code:`MUGOZAP_${response.status}`,error_message:'O MugoZap não conseguiu concluir o envio.'}).eq('id',alertReservationId)
@@ -309,6 +335,8 @@ const handleRequest = async (request: Request, requestId: string) => {
       const providerMessageId=text(responseBody?.provider_message_id||responseBody?.message_id||responseBody?.messages?.[0]?.id,200)
       if(!providerMessageId)return fail('MESSAGE_SEND_UNCONFIRMED','O provedor não confirmou o envio. Verifique o histórico antes de tentar novamente.',502)
     }
+    auditOperation('edge_transformed',operation,{request_id:requestId,organization_id:profile.organization_id,body_transformed:responseBody})
+    auditOperation('edge_frontend_response',operation,{request_id:requestId,organization_id:profile.organization_id,status_http:200,body_returned_to_frontend:responseBody})
     return json({ ok: true, data: responseBody })
   } catch (error) {
     console.log(JSON.stringify({event:'mugozap_unhandled_error',request_id:requestId,duration_ms:Date.now()-requestStartedAt,error_name:text((error as any)?.name,80)}))
@@ -322,7 +350,7 @@ Deno.serve(async request => {
   const response=await handleRequest(request,requestId)
   const responseText=await response.text()
   let responseBody:any=responseText
-  try{responseBody=JSON.parse(responseText);if(responseBody?.ok===false)responseBody={...responseBody,request_id:requestId,details:responseBody.details||{}}}catch{/* resposta não JSON, como preflight */}
+  try{responseBody=JSON.parse(responseText);if(responseBody?.ok===false)responseBody={...responseBody,request_id:requestId,details:responseBody.details||{}};else if(responseBody?.ok===true)responseBody={...responseBody,request_id:requestId}}catch{/* resposta não JSON, como preflight */}
   const headers=new Headers(response.headers)
   headers.set('X-Request-Id',requestId)
   console.log(JSON.stringify({event:'mugozap_complete',request_id:requestId,status:response.status,duration_ms:Date.now()-startedAt,result:response.ok?'success':'error',error_code:responseBody?.code||null}))

@@ -25,6 +25,7 @@ const fmtTime = value => value ? new Intl.DateTimeFormat('pt-BR',{hour:'2-digit'
 const money = value => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(value || 0))
 const samePhone = (a,b) => normalizeBrazilianPhone(a) && normalizeBrazilianPhone(a) === normalizeBrazilianPhone(b)
 const modeLabel = item => item?.status === 'customer_replied' ? 'Cliente respondeu' : item?.status === 'waiting_customer' ? 'Aguardando resposta' : item?.awaitingHuman ? 'Aguardando atendimento' : item?.automationPaused ? 'Automação pausada' : item?.attendanceMode === 'human' || !item?.botEnabled ? 'Atendimento humano' : 'Bot ativo'
+const auditFrontend = (stage, operation, detail = {}) => console.info('[whatsapp_audit]', {event:'whatsapp_operation_trace',stage,operation,occurred_at:new Date().toISOString(),...detail})
 
 export function WhatsAppPage({ clients = [], contracts = [], installments = [], proposals = [], onNavigate = () => {}, canWrite = false, isAdmin = false }) {
   const [tab,setTab]=useState('inbox'),[conversations,setConversations]=useState([]),[selectedId,setSelectedId]=useState(''),[messages,setMessages]=useState([])
@@ -46,7 +47,9 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   const refresh = useCallback(async (quiet=false, force=false) => {
     if(!quiet)setLoading(true)
     try {
+      auditFrontend('frontend_sent','list_conversations',{payload:{limit:200},force})
       const rows=await listConversations({}, {force})
+      auditFrontend('frontend_received','list_conversations',{body_received:rows,row_count:rows.length})
       setConversations(rows);setSummary({conversations_open:rows.length});setError('')
       setSelectedId(current=>current&&rows.some(item=>item.waId===current&&hasValidConversationIdentifier(item))?current:'')
     } catch (cause) { handleOperationError(cause) } finally { if(!quiet)setLoading(false) }
@@ -58,7 +61,12 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     historyControllerRef.current=controller
     if(!hasValidConversationIdentifier(conversation)){if(conversation)setError('Identificador da conversa ausente.');return}
     setMessagesLoading(true)
-    try{const rows=await listMessages(conversation,80,{force,signal:controller.signal});if(requestId===historyRequestRef.current){setMessages(rows);setError('')}}
+    try{
+      auditFrontend('frontend_sent','get_conversation_messages',{frontend_request_id:requestId,payload:{conversation_id:conversation.id||null,wa_id:getConversationIdentifier(conversation),limit:80},force})
+      const rows=await listMessages(conversation,80,{force,signal:controller.signal})
+      auditFrontend('frontend_received','get_conversation_messages',{frontend_request_id:requestId,body_received:rows,row_count:rows.length})
+      if(requestId===historyRequestRef.current){setMessages(rows);setError('')}
+    }
     catch(cause){if(cause.name!=='AbortError'&&requestId===historyRequestRef.current){if(cause.status===403)setConnection('auth-error');if(cause.code==='UPSTREAM_TIMEOUT'||cause.status===504)setConnection('unstable');setError(cause.status===403?'Sua sessão expirou. Entre novamente no CRM.':cause.code==='UPSTREAM_TIMEOUT'||cause.status===504?'O MugoZap demorou mais que o esperado. Os dados anteriores foram preservados.':cause.message)}}
     finally{if(requestId===historyRequestRef.current)setMessagesLoading(false)}
   },[])
@@ -77,6 +85,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     return()=>{active=false;clearTimeout(timer)}
   },[selectedId,conversations,loadHistory,refresh])
   useEffect(()=>{historyEndRef.current?.scrollIntoView({block:'end'})},[messages])
+  useEffect(()=>{if(selectedId)auditFrontend('react_rendered','get_conversation_messages',{selected_id:selectedId,row_count:messages.length,message_ids:messages.map(item=>item.id)})},[selectedId,messages])
   useEffect(()=>()=>historyControllerRef.current?.abort(),[])
   useEffect(()=>{if(!isAdmin||!selectedId)return;let active=true;Promise.allSettled([getAttendanceMeta(),listWhatsAppUsers()]).then(([metaResult,usersResult])=>{if(!active)return;if(metaResult.status==='fulfilled')setMeta(metaResult.value);if(usersResult.status==='fulfilled')setUsers(usersResult.value)});return()=>{active=false}},[isAdmin,selectedId])
 

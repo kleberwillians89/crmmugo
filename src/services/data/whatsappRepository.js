@@ -9,6 +9,28 @@ const asArray = value => Array.isArray(value) ? value : []
 const cache = new Map()
 const inFlight = new Map()
 const crmAuthCodes = new Set(['AUTH_SESSION_MISSING','AUTH_INVALID_TOKEN','AUTH_BLOCKED'])
+const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation'])
+const publicOperation = operation => operation === 'list_messages' ? 'get_conversation_messages' : operation
+const safeTraceValue = (value, depth = 0) => {
+  if (depth > 5) return '[depth-limited]'
+  if (Array.isArray(value)) return value.slice(0, 200).map(item => safeTraceValue(item, depth + 1))
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    /authorization|token|jwt|secret|apikey|api_key|panel_key/i.test(key) ? '[redacted]' : safeTraceValue(item, depth + 1),
+  ]))
+}
+const trace = (stage, operation, detail = {}) => {
+  if (!auditedOperations.has(operation)) return
+  console.info('[whatsapp_audit]', safeTraceValue({
+    event: 'whatsapp_operation_trace',
+    stage,
+    operation: publicOperation(operation),
+    internal_operation: operation,
+    occurred_at: new Date().toISOString(),
+    ...detail,
+  }))
+}
 
 export class WhatsAppOperationError extends Error {
   constructor(body = {}, fallback = 'Não foi possível acessar o WhatsApp.') {
@@ -46,8 +68,14 @@ async function invoke(operation, payload = {}, options = {}) {
   const key = stableKey(operation, payload)
   const now = Date.now()
   const cached = cache.get(key)
-  if (!options.force && contract.kind === 'read' && cached && cached.expiresAt > now) return cached.value
-  if (inFlight.has(key)) return withSignal(inFlight.get(key), options.signal)
+  if (!options.force && contract.kind === 'read' && cached && cached.expiresAt > now) {
+    trace('repository_cache_hit', operation, { payload, body_received: cached.value })
+    return cached.value
+  }
+  if (inFlight.has(key)) {
+    trace('repository_inflight_join', operation, { payload })
+    return withSignal(inFlight.get(key), options.signal)
+  }
 
   const request = (async () => {
     const client = getSupabaseClient()
@@ -62,20 +90,24 @@ async function invoke(operation, payload = {}, options = {}) {
     const sessionUser = session.user || {}
     const workspaceId = clean(sessionUser.app_metadata?.workspace_id || sessionUser.workspace_id)
     const publicKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+    trace('repository_sent', operation, { payload, endpoint: 'supabase.functions.invoke:mugozap-api' })
     const { data, error } = await client.functions.invoke('mugozap-api', {
       body: { operation, payload },
       headers: buildWhatsAppHeaders(session, publicKey, workspaceId),
     })
     if (error) {
       const structured = await operationError(error)
+      trace('repository_received_error', operation, { payload, request_id: structured.requestId, status_http: structured.status, body_received: structured })
       if (crmAuthCodes.has(structured.code)) { blockWhatsAppAuth(session.access_token);invalidateWhatsAppCache() }
       throw structured
     }
     if (!data?.ok) {
       const structured = await operationError(data)
+      trace('repository_received_error', operation, { payload, request_id: structured.requestId, status_http: structured.status, body_received: data })
       if (crmAuthCodes.has(structured.code)) { blockWhatsAppAuth(session.access_token);invalidateWhatsAppCache() }
       throw structured
     }
+    trace('repository_received', operation, { payload, request_id: clean(data.request_id), status_http: 200, body_received: data.data, body_returned_to_frontend: data.data })
     if (contract.kind === 'read') cache.set(key, { value: data.data, expiresAt: Date.now() + contract.ttl })
     return data.data
   })().finally(() => inFlight.delete(key))
