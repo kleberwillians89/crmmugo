@@ -196,7 +196,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   }
   async function sendBatch(rows){const result={checked:rows.length,eligible:rows.length,sent:0,failed:0,skipped:0,reasons:[]};for(const row of rows){try{await startTemplateConversation({client_id:row.client.id,installment_id:row.item.id,phone:row.phone,template_name:'mugo_alerta_pagamento_pendente',language:'pt_BR'});result.sent+=1}catch(cause){result.failed+=1;result.reasons.push({installment_id:row.item.id,reason:cause.message})}}await refresh(true);return result}
   async function sendApprovedTemplate(payload){
-    const result=await sendTemplateMessage(payload)
+    const result=await sendTemplateMessage({...payload,idempotency_key:crypto.randomUUID(),contract_mode:'minimal'})
     const waId=getConversationIdentifier(result?.conversation||{phone:payload.recipient})
     const optimistic={id:result.message_id,provider_message_id:result.message_id,conversation_id:waId,text:`Template: ${payload.template_name}`,template_name:payload.template_name,template:true,type:'template',direction:'out',status:'accepted',createdAt:new Date().toISOString()}
     setMessages(current=>current.some(item=>item.id===optimistic.id)?current:[...current,optimistic])

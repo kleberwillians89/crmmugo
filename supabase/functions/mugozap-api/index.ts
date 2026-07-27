@@ -78,6 +78,24 @@ const templateInputsComplete = (template:any,components:any[]) => {
   for(const index of required.urlButtons)if(!components.some((item:any)=>metaStatus(item.type)==='BUTTON'&&Number(item.index)===index&&metaStatus(item.sub_type)==='URL'&&metaStatus(item.parameters?.[0]?.type)==='TEXT'))return false
   return true
 }
+const maskPhone = (value: unknown) => {
+  const phone=brazilianPhone(value)
+  return phone.length>=8?`${phone.slice(0,4)}…${phone.slice(-4)}`:'***'
+}
+const componentSummary = (components: any) => Array.isArray(components)?components.map((component:any)=>({
+  type:metaStatus(component?.type),
+  sub_type:metaStatus(component?.sub_type)||null,
+  index:text(component?.index,2)||null,
+  parameter_count:Array.isArray(component?.parameters)?component.parameters.length:0,
+  parameter_types:Array.isArray(component?.parameters)?component.parameters.map((parameter:any)=>metaStatus(parameter?.type)):[],
+})):[]
+const sanitizedMugoZapResponse = (body:any) => ({
+  message_id:text(body?.provider_message_id||body?.message_id||body?.messages?.[0]?.id,200)||null,
+  status:text(body?.status||body?.message_status,80)||null,
+  code:text(body?.code||body?.error?.code,120)||null,
+  detail:text(body?.detail||body?.message||body?.error?.message,500)||null,
+  conversation_id:text(body?.conversation?.id||body?.conversation?.wa_id,200)||null,
+})
 const sanitizedMetaError = (body: any) => ({
   code: Number(body?.error?.code || 0),
   error_subcode: Number(body?.error?.error_subcode || 0),
@@ -211,6 +229,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
 const timeoutFor = (operation: string) => {
   if (['health','list_templates','sync_templates','get_template_status','find_conversation_by_phone','get_usage','get_attendance_meta','get_dashboard_summary'].includes(operation)) return 8_000
   if (['list_conversations','list_messages','list_users'].includes(operation)) return 15_000
+  if (operation === 'send_template_message') return 12_000
   return 20_000
 }
 
@@ -362,8 +381,16 @@ const handleRequest = async (request: Request, requestId: string) => {
     }
     if(operation==='send_template_message'){
       const recipient=brazilianPhone(payload.recipient),templateName=text(payload.template_name,100),language=text(payload.language,20),components=payload.components
+      const idempotencyKey=text(payload.idempotency_key,120),contractMode=text(payload.contract_mode||'minimal',30)
       if(!recipient)return fail('INVALID_PHONE','Informe um telefone válido com DDI e DDD.',422)
       if(!/^[a-z0-9_]{1,100}$/.test(templateName)||!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(language))return fail('INVALID_TEMPLATE_REQUEST','Nome ou idioma do template inválido.',422)
+      if(!/^[A-Za-z0-9_-]{16,120}$/.test(idempotencyKey))return fail('IDEMPOTENCY_KEY_MISSING','A tentativa de envio precisa de uma chave de idempotência válida.',422)
+      const allowedModes=['minimal','body_single','body_multiple','header_text','url','copy_code','media']
+      if(!allowedModes.includes(contractMode))return fail('INVALID_CONTRACT_MODE','Modo de homologação inválido.',422)
+      const authorizedPhone=brazilianPhone(Deno.env.get('WHATSAPP_TEMPLATE_TEST_PHONE'))
+      const authorizedTemplate=text(Deno.env.get('WHATSAPP_TEMPLATE_TEST_NAME'),100)
+      if(!authorizedPhone||!authorizedTemplate)return fail('TEMPLATE_SEND_HOMOLOGATION_NOT_CONFIGURED','A homologação de templates ainda não possui alvo autorizado.',503)
+      if(recipient!==authorizedPhone||templateName!==authorizedTemplate)return fail('TEMPLATE_SEND_TARGET_FORBIDDEN','O telefone ou template não está autorizado para esta homologação.',403)
       if(!validateTemplateComponents(components)&&Array.isArray(components)&&components.length)return fail('TEMPLATE_PARAMETERS_INVALID','Preencha todas as variáveis obrigatórias do template.',422)
       const wabaId=text(Deno.env.get('WABA_ID'),80)
       const stored=await client.from('whatsapp_message_templates').select('meta_template_id,name,language,status,components,is_active').eq('organization_id',profile.organization_id).eq('waba_id',wabaId).eq('name',templateName).eq('language',language).eq('status','APPROVED').eq('is_active',true).maybeSingle()
@@ -378,7 +405,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       }
       const bodyParameters=(components||[]).find((item:any)=>metaStatus(item.type)==='BODY')?.parameters?.filter((item:any)=>metaStatus(item.type)==='TEXT').map((item:any)=>text(item.text,2000))||[]
       const couponCode=(components||[]).find((item:any)=>metaStatus(item.type)==='BUTTON'&&metaStatus(item.sub_type)==='COPY_CODE')?.parameters?.find((item:any)=>metaStatus(item.type)==='COUPON_CODE')?.coupon_code
-      verifiedPayload={wa_id:recipient,template_name:templateName,language,components,...(bodyParameters.length?{parameters:bodyParameters}:{}),...(couponCode?{coupon_code:text(couponCode,120)}:{}),source:'crm'}
+      verifiedPayload={wa_id:recipient,template_name:templateName,language,...(contractMode==='minimal'?{}:{components}),...(bodyParameters.length?{parameters:bodyParameters}:{}),...(couponCode?{coupon_code:text(couponCode,120)}:{}),source:'crm_homologation',idempotency_key:idempotencyKey}
     }
     const identifierOperations = ['list_messages','send_manual_message','assign_conversation','pause_automation','resume_automation','close_conversation']
     if (identifierOperations.includes(operation) && !identifier(payload.waId)) return fail('INVALID_CONVERSATION_ID', 'Identificador da conversa ausente.', 400)
@@ -397,6 +424,7 @@ const handleRequest = async (request: Request, requestId: string) => {
     const mugoZapHeaders: Record<string,string> = { 'X-Panel-Key': panelKey, ...(body ? {'Content-Type':'application/json'} : {}) }
     if (workspaceId) mugoZapHeaders['X-Workspace-Id'] = workspaceId
     let response: Response
+    if(operation==='send_template_message')console.log(JSON.stringify({event:'template_send_homologation_request',request_id:requestId,template_name:text(payload.template_name,100),language:text(payload.language,20),contract_mode:text(payload.contract_mode||'minimal',30),components:componentSummary(payload.components),phone_masked:maskPhone(payload.recipient),endpoint:path,method:route.method,timeout_ms:timeoutMs}))
     auditOperation('edge_upstream_request',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:path,payload_sent:body||null})
     try {
       response = await fetch(`${apiUrl}${path}`, { method: route.method, signal: controller.signal, headers: mugoZapHeaders, body: body ? JSON.stringify(body) : undefined })
@@ -411,6 +439,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       clearTimeout(timeout)
     }
     const responseBody = await response.json().catch(() => null)
+    if(operation==='send_template_message')console.log(JSON.stringify({event:'template_send_homologation_response',request_id:requestId,template_name:text(payload.template_name,100),language:text(payload.language,20),contract_mode:text(payload.contract_mode||'minimal',30),phone_masked:maskPhone(payload.recipient),endpoint:path,status_http:response.status,body:sanitizedMugoZapResponse(responseBody)}))
     auditOperation('upstream_received',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:path,status_http:response.status,body_received:responseBody})
     console.log(JSON.stringify({event:'mugozap_upstream',request_id:requestId,operation,user_id:user.id,organization_id:profile.organization_id,method:route.method,upstream_path:path,duration_ms:Date.now()-startedAt,upstream_status:response.status,timeout_ms:timeoutMs,success:response.ok}))
     if (!response.ok) {
@@ -420,6 +449,10 @@ const handleRequest = async (request: Request, requestId: string) => {
       if (detail === 'Template unavailable') return fail('TEMPLATE_NOT_CONFIGURED', 'O template ainda não está disponível na Meta.', 404, response.status)
       if (/template rejected/i.test(detail)) return fail('TEMPLATE_REJECTED', 'O template foi rejeitado pela Meta.', 409, response.status)
       if (/template paused/i.test(detail)) return fail('TEMPLATE_PAUSED', 'O template está pausado na Meta.', 409, response.status)
+      if(operation==='send_template_message'&&[400,422].includes(response.status)&&/components?|parameters?|unexpected|extra fields?/i.test(detail))return fail('MUGOZAP_COMPONENTS_UNSUPPORTED','O MugoZap não aceitou os componentes deste template.',422,response.status,false,{contract_mode:text(payload.contract_mode||'minimal',30),provider:sanitizedMugoZapResponse(responseBody)})
+      if(operation==='send_template_message'&&response.status===401)return fail('MUGOZAP_AUTH_FAILED','A autenticação com o MugoZap falhou.',502,response.status,false)
+      if(operation==='send_template_message'&&response.status===404)return fail('MUGOZAP_ENDPOINT_NOT_FOUND','O endpoint de templates do MugoZap não foi encontrado.',502,response.status,false)
+      if(operation==='send_template_message'&&[502,503,504].includes(response.status))return fail('MUGOZAP_TEMPORARY_ERROR','O MugoZap está temporariamente indisponível.',503,response.status,true)
       if (operation === 'send_manual_message') return fail('MESSAGE_SEND_FAILED', 'Não foi possível enviar a mensagem.', response.status, response.status, response.status >= 500)
       const [code,message,retryable] = upstreamFailure(response.status)
       return fail(code, message, response.status, response.status, retryable)
