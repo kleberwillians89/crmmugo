@@ -347,7 +347,7 @@ export default function App() {
   async function refreshPulse(){try{setPulseAlerts(await listPulseAlerts({status:'all'}))}catch{return}}
 
   return (
-    <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+    <div className={`app-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}${activePage==='whatsapp'?' whatsapp-shell':''}`}>
       <Sidebar
         activePage={activePage}
         onNavigate={handleNavigate}
@@ -406,7 +406,7 @@ export default function App() {
         {activePage === 'clients' && <ClientsPage />}
         {activePage === 'team' && <TeamPage />}
         {activePage === 'finance' && <FinancePage />}
-        {activePage === 'whatsapp' && <WhatsAppPage clients={clients} contracts={intelligenceData.contracts} installments={installments} proposals={proposals} onNavigate={handleNavigate} canWrite={canWrite} isAdmin={isAdmin} />}
+        {activePage === 'whatsapp' && <WhatsAppPage clients={clients} contracts={intelligenceData.contracts} installments={installments} proposals={proposals} onNavigate={handleNavigate} onAskAI={()=>setAssistantOpen(true)} canWrite={canWrite} isAdmin={isAdmin} />}
         {activePage === 'financial-reconciliation' && <FinancialReconciliationPage />}
         {activePage === 'documents' && <ImportDocumentPage onImported={handleDocumentImported} />}
         {activePage === 'diagnostic' && <SupabaseDiagnosticPage />}
@@ -424,7 +424,7 @@ export default function App() {
         {activePage.startsWith('intelligence-') && !['intelligence-attention','intelligence-today'].includes(activePage) && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} section={activePage.replace('intelligence-','')} onAskAI={()=>setAssistantOpen(true)} />}
         </>}
         </div>
-        <button type="button" className={`assistant-trigger${activePage==='whatsapp'?' whatsapp-assistant-trigger':''}`} onClick={() => setAssistantOpen(true)}><Sparkles size={16}/>Pergunte à Mugô</button>
+        {activePage!=='whatsapp'&&<button type="button" className="assistant-trigger" onClick={() => setAssistantOpen(true)}><Sparkles size={16}/>Pergunte à Mugô</button>}
         <MugoAssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} data={intelligenceData} activePage={activePage} />
         <VersionBadge />
       </main>

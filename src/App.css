@@ -48,6 +48,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .content-container { width: min(100%, 1500px); max-width: 100%; min-width: 0; margin: 0 auto; }
 .mobile-topbar { display: none; }
 
+body:has(.whatsapp-shell) { height: 100dvh; overflow: hidden; }
+.app-shell.whatsapp-shell { height: 100dvh; min-height: 0; overflow: hidden; }
+.whatsapp-shell .main-content.whatsapp-main { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.whatsapp-shell .main-content.whatsapp-main > .content-container { flex: 1 1 auto; height: auto; min-height: 0; overflow: hidden; }
+
 .sidebar { position: sticky; top: 0; z-index: 30; height: 100vh; overflow: hidden; display: flex; flex-direction: column; gap: 26px; padding: 24px 18px 18px; color: #f7fafb; background: var(--sidebar); border-right: 1px solid rgba(255,255,255,.06); transition: width var(--transition), transform var(--transition); }
 .brand-panel { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 6px; }
 .brand-copy { min-width: 0; white-space: nowrap; transition: opacity var(--transition); }
