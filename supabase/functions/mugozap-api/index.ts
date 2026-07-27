@@ -65,10 +65,43 @@ const metaConfig = (requirePhoneNumber = false) => {
   if (phoneNumberId && !/^\d+$/.test(phoneNumberId)) return { error: fail('PHONE_NUMBER_ID_INVALID', 'O Phone Number ID configurado é inválido.', 503) }
   return { wabaId, phoneNumberId, accessToken, version }
 }
-const fetchMeta = async (url: string, accessToken: string) => {
-  const response = await fetch(url, {headers:{Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(8_000)})
-  const body = await response.json().catch(() => null)
-  return {response,body}
+const fetchMeta = async (url: string, accessToken: string, diagnostic: any = null) => {
+  if(diagnostic)console.log(JSON.stringify({
+    event:'meta_sync_fetch_before',
+    request_id:diagnostic.requestId,
+    operation:'sync_templates',
+    final_url:url,
+    graph_api_version:diagnostic.version,
+    waba_id_masked:diagnostic.wabaId.length>8?`${diagnostic.wabaId.slice(0,4)}…${diagnostic.wabaId.slice(-4)}`:'***',
+    meta_access_token_length:accessToken.length,
+    method:'GET',
+    headers_without_authorization:{},
+  }))
+  try{
+    const response = await fetch(url, {method:'GET',headers:{Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(8_000)})
+    const responseText=await response.text()
+    if(diagnostic)console.log(JSON.stringify({
+      event:'meta_sync_fetch_after',
+      request_id:diagnostic.requestId,
+      operation:'sync_templates',
+      status_http:response.status,
+      response_text:responseText,
+      response_headers:Object.fromEntries(response.headers.entries()),
+    }))
+    const body=JSON.parse(responseText)
+    return {response,body,responseText}
+  }catch(error){
+    if(diagnostic)console.log(JSON.stringify({
+      event:'meta_sync_fetch_error',
+      request_id:diagnostic.requestId,
+      operation:'sync_templates',
+      error_name:text((error as any)?.name,200),
+      error_message:text((error as any)?.message,2000),
+      error_stack:String((error as any)?.stack||'').slice(0,8000),
+      error_cause:auditValue((error as any)?.cause),
+    }))
+    throw error
+  }
 }
 const fetchTemplates = async (config: any) => {
   const fields = 'id,name,language,status,category,components,quality_score,rejected_reason,previous_category,parameter_format'
@@ -77,9 +110,17 @@ const fetchTemplates = async (config: any) => {
   let page=0
   for (; url && page<100; page++) {
     let meta:any
-    try{meta=await fetchMeta(url,config.accessToken)}
+    try{meta=await fetchMeta(url,config.accessToken,config.operation==='sync_templates'?config:null)}
     catch(error){
       const timedOut=error instanceof DOMException&&error.name==='TimeoutError'
+      if(config.operation==='sync_templates')return{error:fail(
+        timedOut?'META_TIMEOUT':'META_FETCH_EXCEPTION',
+        text((error as any)?.message,500)||'A chamada à Meta lançou uma exceção.',
+        timedOut?504:502,
+        0,
+        timedOut,
+        {name:text((error as any)?.name,200),message:text((error as any)?.message,500),cause:auditValue((error as any)?.cause)},
+      )}
       return{error:fail(timedOut?'META_TIMEOUT':'META_UNAVAILABLE',timedOut?'A Meta demorou para responder.':'Não foi possível acessar a Meta.',timedOut?504:503,0,true)}
     }
     const {response,body}=meta
@@ -196,6 +237,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       const config:any=metaConfig(false)
       if(config.error)return config.error
       config.requestId=requestId
+      config.operation=operation
       auditOperation('edge_upstream_request',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:`https://graph.facebook.com/${config.version}/${config.wabaId}/message_templates`,payload_sent:{fields:'template metadata',limit:100}})
       const result:any=await fetchTemplates(config)
       if(result.error)return result.error
