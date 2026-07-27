@@ -16,8 +16,12 @@ const brazilianPhone = (value: unknown) => {
 }
 const metaStatus = (value: unknown) => text(value, 30).toUpperCase()
 const availableTemplate = (value: unknown) => metaStatus(value) === 'APPROVED'
-const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation'])
+const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation','get_template_test_access','send_template_message'])
 const publicOperation = (operation: string) => operation === 'list_messages' ? 'get_conversation_messages' : operation
+const maskAuditPhone = (value: unknown) => {
+  const digits=String(value??'').replace(/\D/g,'')
+  return digits.length>=4?`•••••••••${digits.slice(-4)}`:'[masked]'
+}
 const auditValue = (value: any, depth = 0): any => {
   if(depth>5)return '[depth-limited]'
   if(typeof value==='string')return value.slice(0,4000)
@@ -25,7 +29,11 @@ const auditValue = (value: any, depth = 0): any => {
   if(!value||typeof value!=='object')return value
   return Object.fromEntries(Object.entries(value).map(([key,item])=>[
     key,
-    /authorization|token|jwt|secret|apikey|api_key|panel_key/i.test(key)?'[redacted]':auditValue(item,depth+1),
+    /authorization|token|jwt|secret|apikey|api_key|panel_key/i.test(key)
+      ?'[redacted]'
+      :/^(recipient|phone|phone_number|wa_id)$/i.test(key)
+        ?maskAuditPhone(item)
+        :auditValue(item,depth+1),
   ]))
 }
 const auditOperation = (stage: string, operation: string, detail: Record<string,unknown>) => {
@@ -215,6 +223,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
   get_dashboard_summary: { method: 'GET', path: () => '/api/dashboard/summary' },
   start_template_conversation: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
   send_template_message: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
+  get_template_test_access: { method: 'GET', path: () => '/internal/template-test-access', admin: true },
   list_templates: { method: 'GET', path: () => '/meta/templates/local' },
   sync_templates: { method: 'GET', path: () => '/meta/templates', write: true },
   get_template_status: { method: 'GET', path: p => {
@@ -293,6 +302,42 @@ const handleRequest = async (request: Request, requestId: string) => {
       const frontendBody={templates,last_sync:templates.reduce((latest:any,item:any)=>!latest||String(item.last_synced_at)>latest?item.last_synced_at:latest,null),source:'supabase'}
       auditOperation('edge_frontend_response',operation,{request_id:requestId,organization_id:profile.organization_id,status_http:200,body_returned_to_frontend:frontendBody})
       return json({ok:true,data:frontendBody})
+    }
+    if(operation==='get_template_test_access'){
+      const recipient=brazilianPhone(payload.recipient),templateName=text(payload.template_name,100),language=text(payload.language||'pt_BR',20)
+      const authorizedPhone=brazilianPhone(Deno.env.get('WHATSAPP_TEMPLATE_TEST_PHONE')),configuredTemplate=text(Deno.env.get('WHATSAPP_TEMPLATE_TEST_NAME'),100)
+      const wabaId=text(Deno.env.get('WABA_ID'),80)
+      const stored=await client.from('whatsapp_message_templates').select('name,language,status,parameter_format,components,is_active').eq('organization_id',profile.organization_id).eq('waba_id',wabaId).eq('name',templateName).eq('language',language).maybeSingle()
+      const authorizedRecipient=Boolean(recipient&&authorizedPhone&&recipient===authorizedPhone)
+      const authorizedTemplate=Boolean(templateName&&configuredTemplate&&templateName===configuredTemplate)
+      const templateFound=Boolean(!stored.error&&stored.data)
+      const templateApproved=templateFound&&metaStatus(stored.data.status)==='APPROVED'&&stored.data.is_active!==false
+      const testModeAvailable=Boolean(authorizedPhone&&configuredTemplate&&authorizedRecipient&&authorizedTemplate&&templateApproved)
+      const reason=!authorizedPhone||!configuredTemplate
+        ?'A homologação ainda não foi configurada no servidor.'
+        :!authorizedRecipient
+          ?'Este destinatário não está autorizado para homologação.'
+          :!authorizedTemplate
+            ?'Este modelo ainda não está autorizado para teste.'
+            :!templateApproved
+              ?'Este modelo não está aprovado e ativo para esta organização.'
+              :'Homologação autorizada pelo servidor.'
+      return json({ok:true,data:{
+        allowed:testModeAvailable,
+        authenticated:true,
+        authorized_user:true,
+        authorized_recipient:authorizedRecipient,
+        authorized_template:authorizedTemplate,
+        template_found:templateFound,
+        template_status:templateFound?metaStatus(stored.data.status):null,
+        template_name:templateFound?text(stored.data.name,100):templateName,
+        language:templateFound?text(stored.data.language,20):language,
+        parameter_format:templateFound?text(stored.data.parameter_format,30)||null:null,
+        components:templateFound&&Array.isArray(stored.data.components)?stored.data.components:[],
+        components_supported:true,
+        test_mode_available:testModeAvailable,
+        reason,
+      }})
     }
     if (operation === 'sync_templates' || operation === 'get_template_status') {
       const config:any=metaConfig(false)
@@ -390,7 +435,8 @@ const handleRequest = async (request: Request, requestId: string) => {
       const authorizedPhone=brazilianPhone(Deno.env.get('WHATSAPP_TEMPLATE_TEST_PHONE'))
       const authorizedTemplate=text(Deno.env.get('WHATSAPP_TEMPLATE_TEST_NAME'),100)
       if(!authorizedPhone||!authorizedTemplate)return fail('TEMPLATE_SEND_HOMOLOGATION_NOT_CONFIGURED','A homologação de templates ainda não possui alvo autorizado.',503)
-      if(recipient!==authorizedPhone||templateName!==authorizedTemplate)return fail('TEMPLATE_SEND_TARGET_FORBIDDEN','O telefone ou template não está autorizado para esta homologação.',403)
+      if(recipient!==authorizedPhone)return fail('TEMPLATE_TEST_PHONE_FORBIDDEN','Este destinatário não está autorizado para homologação.',403)
+      if(templateName!==authorizedTemplate)return fail('TEMPLATE_TEST_NAME_FORBIDDEN','Este modelo ainda não está autorizado para teste.',403)
       if(!validateTemplateComponents(components)&&Array.isArray(components)&&components.length)return fail('TEMPLATE_PARAMETERS_INVALID','Preencha todas as variáveis obrigatórias do template.',422)
       const wabaId=text(Deno.env.get('WABA_ID'),80)
       const stored=await client.from('whatsapp_message_templates').select('meta_template_id,name,language,status,components,is_active').eq('organization_id',profile.organization_id).eq('waba_id',wabaId).eq('name',templateName).eq('language',language).eq('status','APPROVED').eq('is_active',true).maybeSingle()
