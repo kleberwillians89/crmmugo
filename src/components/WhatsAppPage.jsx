@@ -3,7 +3,7 @@ import { AlertCircle, CheckCheck, CircleDollarSign, Copy, ExternalLink, FileText
 import { FeedbackMessage } from './FeedbackMessage'
 import { PageSkeleton } from './PageSkeleton'
 import { normalizeBrazilianPhone } from '../lib/whatsapp'
-import { assignConversation, closeConversation, findConversationByPhone, getAttendanceMeta, getConversationIdentifier, hasValidConversationIdentifier, health, listConversations, listMessages, listWhatsAppUsers, pauseAutomation, resumeAutomation, sendManualMessage, sendTemplateMessage, startTemplateConversation } from '../services/data/whatsappRepository'
+import { assignConversation, closeConversation, findConversationByPhone, getAttendanceMeta, getConversationIdentifier, getTemplateTestAccess, hasValidConversationIdentifier, health, listConversations, listMessages, listWhatsAppUsers, pauseAutomation, resumeAutomation, sendManualMessage, sendTemplateMessage, startTemplateConversation } from '../services/data/whatsappRepository'
 import { updateClientPhone } from '../services/data/clientsRepository'
 import { WhatsAppPhoneModal } from './WhatsAppPhoneModal'
 import { StartWhatsAppConversationModal } from './StartWhatsAppConversationModal'
@@ -65,6 +65,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   const conversationsRef=useRef([])
   const [connection,setConnection]=useState('initializing')
   const templateSendEnabled=import.meta.env.VITE_WHATSAPP_TEMPLATE_SEND_ENABLED==='true'
+  const templateTestEnabled=import.meta.env.VITE_WHATSAPP_TEMPLATE_TEST_ENABLED==='true'
   const canCompose=canWrite||visualMock
 
   const refresh = useCallback(async (quiet=false, force=false) => {
@@ -166,7 +167,8 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
       setMessages(current=>current.map(item=>item.id===optimistic.id?{...item,id:providerMessageId||item.id,provider_message_id:providerMessageId||'',status:'sent'}:item))
       setDraft('');if(composerTextareaRef.current)composerTextareaRef.current.style.height='44px';setError('');await loadHistory(selected,true)
     }catch(cause){
-      setMessages(current=>current.map(item=>item.id===optimistic.id?{...item,status:'failed',error_message:cause.message}:item))
+      const ambiguous=cause.code==='UPSTREAM_TIMEOUT'||cause.status===504
+      setMessages(current=>current.map(item=>item.id===optimistic.id?{...item,status:ambiguous?'unknown':'failed',error_message:cause.message}:item))
       handleOperationError(cause)
     }finally{sendingRef.current=false;setSending(false)}
   }
@@ -215,22 +217,24 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   }
   async function sendBatch(rows){const result={checked:rows.length,eligible:rows.length,sent:0,failed:0,skipped:0,reasons:[]};for(const row of rows){try{await startTemplateConversation({client_id:row.client.id,installment_id:row.item.id,phone:row.phone,template_name:'mugo_alerta_pagamento_pendente',language:'pt_BR'});result.sent+=1}catch(cause){result.failed+=1;result.reasons.push({installment_id:row.item.id,reason:cause.message})}}await refresh(true);return result}
   async function sendApprovedTemplate(payload){
-    if(!selected||!isAdmin||!templateSendEnabled)throw Object.assign(new Error('A homologação de modelos não está habilitada para este perfil.'),{code:'TEMPLATE_SEND_DISABLED'})
+    if(!selected||!isAdmin||!(templateSendEnabled||templateTestEnabled))throw Object.assign(new Error('Envio de modelos ainda não está liberado para este usuário.'),{code:'TEMPLATE_SEND_DISABLED'})
     const idempotencyKey=crypto.randomUUID(),optimisticId=`template-${idempotencyKey}`
     const optimistic={id:optimisticId,idempotencyKey,conversation_id:selectedIdentifier,text:payload.preview?.body||`Modelo: ${payload.template_name}`,template_name:payload.template_name,template_display:payload.template?.display||payload.template_name,template:true,type:'template',direction:'out',status:'sending',createdAt:new Date().toISOString()}
     setMessages(current=>mergeMessages(current,[optimistic]))
     let result
-    try{result=await sendTemplateMessage({...payload,idempotency_key:idempotencyKey,contract_mode:'minimal'})}
+    const requestPayload={recipient:normalizeBrazilianPhone(payload.recipient),template_name:payload.template_name,language:payload.language||'pt_BR',components:Array.isArray(payload.components)?payload.components:[],idempotency_key:idempotencyKey,contract_mode:'minimal'}
+    try{result=await sendTemplateMessage(requestPayload)}
     catch(cause){setMessages(current=>current.map(item=>item.id===optimisticId?{...item,status:cause.code==='UPSTREAM_TIMEOUT'||cause.status===504?'unknown':'failed',error_message:cause.message}:item));throw cause}
     const waId=getConversationIdentifier(result?.conversation||{phone:payload.recipient})
     const providerMessageId=result?.provider_message_id||result?.message_id
     setMessages(current=>mergeMessages(current,[{...optimistic,id:providerMessageId||optimisticId,provider_message_id:providerMessageId||'',conversation_id:waId,status:'sent'}]))
-    setActionFeedback('Modelo confirmado pelo provedor.')
+    setActionFeedback(`Modelo enviado · ${providerMessageId}`)
     await refresh(true,true)
     if(waId)setSelectedId(waId)
     await loadHistory(selected,true)
     return result
   }
+  const checkTemplateTestAccess=template=>getTemplateTestAccess(selectedIdentifier,template.name,template.language||'pt_BR',{force:true})
 
   return <section className="whatsapp-page">
     <header className="whatsapp-compact-header"><div><h1>WhatsApp</h1><span className={`whatsapp-status-badge ${connection}`}>{loading?'Verificando':connection==='connected'?'Conectado':connection==='unstable'?'Instável':connection==='auth-error'?'Indisponível':connection==='initializing'?'Verificando':'Indisponível'}</span></div><dl><div><dt>Conversas</dt><dd>{summary.conversations_open??conversations.length}</dd></div><div><dt>Aguardando</dt><dd>{summary.waiting_human??conversations.filter(x=>x.awaitingHuman).length}</dd></div><div><dt>Bot ativo</dt><dd>{summary.bot_active??conversations.filter(x=>modeLabel(x)==='Bot ativo').length}</dd></div></dl><button className="button secondary" onClick={()=>refresh(false,true)} disabled={loading}><RefreshCw className={loading?'spin':''} size={15}/><span>{loading?'Atualizando…':'Atualizar'}</span></button></header>
@@ -257,6 +261,6 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     {startModal&&collectionTarget&&<StartWhatsAppConversationModal client={collectionTarget.client} installment={collectionTarget.installment} phone={collectionTarget.phone} canWrite={canWrite} loading={starting} syncing={templateSyncing} templateConfigured={isTemplateAvailable('mugo_alerta_pagamento_pendente',[templateStatus])} templateStatus={templateStatus.status} templateError={templateStatus.error} onClose={()=>setStartModal(false)} onStart={startCollection} onSync={syncCollectionTemplate}/>}
     {batchOpen&&<WhatsAppBatchModal installments={installments} clients={clients} contracts={contracts} alerts={collectionAlerts} templateStatus={templateStatus.status} templateAvailable={isTemplateAvailable('mugo_alerta_pagamento_pendente',[templateStatus])} onClose={()=>setBatchOpen(false)} onSend={sendBatch}/>}
     {linkModal&&selected&&<WhatsAppClientLinkModal conversation={selected} clients={clients} onClose={()=>setLinkModal(false)} onLink={linkClient}/>}
-    <WhatsAppConversationTemplateDrawer open={templateDrawerOpen} conversation={selected} client={client||{contact_name:selected?.name}} contract={clientContracts[0]} installment={openInstallments[0]} owner={selected?.owner} enabled={templateSendEnabled} authorized={isAdmin&&canWrite} templatesOverride={visualMock?whatsappVisualTemplates:null} onClose={()=>setTemplateDrawerOpen(false)} onSend={sendApprovedTemplate}/>
+    <WhatsAppConversationTemplateDrawer open={templateDrawerOpen} conversation={selected} client={client||{contact_name:selected?.name}} contract={clientContracts[0]} installment={openInstallments[0]} owner={selected?.owner} enabled={templateSendEnabled||templateTestEnabled} testMode={!templateSendEnabled&&templateTestEnabled} authorized={isAdmin&&canWrite} templatesOverride={visualMock?whatsappVisualTemplates:null} onCheckAccess={checkTemplateTestAccess} onClose={()=>setTemplateDrawerOpen(false)} onSend={sendApprovedTemplate}/>
   </section>
 }

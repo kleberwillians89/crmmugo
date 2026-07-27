@@ -1,6 +1,52 @@
 const clean = value => String(value ?? '').trim()
 const type = value => clean(value).toUpperCase()
 const variables = text => [...new Set([...clean(text).matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)].map(match => clean(match[1])))]
+const normalizedName = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR')
+const variableSnippet = (text, variable) => {
+  const source=clean(text),needle=`{{${variable}}}`,index=source.indexOf(needle)
+  if(index<0)return ''
+  return source.slice(Math.max(0,index-38),Math.min(source.length,index+needle.length+38)).trim()
+}
+const fieldMetadata = (template, variable, position) => {
+  if(template.name==='mugo_agendamento_confirmado'){
+    if(position===0)return{semantic:'name',label:'Nome do cliente',placeholder:'Ex.: Kleber Willians',inputMode:'text',type:'text'}
+    if(position===1)return{semantic:'day',label:'Dia do atendimento',placeholder:'Ex.: 10',inputMode:'numeric',type:'text'}
+    if(position===2)return{semantic:'time',label:'Horário do atendimento',placeholder:'Ex.: 20:30',inputMode:'numeric',type:'text'}
+  }
+  const name=normalizedName(variable)
+  if(/telefone|phone|celular|whatsapp/.test(name))return{semantic:'phone',label:'Telefone',placeholder:'Ex.: +55 (11) 97276-9605',inputMode:'tel',type:'tel'}
+  if(/horario|hora|time/.test(name))return{semantic:'time',label:'Horário',placeholder:'Ex.: 20:30',inputMode:'numeric',type:'text'}
+  if(/data|date|vencimento/.test(name))return{semantic:'date',label:'Data',placeholder:'Ex.: 10/08/2026',inputMode:'numeric',type:'text'}
+  if(/valor|amount|preco/.test(name))return{semantic:'currency',label:'Valor',placeholder:'Ex.: R$ 1.250,00',inputMode:'decimal',type:'text'}
+  if(/link|url/.test(name))return{semantic:'url',label:'Link',placeholder:'https://…',inputMode:'url',type:'url'}
+  if(/codigo|code|pedido|order|contrato|contract|numero/.test(name))return{semantic:'code',label:/pedido|order/.test(name)?'Número do pedido':/contrato|contract/.test(name)?'Número do contrato':'Código',placeholder:'Ex.: 00123456',inputMode:'numeric',type:'text'}
+  if(/nome|name|cliente/.test(name))return{semantic:'name',label:'Nome do cliente',placeholder:'Ex.: Kleber Willians',inputMode:'text',type:'text'}
+  return{semantic:'text',label:`Variável ${position+1}`,placeholder:'Digite o texto',inputMode:'text',type:'text'}
+}
+
+export const formatTemplateFieldOnBlur = (field, value) => {
+  const input=clean(value)
+  if(field.semantic==='time'&&/^\d{4}$/.test(input)){const formatted=`${input.slice(0,2)}:${input.slice(2)}`;return validateTemplateField(field,formatted)?input:formatted}
+  if(field.semantic==='date'&&/^\d{8}$/.test(input)){const formatted=`${input.slice(0,2)}/${input.slice(2,4)}/${input.slice(4)}`;return validateTemplateField(field,formatted)?input:formatted}
+  return value
+}
+
+export const validateTemplateField = (field, value) => {
+  const input=clean(value)
+  if(field.required&&!input)return 'Campo obrigatório.'
+  if(!input)return ''
+  if(field.semantic==='time'&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(input))return 'Use um horário válido no formato HH:mm.'
+  if(field.semantic==='date'){
+    const match=input.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+    if(!match)return 'Use uma data válida no formato DD/MM/AAAA.'
+    const date=new Date(Number(match[3]),Number(match[2])-1,Number(match[1]))
+    if(date.getFullYear()!==Number(match[3])||date.getMonth()!==Number(match[2])-1||date.getDate()!==Number(match[1]))return 'A data informada não existe.'
+  }
+  if(field.semantic==='day'&&(!/^\d{1,2}$/.test(input)||Number(input)<1||Number(input)>31))return 'Informe um dia entre 1 e 31.'
+  if(field.semantic==='phone'&&!/^[1-9]\d{11,14}$/.test(input.replace(/\D/g,'')))return 'Informe um telefone válido com DDI e DDD.'
+  if(field.semantic==='url'){try{new URL(input)}catch{return 'Informe um link completo e válido.'}}
+  return ''
+}
 
 export const templateSearchText = template => clean([
   template.display,
@@ -70,18 +116,19 @@ export function renderTemplatePreview(template = {}, fields = [], values = {}) {
 
 export function describeTemplateFields(template = {}) {
   const fields = []
+  let position=0
   for (const component of Array.isArray(template.components) ? template.components : []) {
     const componentType = type(component.type)
     if (componentType === 'HEADER') {
       const format = type(component.format)
-      for (const variable of variables(component.text)) fields.push({ key: `header_text_${variable}`, component: 'header', kind: 'text', variable, label: `Cabeçalho · ${variable}`, required: true })
+      for (const variable of variables(component.text)) {const metadata=fieldMetadata(template,variable,position++);fields.push({ id:`header_text_${variable}`,key:`header_text_${variable}`,component:'header',kind:'text',variable,required:true,snippet:variableSnippet(component.text,variable),...metadata })}
       if (['IMAGE','VIDEO','DOCUMENT'].includes(format)) fields.push({ key: `header_${format.toLowerCase()}`, component: 'header', kind: format.toLowerCase(), label: `URL do ${format.toLowerCase()}`, required: true })
     }
-    if (componentType === 'BODY') for (const variable of variables(component.text)) fields.push({ key: `body_${variable}`, component: 'body', kind: 'text', variable, label: `Corpo · ${variable}`, required: true })
+    if (componentType === 'BODY') for (const variable of variables(component.text)) {const metadata=fieldMetadata(template,variable,position++);fields.push({ id:`body_${variable}`,key:`body_${variable}`,component:'body',kind:'text',variable,required:true,snippet:variableSnippet(component.text,variable),...metadata })}
     if (componentType === 'BUTTONS' && Array.isArray(component.buttons)) component.buttons.forEach((button, index) => {
       const buttonType = type(button.type)
-      if (buttonType === 'COPY_CODE') fields.push({ key: `button_${index}_copy_code`, component: 'button', kind: 'coupon_code', index: String(index), subType: 'copy_code', label: `Código para copiar · botão ${index + 1}`, required: true })
-      if (buttonType === 'URL' && variables(button.url).length) fields.push({ key: `button_${index}_url`, component: 'button', kind: 'text', index: String(index), subType: 'url', label: `Complemento da URL · botão ${index + 1}`, required: true })
+      if (buttonType === 'COPY_CODE') fields.push({ id:`button_${index}_copy_code`,key:`button_${index}_copy_code`,component:'button',kind:'coupon_code',semantic:'code',inputMode:'numeric',type:'text',placeholder:'Ex.: 00123456',index:String(index),subType:'copy_code',label:`Código para copiar · botão ${index+1}`,required:true,snippet:clean(button.text) })
+      if (buttonType === 'URL' && variables(button.url).length) fields.push({ id:`button_${index}_url`,key:`button_${index}_url`,component:'button',kind:'text',semantic:'url',inputMode:'url',type:'url',placeholder:'https://…',index:String(index),subType:'url',label:`Complemento da URL · botão ${index+1}`,required:true,snippet:clean(button.url) })
     })
   }
   return fields
@@ -90,7 +137,8 @@ export function describeTemplateFields(template = {}) {
 export function buildTemplateComponents(fields, values = {}) {
   const groups = new Map()
   for (const field of fields) {
-    const value = clean(values[field.key])
+    const rawValue = clean(values[field.key])
+    const value = field.semantic==='phone'?rawValue.replace(/\D/g,''):rawValue
     if (!value) continue
     const key = field.component === 'button' ? `button:${field.index}` : field.component
     if (!groups.has(key)) groups.set(key, { type: field.component, ...(field.component === 'button' ? { sub_type: field.subType, index: field.index } : {}), parameters: [] })

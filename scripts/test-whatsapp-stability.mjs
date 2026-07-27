@@ -22,6 +22,14 @@ assert.equal(callbackCalls,1)
 
 const missingSessionClient={auth:{getSession:async()=>({data:{session:null},error:null})}}
 assert.equal((await resolveWhatsAppSession(missingSessionClient)).session,null)
+let refreshCalls=0
+const refreshedSession={access_token:'fresh-access-token',refresh_token:'fresh-refresh-token',expires_at:Math.floor(Date.now()/1000)+3600,user:{id:'user-test',app_metadata:{}}}
+const expiredSessionClient={auth:{
+  getSession:async()=>({data:{session:{access_token:'expired-access-token',refresh_token:'refresh-token',expires_at:1,user:{id:'user-test',app_metadata:{}}}},error:null}),
+  refreshSession:async()=>{refreshCalls+=1;return{data:{session:refreshedSession},error:null}},
+}}
+assert.equal((await resolveWhatsAppSession(expiredSessionClient)).session.access_token,'fresh-access-token')
+assert.equal(refreshCalls,1)
 const validSession={access_token:'test-access-token',user:{id:'user-test',app_metadata:{}}}
 const headers=buildWhatsAppHeaders(validSession,'public-anon-key')
 assert.equal(headers.Authorization,'Bearer test-access-token')
@@ -69,7 +77,9 @@ assert.match(page, /setTimeout\(poll,15000\)/)
 assert.match(page, /idempotencyKey=retryMessage\?\.idempotencyKey\|\|crypto\.randomUUID\(\)/)
 assert.match(page, /cause\.status===403/)
 assert.match(page, /cause\.code==='UPSTREAM_TIMEOUT'/)
+assert.match(page, /status:ambiguous\?'unknown':'failed'/)
 assert.match(page, /dados anteriores foram preservados/)
+assert.equal((page.match(/startModal&&collectionTarget&&<StartWhatsAppConversationModal/g)||[]).length,1)
 assert.match(links, /onConflict: 'organization_id,wa_id'/)
 assert.match(links, /já está vinculada a outro cliente/)
 assert.doesNotMatch(repository, /retry\s*:/)

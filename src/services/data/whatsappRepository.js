@@ -9,15 +9,24 @@ const asArray = value => Array.isArray(value) ? value : []
 const cache = new Map()
 const inFlight = new Map()
 const crmAuthCodes = new Set(['AUTH_SESSION_MISSING','AUTH_INVALID_TOKEN','AUTH_BLOCKED'])
-const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation'])
+const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation','send_template_message','get_template_test_access'])
 const publicOperation = operation => operation === 'list_messages' ? 'get_conversation_messages' : operation
+const maskTracePhone = value => {
+  const digits = String(value ?? '').replace(/\D/g, '')
+  return digits.length >= 4 ? `•••••••••${digits.slice(-4)}` : '[masked]'
+}
+
 const safeTraceValue = (value, depth = 0) => {
   if (depth > 5) return '[depth-limited]'
   if (Array.isArray(value)) return value.slice(0, 200).map(item => safeTraceValue(item, depth + 1))
   if (!value || typeof value !== 'object') return value
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [
     key,
-    /authorization|token|jwt|secret|apikey|api_key|panel_key/i.test(key) ? '[redacted]' : safeTraceValue(item, depth + 1),
+    /authorization|token|jwt|secret|apikey|api_key|panel_key/i.test(key)
+      ? '[redacted]'
+      : /^(recipient|phone|phone_number|wa_id)$/i.test(key)
+        ? maskTracePhone(item)
+        : safeTraceValue(item, depth + 1),
   ]))
 }
 const trace = (stage, operation, detail = {}) => {
@@ -211,6 +220,7 @@ export async function findConversationByPhone(phone, options) {
 }
 export const startTemplateConversation = payload => invoke('start_template_conversation', payload)
 export const sendTemplateMessage = payload => invoke('send_template_message', payload)
+export const getTemplateTestAccess = (recipient,templateName,language='pt_BR',options) => invoke('get_template_test_access', {recipient,template_name:templateName,language}, options)
 export const listStoredWhatsAppTemplates = options => invoke('list_templates', {}, options)
 export const syncWhatsAppTemplates = async options => {
   invalidateWhatsAppCache('list_templates:')

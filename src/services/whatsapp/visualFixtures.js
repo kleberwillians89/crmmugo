@@ -8,6 +8,16 @@ export const whatsappVisualTemplates=[{
   is_active:true,
   preview:'Olá, {{1}}. Confirmamos o recebimento do seu pagamento referente aos serviços da Mugô. Agradecemos pela confiança e parceria.',
   components:[{type:'BODY',text:'Olá, {{1}}. Confirmamos o recebimento do seu pagamento referente aos serviços da Mugô. Agradecemos pela confiança e parceria.'}],
+},{
+  id:'visual-template-2',
+  name:'mugo_agendamento_confirmado',
+  display:'Agendamento confirmado',
+  category:'UTILITY',
+  language:'pt_BR',
+  status:'APPROVED',
+  is_active:true,
+  preview:'Olá, {{1}}. Seu atendimento com a equipe da Mugô está confirmado para {{2}}, às {{3}}.',
+  components:[{type:'BODY',text:'Olá, {{1}}. Seu atendimento com a equipe da Mugô está confirmado para {{2}}, às {{3}}.'}],
 }]
 
 const visualNames=['Cliente Demonstração','Empresa Exemplo','Ana Martins','Bruno Costa','Clínica Horizonte','Daniel Souza','Estúdio Aurora','Fernanda Lima','Grupo Norte','Helena Alves','Instituto Soma','João Ribeiro','Loja Central','Marina Rocha','Núcleo Digital','Otávio Freitas','Projeto Uno','Renata Melo','Studio Vale','Thiago Nunes']
