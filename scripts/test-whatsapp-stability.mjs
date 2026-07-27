@@ -35,7 +35,7 @@ assert.equal(isWhatsAppAuthBlocked(),false)
 for (const operation of [
   'health','list_conversations','list_messages','send_manual_message','assign_conversation',
   'pause_automation','resume_automation','close_conversation','find_conversation_by_phone',
-  'start_template_conversation','list_templates','sync_templates','get_template_status','get_usage','batch_collection_alerts',
+  'start_template_conversation','send_template_message','list_templates','sync_templates','get_template_status','get_usage','batch_collection_alerts',
   'mark_collection_negotiation','mark_installment_paid',
 ]) assert.ok(WHATSAPP_OPERATION_CONTRACTS[operation], `Contrato ausente: ${operation}`)
 
@@ -62,9 +62,10 @@ assert.doesNotMatch(page, /setInterval/)
 assert.match(page, /hasValidConversationIdentifier/)
 assert.match(page, /sendingRef\.current/)
 assert.match(page, /historyRequestRef/)
-assert.match(page, /conversations\.find\(item=>item\.waId===selectedId\);if\(conversation\)loadHistory\(conversation\)/)
+assert.match(page, /conversationsRef\.current\.find\(item=>item\.waId===selectedId\);if\(conversation\)loadHistory\(conversation\)/)
 assert.doesNotMatch(page, /loadHistory\(selectedId\)/)
-assert.match(page, /setTimeout\(poll,10000\)/)
+assert.match(page, /setTimeout\(poll,5000\)/)
+assert.match(page, /setTimeout\(poll,15000\)/)
 assert.match(page, /idempotencyKey=retryMessage\?\.idempotencyKey\|\|crypto\.randomUUID\(\)/)
 assert.match(page, /cause\.status===403/)
 assert.match(page, /cause\.code==='UPSTREAM_TIMEOUT'/)

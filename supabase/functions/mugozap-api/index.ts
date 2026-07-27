@@ -37,6 +37,47 @@ const templateVariables = (component: any) => {
   const positional = [...content.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map(match => Number(match[1]))
   return positional.length ? Math.max(...positional) : 0
 }
+const nonEmptyTemplateParameter = (parameter: any) => {
+  const parameterType=metaStatus(parameter?.type)
+  if(parameterType==='TEXT')return Boolean(text(parameter?.text,2000))
+  if(parameterType==='COUPON_CODE')return Boolean(text(parameter?.coupon_code,120))
+  if(['IMAGE','VIDEO','DOCUMENT'].includes(parameterType))return /^https:\/\//.test(text(parameter?.[parameterType.toLowerCase()]?.link,2000))
+  return false
+}
+const validateTemplateComponents = (components: any) => Array.isArray(components)&&components.length<=20&&components.every((component:any)=>{
+  const componentType=metaStatus(component?.type),parameters=component?.parameters
+  if(!['HEADER','BODY','BUTTON'].includes(componentType)||!Array.isArray(parameters)||!parameters.length||parameters.length>20)return false
+  if(componentType==='BUTTON'&&(!/^\d{1,2}$/.test(text(component?.index,2))||!['URL','COPY_CODE'].includes(metaStatus(component?.sub_type))))return false
+  return parameters.every(nonEmptyTemplateParameter)
+})
+const requiredTemplateInputs = (template: any) => {
+  let body=0,headerText=0,headerMedia='',copyButtons:number[]=[],urlButtons:number[]=[]
+  for(const component of Array.isArray(template?.components)?template.components:[]){
+    const componentType=metaStatus(component?.type)
+    if(componentType==='BODY')body=Math.max(body,templateVariables(component))
+    if(componentType==='HEADER'){
+      headerText=Math.max(headerText,templateVariables(component))
+      const format=metaStatus(component?.format)
+      if(['IMAGE','VIDEO','DOCUMENT'].includes(format))headerMedia=format
+    }
+    if(componentType==='BUTTONS'&&Array.isArray(component.buttons))component.buttons.forEach((button:any,index:number)=>{
+      const buttonType=metaStatus(button?.type)
+      if(buttonType==='COPY_CODE')copyButtons.push(index)
+      if(buttonType==='URL'&&/\{\{[^{}]+\}\}/.test(text(button?.url,2000)))urlButtons.push(index)
+    })
+  }
+  return{body,headerText,headerMedia,copyButtons,urlButtons}
+}
+const templateInputsComplete = (template:any,components:any[]) => {
+  const required=requiredTemplateInputs(template)
+  const body=components.find((item:any)=>metaStatus(item.type)==='BODY')?.parameters||[]
+  const header=components.find((item:any)=>metaStatus(item.type)==='HEADER')?.parameters||[]
+  if(body.length<required.body||header.filter((item:any)=>metaStatus(item.type)==='TEXT').length<required.headerText)return false
+  if(required.headerMedia&&!header.some((item:any)=>metaStatus(item.type)===required.headerMedia))return false
+  for(const index of required.copyButtons)if(!components.some((item:any)=>metaStatus(item.type)==='BUTTON'&&Number(item.index)===index&&metaStatus(item.sub_type)==='COPY_CODE'&&metaStatus(item.parameters?.[0]?.type)==='COUPON_CODE'))return false
+  for(const index of required.urlButtons)if(!components.some((item:any)=>metaStatus(item.type)==='BUTTON'&&Number(item.index)===index&&metaStatus(item.sub_type)==='URL'&&metaStatus(item.parameters?.[0]?.type)==='TEXT'))return false
+  return true
+}
 const sanitizedMetaError = (body: any) => ({
   code: Number(body?.error?.code || 0),
   error_subcode: Number(body?.error?.error_subcode || 0),
@@ -155,6 +196,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
   list_users: { method: 'GET', path: () => '/api/users', admin: true },
   get_dashboard_summary: { method: 'GET', path: () => '/api/dashboard/summary' },
   start_template_conversation: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
+  send_template_message: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
   list_templates: { method: 'GET', path: () => '/meta/templates/local' },
   sync_templates: { method: 'GET', path: () => '/meta/templates', write: true },
   get_template_status: { method: 'GET', path: p => {
@@ -270,6 +312,7 @@ const handleRequest = async (request: Request, requestId: string) => {
     if (!/^https?:\/\//.test(apiUrl)) return fail('MUGOZAP_CONFIGURATION_INVALID', 'A URL interna do MugoZap é inválida.', 503)
     let alertReservationId = ''
     let verifiedPayload: unknown = undefined
+    let genericTemplateClientId = ''
     if (operation === 'start_template_conversation') {
       const clientId = text(payload.client_id, 80), installmentId = text(payload.installment_id, 80)
       const templateName = text(payload.template_name, 100), language = text(payload.language, 20)
@@ -316,6 +359,26 @@ const handleRequest = async (request: Request, requestId: string) => {
       const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,contract_id:installment.contract_id,wa_id:normalizedPhone,recipient:normalizedPhone,company_name:text(clientRow.company_name,200),meta_template_id:officialTemplate.id,template_name:templateName,template_language:language,template_status:'CHECKING',collection_stage:'sending',action:'template_send_requested',status:'sending',sent_by:user.id,origin:'collection',currency:'BRL',sanitized_payload:{to:normalizedPhone,template:{name:templateName,language,parameter_count:requiredBodyParameters,has_coupon:Boolean(couponCode)},source:'collection'}}).select('id').single()
       if (reservation.error) return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
       alertReservationId = reservation.data.id
+    }
+    if(operation==='send_template_message'){
+      const recipient=brazilianPhone(payload.recipient),templateName=text(payload.template_name,100),language=text(payload.language,20),components=payload.components
+      if(!recipient)return fail('INVALID_PHONE','Informe um telefone válido com DDI e DDD.',422)
+      if(!/^[a-z0-9_]{1,100}$/.test(templateName)||!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(language))return fail('INVALID_TEMPLATE_REQUEST','Nome ou idioma do template inválido.',422)
+      if(!validateTemplateComponents(components)&&Array.isArray(components)&&components.length)return fail('TEMPLATE_PARAMETERS_INVALID','Preencha todas as variáveis obrigatórias do template.',422)
+      const wabaId=text(Deno.env.get('WABA_ID'),80)
+      const stored=await client.from('whatsapp_message_templates').select('meta_template_id,name,language,status,components,is_active').eq('organization_id',profile.organization_id).eq('waba_id',wabaId).eq('name',templateName).eq('language',language).eq('status','APPROVED').eq('is_active',true).maybeSingle()
+      if(stored.error||!stored.data)return fail('TEMPLATE_NOT_APPROVED','Este template não está aprovado e ativo para esta organização.',409)
+      if(!templateInputsComplete(stored.data,Array.isArray(components)?components:[]))return fail('TEMPLATE_PARAMETERS_MISSING','Preencha todas as variáveis obrigatórias do template.',422)
+      genericTemplateClientId=text(payload.client_id,80)
+      if(genericTemplateClientId){
+        const linkedClient=await client.from('clients').select('id,phone,billing_contact_phone').eq('id',genericTemplateClientId).eq('organization_id',profile.organization_id).maybeSingle()
+        if(linkedClient.error||!linkedClient.data)return fail('CLIENT_NOT_FOUND','O contato selecionado não pertence à organização.',404)
+        const phones=[linkedClient.data.phone,linkedClient.data.billing_contact_phone].map(brazilianPhone).filter(Boolean)
+        if(!phones.includes(recipient))return fail('PHONE_MISMATCH','O telefone não pertence ao contato selecionado.',403)
+      }
+      const bodyParameters=(components||[]).find((item:any)=>metaStatus(item.type)==='BODY')?.parameters?.filter((item:any)=>metaStatus(item.type)==='TEXT').map((item:any)=>text(item.text,2000))||[]
+      const couponCode=(components||[]).find((item:any)=>metaStatus(item.type)==='BUTTON'&&metaStatus(item.sub_type)==='COPY_CODE')?.parameters?.find((item:any)=>metaStatus(item.type)==='COUPON_CODE')?.coupon_code
+      verifiedPayload={wa_id:recipient,template_name:templateName,language,components,...(bodyParameters.length?{parameters:bodyParameters}:{}),...(couponCode?{coupon_code:text(couponCode,120)}:{}),source:'crm'}
     }
     const identifierOperations = ['list_messages','send_manual_message','assign_conversation','pause_automation','resume_automation','close_conversation']
     if (identifierOperations.includes(operation) && !identifier(payload.waId)) return fail('INVALID_CONVERSATION_ID', 'Identificador da conversa ausente.', 400)
@@ -372,6 +435,16 @@ const handleRequest = async (request: Request, requestId: string) => {
       const alertResult = await client.from('whatsapp_collection_alerts').update({wa_id:String(conversation.wa_id||normalizedPhone),provider_message_id:providerMessageId,template_status:'APPROVED',collection_stage:'waiting_customer',action:'template_sent',status:'sent',sent_at:new Date().toISOString(),raw_response:{provider_message_id:providerMessageId,conversation_id:text(conversation.id||conversation.wa_id,200)},error_code:null,error_message:null}).eq('id',alertReservationId)
       await client.from('commercial_events').insert({organization_id:profile.organization_id,client_id:payload.client_id,installment_id:payload.installment_id,event_type:'whatsapp_collection_alert_sent',title:'Alerta de cobrança enviado pelo WhatsApp',new_value:{wa_id:String(conversation.wa_id||normalizedPhone),template_name:'mugo_alerta_pagamento_pendente',provider_message_id:providerMessageId,language:'pt_BR',source:'collection'},created_by:user.id})
       if (linkResult.error || alertResult.error) return fail('CRM_AUDIT_FAILED', 'O alerta foi enviado, mas o vínculo não pôde ser registrado. Não repita o envio.', 502)
+    }
+    if(operation==='send_template_message'){
+      const providerMessageId=text(responseBody?.provider_message_id||responseBody?.message_id||responseBody?.messages?.[0]?.id,200)
+      if(!providerMessageId)return fail('MESSAGE_SEND_UNCONFIRMED','O provedor não confirmou o envio. Verifique o histórico antes de tentar novamente.',502)
+      const conversation=responseBody?.conversation||{},recipient=brazilianPhone(payload.recipient)
+      if(genericTemplateClientId){
+        const linkResult=await client.from('whatsapp_conversation_links').upsert({organization_id:profile.organization_id,client_id:genericTemplateClientId,wa_id:String(conversation.wa_id||recipient),phone:recipient,conversation_id:String(conversation.id||conversation.wa_id||recipient)},{onConflict:'organization_id,wa_id'})
+        if(linkResult.error)return fail('CRM_AUDIT_FAILED','O template foi enviado, mas o vínculo com o contato não pôde ser registrado. Não repita o envio.',502)
+      }
+      return json({ok:true,data:{message_id:providerMessageId,status:'accepted',conversation:responseBody?.conversation||null,template_name:text(payload.template_name,100),language:text(payload.language,20),recipient}})
     }
     if(operation==='send_manual_message'){
       const providerMessageId=text(responseBody?.provider_message_id||responseBody?.message_id||responseBody?.messages?.[0]?.id,200)

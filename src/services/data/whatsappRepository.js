@@ -210,6 +210,7 @@ export async function findConversationByPhone(phone, options) {
   }
 }
 export const startTemplateConversation = payload => invoke('start_template_conversation', payload)
+export const sendTemplateMessage = payload => invoke('send_template_message', payload)
 export const listStoredWhatsAppTemplates = options => invoke('list_templates', {}, options)
 export const syncWhatsAppTemplates = async options => {
   invalidateWhatsAppCache('list_templates:')

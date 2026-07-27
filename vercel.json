@@ -1,4 +1,7 @@
 {
+  "env": {
+    "VITE_META_TOKEN_EXPIRES_AT": "2026-09-25T23:59:59-03:00"
+  },
   "routes": [
     {
       "handle": "filesystem"
