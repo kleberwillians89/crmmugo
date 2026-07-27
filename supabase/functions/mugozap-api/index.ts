@@ -89,7 +89,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
   list_conversations: { method: 'GET', path: () => '/api/conversations' },
   find_conversation_by_phone: { method: 'GET', path: p => `/api/conversations/by-phone/${encodeURIComponent(text(p.phone, 40))}` },
   list_messages: { method: 'GET', path: p => `/api/messages?wa_id=${encodeURIComponent(text(p.waId, 40))}&limit=${Math.min(Math.max(Number(p.limit) || 80, 1), 200)}` },
-  send_manual_message: { method: 'POST', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}/send`, body: p => ({ text: text(p.text, 4000) }), write: true },
+  send_manual_message: { method: 'POST', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}/send`, body: p => ({ text: text(p.text, 4000), idempotency_key:text(p.idempotencyKey,120) }), write: true },
   assign_conversation: { method: 'PATCH', path: p => `/api/attendance/conversations/${encodeURIComponent(text(p.waId, 40))}/assign`, body: p => ({ assigned_to: text(p.assignedTo, 120) }), write: true },
   pause_automation: { method: 'PATCH', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}`, body: () => ({ attendance_mode:'human', automation_paused:true, bot_enabled:false }), write: true },
   resume_automation: { method: 'POST', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}/handoff/close`, write: true },
@@ -253,6 +253,10 @@ const handleRequest = async (request: Request, requestId: string) => {
     }
     const identifierOperations = ['list_messages','send_manual_message','assign_conversation','pause_automation','resume_automation','close_conversation']
     if (identifierOperations.includes(operation) && !identifier(payload.waId)) return fail('INVALID_CONVERSATION_ID', 'Identificador da conversa ausente.', 400)
+    if(operation==='send_manual_message'){
+      if(!text(payload.text,4000))return fail('INVALID_PAYLOAD','Digite uma mensagem antes de enviar.',422)
+      if(!text(payload.idempotencyKey,120))return fail('IDEMPOTENCY_KEY_MISSING','Não foi possível identificar esta tentativa de envio.',422)
+    }
     const path = route.path(payload)
     if (!path.startsWith('/api/') && path !== '/health') return fail('INVALID_OPERATION', 'Rota não autorizada.', 403)
 
@@ -300,6 +304,10 @@ const handleRequest = async (request: Request, requestId: string) => {
       const alertResult = await client.from('whatsapp_collection_alerts').update({wa_id:String(conversation.wa_id||normalizedPhone),provider_message_id:providerMessageId,template_status:'APPROVED',collection_stage:'waiting_customer',action:'template_sent',status:'sent',sent_at:new Date().toISOString(),raw_response:{provider_message_id:providerMessageId,conversation_id:text(conversation.id||conversation.wa_id,200)},error_code:null,error_message:null}).eq('id',alertReservationId)
       await client.from('commercial_events').insert({organization_id:profile.organization_id,client_id:payload.client_id,installment_id:payload.installment_id,event_type:'whatsapp_collection_alert_sent',title:'Alerta de cobrança enviado pelo WhatsApp',new_value:{wa_id:String(conversation.wa_id||normalizedPhone),template_name:'mugo_alerta_pagamento_pendente',provider_message_id:providerMessageId,language:'pt_BR',source:'collection'},created_by:user.id})
       if (linkResult.error || alertResult.error) return fail('CRM_AUDIT_FAILED', 'O alerta foi enviado, mas o vínculo não pôde ser registrado. Não repita o envio.', 502)
+    }
+    if(operation==='send_manual_message'){
+      const providerMessageId=text(responseBody?.provider_message_id||responseBody?.message_id||responseBody?.messages?.[0]?.id,200)
+      if(!providerMessageId)return fail('MESSAGE_SEND_UNCONFIRMED','O provedor não confirmou o envio. Verifique o histórico antes de tentar novamente.',502)
     }
     return json({ ok: true, data: responseBody })
   } catch (error) {

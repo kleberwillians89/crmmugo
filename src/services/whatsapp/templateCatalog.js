@@ -2,7 +2,7 @@ import { listStoredWhatsAppTemplates, syncWhatsAppTemplates } from '../data/what
 import { isTemplateAvailable } from './templateStatus.js'
 export { isTemplateAvailable } from './templateStatus.js'
 
-export const TEMPLATE_NAMES=Object.freeze(['mugo_alerta_pagamento_pendente','mugo_pagamento_confirmado','mugo_solicitar_comprovante','mugo_aviso_renovacao_contrato','mugo_agendamento_confirmado','mugo_boas_vindas_diagnostico_v1','hello_world'])
+export const TEMPLATE_NAMES=Object.freeze(['mugo_alerta_pagamento_pendente','mugo_pagamento_confirmado','mugo_solicitar_comprovante','mugo_aviso_renovacao_contrato','mugo_agendamento_confirmado','mugo_boas_vindas_diagnostico_v1'])
 const definitions={
   mugo_alerta_pagamento_pendente:{display:'Alerta de pagamento pendente',purpose:'Cobrança',preview:'Olá, {{1}}. Tudo bem? Identificamos uma informação financeira referente aos serviços da Mugô que precisa da sua atenção. Para consultar os detalhes e as opções de pagamento, escolha uma das opções abaixo. Caso já tenha tratado esse assunto com nossa equipe, desconsidere esta mensagem.',buttons:['Consultar cobrança','Já realizei o pagamento'],footer:'',enabled:true},
   mugo_pagamento_confirmado:{display:'Pagamento confirmado',purpose:'Financeiro',preview:'Olá, {{1}}. Confirmamos o recebimento do seu pagamento referente aos serviços da Mugô. Agradecemos pela confiança e parceria. Se precisar de qualquer informação, nossa equipe está à disposição.',buttons:[],footer:'',enabled:false},

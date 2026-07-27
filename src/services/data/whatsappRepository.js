@@ -96,6 +96,8 @@ function requireIdentifier(value) {
 
 function normalizeConversation(item = {}) {
   const waId = getConversationIdentifier(item)
+  const windowExpiresAt = item.service_window_expires_at || item.customer_care_window_expires_at || item.session_expires_at || null
+  const explicitWindow = item.within_24h ?? item.service_window_open ?? item.can_send_freeform
   return {
     ...item,
     waId,
@@ -112,21 +114,46 @@ function normalizeConversation(item = {}) {
     botEnabled: item.bot_enabled !== false,
     awaitingHuman: Boolean(item.awaiting_human || item.handoff_pending || item.handoff_active),
     collection: Boolean(item.collection_pending || item.cobranca || item.billing_status),
+    serviceWindowOpen: explicitWindow === undefined || explicitWindow === null ? (windowExpiresAt ? new Date(windowExpiresAt).getTime() > Date.now() : null) : Boolean(explicitWindow),
+    serviceWindowExpiresAt: windowExpiresAt,
   }
 }
 
 function normalizeMessage(item = {}) {
-  const direction = clean(item.direction || item.dir || item.type).toLowerCase()
+  const direction = clean(item.direction || item.dir || item.message_direction).toLowerCase()
+  const messageType = clean(item.message_type || item.type || item.content?.type || 'text').toLowerCase()
+  const providerMessageId = clean(item.provider_message_id || item.message_id || item.meta_message_id || item.wa_message_id)
+  const textContent = item.content?.text?.body || item.content?.body || item.text?.body || item.text || item.message || item.body || item.caption
   return {
     ...item,
-    id: item.id || `${item.created_at || ''}-${item.text || item.message || ''}`,
-    text: clean(item.text || item.message || item.body),
-    createdAt: item.created_at || item.timestamp || null,
-    direction: ['out', 'outbound', 'sent'].includes(direction) ? 'out' : 'in',
+    id: item.id || providerMessageId || `${item.created_at || item.sent_at || item.timestamp || ''}-${clean(textContent)}`,
+    conversation_id: clean(item.conversation_id || item.chat_id || item.wa_id),
+    provider_message_id: providerMessageId,
+    text: clean(textContent),
+    media_url: clean(item.media_url || item.url || item.content?.url),
+    template_name: clean(item.template_name || item.template?.name || item.meta?.template_name),
+    sender: clean(item.sender || item.from || item.sender_id),
+    recipient: clean(item.recipient || item.to || item.recipient_id),
+    type: messageType,
+    createdAt: item.sent_at || item.created_at || item.timestamp || null,
+    sent_at: item.sent_at || item.created_at || item.timestamp || null,
+    delivered_at: item.delivered_at || null,
+    read_at: item.read_at || null,
+    failed_at: item.failed_at || null,
+    direction: ['out', 'outbound', 'sent', 'from_me'].includes(direction) || item.from_me === true ? 'out' : 'in',
     status: clean(item.status || item.delivery_status),
-    template: Boolean(item.template_name || item.is_template || item.meta?.template_name),
+    error_code: clean(item.error_code || item.error?.code),
+    error_message: clean(item.error_message || item.error?.message),
+    raw_payload: item.raw_payload || item.raw || item,
+    template: Boolean(item.template_name || item.template || item.is_template || item.meta?.template_name),
     collection: Boolean(item.collection || item.event === 'collection_reminder' || item.meta?.outbound_source === 'collection'),
   }
+}
+
+const messageRows = data => {
+  if (Array.isArray(data)) return data
+  for (const candidate of [data?.items, data?.messages, data?.data, data?.results]) if (Array.isArray(candidate)) return candidate
+  return []
 }
 
 export async function health(options) { return invoke('health', {}, options) }
@@ -137,7 +164,7 @@ export async function listConversations(filters = {}, options) {
 export async function listMessages(conversation, limit = 80, options) {
   const waId = requireIdentifier(conversation)
   const data = await invoke('list_messages', { waId, limit: Math.min(Math.max(Number(limit) || 80, 1), 200) }, options)
-  return asArray(data?.items || data).map(normalizeMessage).sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
+  return messageRows(data).map(normalizeMessage).sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
 }
 export async function findConversationByPhone(phone, options) {
   const normalized = normalizePhone(phone)
@@ -163,10 +190,10 @@ export const syncWhatsAppTemplates = async options => {
 export const getTemplateStatus = (templateName, options) => invoke('get_template_status', { template_name: templateName }, options).then(data => data?.template || { name: templateName, language: 'pt_BR', status: 'SYNC_ERROR', category: '', quality: 'UNKNOWN', error: 'Resposta inválida.' })
 export const getCollectionTemplateStatus = options => getTemplateStatus('mugo_alerta_pagamento_pendente', options)
 export const getWhatsAppUsage = (days = 30, options) => invoke('get_usage', { days }, options).then(data => data?.usage || {})
-export const sendManualMessage = (conversation, text) => {
+export const sendManualMessage = (conversation, text, idempotencyKey) => {
   const value = clean(text)
   if (!value) throw new WhatsAppOperationError({ code: 'INVALID_PAYLOAD', message: 'Digite uma mensagem antes de enviar.', status: 400 })
-  return invoke('send_manual_message', { waId: requireIdentifier(conversation), text: value })
+  return invoke('send_manual_message', { waId: requireIdentifier(conversation), text: value, idempotencyKey: clean(idempotencyKey) })
 }
 export const assignConversation = (conversation, userId) => invoke('assign_conversation', { waId: requireIdentifier(conversation), assignedTo: clean(userId) })
 export const pauseAutomation = conversation => invoke('pause_automation', { waId: requireIdentifier(conversation) })
