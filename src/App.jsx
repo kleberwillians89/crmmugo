@@ -356,7 +356,7 @@ export default function App() {
         onClose={() => setSidebarOpen(false)}
         onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
       />
-      <main className="main-content">
+      <main className={`main-content${activePage==='whatsapp'?' whatsapp-main':''}`}>
         <PulseBell alerts={pulseAlerts} onOpen={()=>handleNavigate('intelligence-attention')} />
         <div className="mobile-topbar">
           <button type="button" className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="Abrir menu">
@@ -366,7 +366,7 @@ export default function App() {
           <span aria-hidden="true" />
         </div>
         <div className="content-container">
-        <GlobalSearch clients={clients} proposals={proposals} contracts={supabaseContracts} installments={installments} onOpen={(page)=>handleNavigate(page)}/>
+        {activePage!=='whatsapp'&&<GlobalSearch clients={clients} proposals={proposals} contracts={supabaseContracts} installments={installments} onOpen={(page)=>handleNavigate(page)}/>}
         {loading && !hasLoaded ? <PageSkeleton type={activePage === 'nova' ? 'form' : activePage === 'proposals' ? 'proposals' : 'dashboard'} /> : <>
         {errorMessage && activePage !== 'nova' && !activePage.startsWith('intelligence-') && <FeedbackMessage type="error">{errorMessage}</FeedbackMessage>}
         {activePage === 'dashboard' && <><PulseDailySummary alerts={pulseAlerts} onOpen={()=>handleNavigate('intelligence-attention')}/><Dashboard proposals={proposals.map((proposal)=>({ ...proposal, proposal_status:proposal.status==='won'?'Fechada':proposal.status, contract_signed:Boolean(proposal.linkedContract?.signed), contract_start_date:proposal.linkedContract?.start_date||null, contract_end_date:proposal.linkedContract?.end_date||null, contract_term:proposal.contractTermMonths?`${proposal.contractTermMonths} meses`:'', contract_file_url:proposal.linkedContract?.id||null, setup_value:proposal.setupValue, monthly_value:proposal.monthlyValue, responsible_id:proposal.responsibleId, main_service:proposal.mainService }))} contracts={intelligenceData.contracts} installments={installments} teamMembers={teamMembers} /></>}
@@ -424,7 +424,7 @@ export default function App() {
         {activePage.startsWith('intelligence-') && !['intelligence-attention','intelligence-today'].includes(activePage) && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} section={activePage.replace('intelligence-','')} onAskAI={()=>setAssistantOpen(true)} />}
         </>}
         </div>
-        <button type="button" className="assistant-trigger" onClick={() => setAssistantOpen(true)}><Sparkles size={16}/>Pergunte à Mugô</button>
+        <button type="button" className={`assistant-trigger${activePage==='whatsapp'?' whatsapp-assistant-trigger':''}`} onClick={() => setAssistantOpen(true)}><Sparkles size={16}/>Pergunte à Mugô</button>
         <MugoAssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} data={intelligenceData} activePage={activePage} />
         <VersionBadge />
       </main>
