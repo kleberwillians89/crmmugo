@@ -50,9 +50,9 @@ Os IDs e valores abaixo são referências para preview. O snapshot não contém 
 - Candidatos: `744dd494-5eed-4429-b432-9c8f407be37c` e `de129d57-976f-42b6-a0a2-bafe7d16df13`.
 - Contrato: `71dd1456-0dd9-4b69-b77c-030b6269b24c`.
 - Atual: R$ 3.500,00/mês, dia 20; setup R$ 4.000,00.
-- Informado: R$ 5.000,00/mês; vencimento pendente.
-- Decisão necessária: (A) GIMPORTS cliente e Gabriela contato; (B) consolidar; ou (C) manter entidades separadas.
-- Bloqueio: não atualizar contrato enquanto o vencimento e a natureza jurídica/comercial não forem confirmados. Setup pago é imutável neste fluxo.
+- Confirmado comercialmente: R$ 5.000,00/mês, vencimento dia 10, recorrência mensal e status ativo.
+- Decisão necessária: (A) GIMPORTS cliente e Gabriela contato/representante; ou (B) consolidar os registros.
+- Bloqueio: definir data inicial e revisar o impacto apenas nas parcelas futuras. Setup pago de R$ 4.000,00 e mensalidades históricas de R$ 3.500,00 são imutáveis neste fluxo.
 
 ### Curavino — mudança contratual
 
@@ -65,8 +65,9 @@ Os IDs e valores abaixo são referências para preview. O snapshot não contém 
 ### Santo Circuito
 
 - Cliente: `6a25e024-0781-4cf1-a225-cd739bf34ef4` — CAFIFA/SANTO CIRCUITO.
-- Valor, vencimento e status: indefinidos.
-- Ação recomendada: manter em definição; não criar contrato nem parcelas.
+- Referência comercial: Guga. Mensalidade confirmada em R$ 5.500,00, recorrência mensal e vencimento proposto dia 15.
+- Ainda pendentes: confirmação do vencimento no contrato, data inicial, serviços, identificação do contratante, contato, documento e dados financeiros.
+- Ação recomendada: manter em definição; não criar contrato nem parcelas até a confirmação completa.
 
 ## Regras para parcelas e impacto financeiro
 
