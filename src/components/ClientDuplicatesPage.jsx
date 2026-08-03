@@ -1,14 +1,310 @@
-import { useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle2, ShieldCheck } from 'lucide-react'
-import { useAuth } from '../contexts/AuthContext'
-import { clientCompleteness, groupPossibleDuplicateClients } from '../lib/clientDeduplication'
-import { getClient, listClientsForReview } from '../services/data/clientsRepository'
-import { executeClientMerge, previewClientMerge } from '../services/data/clientMergeRepository'
-import { listConversationLinks } from '../services/data/whatsappClientLinksRepository'
-import { FeedbackMessage } from './FeedbackMessage'
-import { PageHeader } from './PageHeader'
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, Eye, ShieldCheck } from "lucide-react";
+import {
+  assistedConsolidationPlans,
+  planClientIds,
+  SNAPSHOT_ORGANIZATION_ID,
+} from "../lib/assistedConsolidationPlans";
+import {
+  clientCompleteness,
+  groupPossibleDuplicateClients,
+} from "../lib/clientDeduplication";
+import {
+  getClient,
+  listClientsForReview,
+} from "../services/data/clientsRepository";
+import { previewClientMerge } from "../services/data/clientMergeRepository";
+import { listConversationLinks } from "../services/data/whatsappClientLinksRepository";
+import { FeedbackMessage } from "./FeedbackMessage";
+import { PageHeader } from "./PageHeader";
 
-const fields=['company_name','trade_name','contact_name','document_number','email','phone','website','instagram','segment','lead_source','status','notes','billing_contact_name','billing_contact_email','billing_contact_phone','billing_contact_role','primary_responsible_id']
-const labels={company_name:'Razão/nome',trade_name:'Nome fantasia',contact_name:'Contato',document_number:'Documento',email:'E-mail',phone:'Telefone',website:'Site',instagram:'Instagram',segment:'Segmento',lead_source:'Origem',status:'Status',notes:'Observações',billing_contact_name:'Contato financeiro',billing_contact_email:'E-mail financeiro',billing_contact_phone:'Telefone financeiro',billing_contact_role:'Função financeira',primary_responsible_id:'Responsável principal'}
+const money = (value) =>
+  value == null
+    ? "Não informado"
+    : new Intl.NumberFormat("pt-BR", {
+        style: "currency",
+        currency: "BRL",
+      }).format(Number(value));
+const futureInstallments = (client, contractId) => {
+  const today = new Date().toISOString().slice(0, 10);
+  return (client?.invoice_installments || []).filter(
+    (row) => row.contract_id === contractId && row.due_date >= today,
+  );
+};
+const paidEvidence = (row) =>
+  Boolean(
+    row.paid_at || Number(row.received_amount || row.paid_amount || 0) > 0,
+  );
 
-export function ClientDuplicatesPage(){const {canWrite}=useAuth(),[clients,setClients]=useState([]),[links,setLinks]=useState([]),[selectedGroup,setSelectedGroup]=useState(null),[details,setDetails]=useState([]),[primaryId,setPrimaryId]=useState(''),[selections,setSelections]=useState({}),[preview,setPreview]=useState(null),[reason,setReason]=useState(''),[confirmation,setConfirmation]=useState(''),[understood,setUnderstood]=useState(false),[requestKey,setRequestKey]=useState(()=>crypto.randomUUID()),[error,setError]=useState(''),[message,setMessage]=useState(''),[loading,setLoading]=useState(true);const load=()=>Promise.all([listClientsForReview(),listConversationLinks().catch(()=>[])]).then(([clientRows,linkRows])=>{setClients(clientRows);setLinks(linkRows)}).catch((cause)=>setError(cause.message||'Não foi possível auditar os clientes.')).finally(()=>setLoading(false));useEffect(()=>{const timer=setTimeout(load,0);return()=>clearTimeout(timer)},[]);const groups=groupPossibleDuplicateClients(clients),priority=['amalie','roove','origami','gabi','curavino','santo circuito','ruah'],priorityAudit=priority.map((name)=>({name,matches:clients.filter((client)=>`${client.company_name} ${client.trade_name||''}`.toLowerCase().includes(name))}));async function openGroup(group){setSelectedGroup(group);setPreview(null);setError('');const loaded=await Promise.all(group.members.map((client)=>getClient(client.id)));setDetails(loaded);const suggested=[...loaded].sort((a,b)=>clientCompleteness(b)-clientCompleteness(a)||String(a.created_at).localeCompare(String(b.created_at)))[0];setPrimaryId(suggested.id);setSelections(Object.fromEntries(fields.map((field)=>[field,suggested.id])));setReason('');setConfirmation('');setUnderstood(false);setRequestKey(crypto.randomUUID())}const primary=details.find((client)=>client.id===primaryId),secondaries=details.filter((client)=>client.id!==primaryId);function selectedFields(){return Object.fromEntries(fields.map((field)=>[field,details.find((client)=>client.id===selections[field])?.[field]??null]))}async function generatePreview(){try{setPreview(await previewClientMerge(primaryId,secondaries.map((item)=>item.id)))}catch(cause){setError(cause.message||'A migration de consolidação ainda não está disponível.')}}async function merge(){if(!preview||!understood||confirmation!==primary?.company_name||reason.trim().length<10)return;try{const batch=await executeClientMerge({requestKey,primaryId,secondaryIds:secondaries.map((item)=>item.id),selectedFields:selectedFields(),reason,confirmationName:confirmation,approvedPreview:preview});setMessage(`Consolidação concluída no lote ${batch}.`);setSelectedGroup(null);setDetails([]);await load()}catch(cause){setError(cause.message||'A transação foi revertida. Nenhum vínculo parcial foi mantido.')}}const contractCandidates=details.flatMap((client)=>(client.contracts||[]).map((contract)=>({...contract,clientName:client.company_name}))),installmentCandidates=details.flatMap((client)=>(client.invoice_installments||[]).map((item)=>({...item,clientName:client.company_name}))),installmentMap=new Map();installmentCandidates.forEach((item)=>{const key=`${item.reference_month}|${item.due_date}|${Number(item.amount).toFixed(2)}`,rows=installmentMap.get(key)||[];rows.push(item);installmentMap.set(key,rows)});const suspectInstallments=[...installmentMap.values()].filter((rows)=>rows.length>1);return <div><PageHeader eyebrow="Administração" title="Possíveis duplicidades de clientes" description="Auditoria por sinais; nomes semelhantes nunca são consolidados automaticamente."/>{error&&<FeedbackMessage type="error">{error}</FeedbackMessage>}{message&&<FeedbackMessage type="success">{message}</FeedbackMessage>}<section className="duplicate-summary"><article><span>Grupos encontrados</span><strong>{groups.length}</strong></article><article><span>Cadastros envolvidos</span><strong>{new Set(groups.flatMap((group)=>group.members.map((item)=>item.id))).size}</strong></article><article><span>Prioritários encontrados</span><strong>{priorityAudit.filter((item)=>item.matches.length).length}</strong></article></section><section className="priority-audit dashboard-panel"><h2>Clientes prioritários</h2><div>{priorityAudit.map((item)=><span key={item.name}>{item.name}: {item.matches.length}</span>)}</div></section>{loading?<p>Auditando cadastros…</p>:<section className="duplicate-groups">{groups.map((group)=><article key={group.id}><header><div><strong>{group.members.map((item)=>item.company_name).join(' × ')}</strong><span>{group.level==='strong'?'Correspondência forte':'Correspondência parcial'} · pontuação {group.score}</span></div><button className="button secondary small" onClick={()=>openGroup(group)}>Revisar grupo</button></header><div>{group.matches.flatMap((match)=>match.comparison.signals).filter((signal,index,array)=>array.indexOf(signal)===index).map((signal)=><small key={signal}>{signal}</small>)}</div><footer>{group.members.map((item)=><span key={item.id}>{item.id.slice(0,8)} · {item.status} · {item.contracts?.length||0} contrato(s)</span>)}</footer></article>)}{!groups.length&&<div className="empty-state"><CheckCircle2/>Nenhum grupo atingiu o limiar de revisão.</div>}</section>}{selectedGroup&&primary&&<section className="merge-workspace"><header><div><small>Consolidação segura</small><h2>Escolha o cliente principal e revise cada campo</h2></div><button className="button secondary" onClick={()=>setSelectedGroup(null)}>Fechar</button></header><label>Cliente principal<select value={primaryId} onChange={(event)=>{setPrimaryId(event.target.value);setPreview(null)}}>{details.map((client)=><option key={client.id} value={client.id}>{client.company_name} · completude {clientCompleteness(client)}</option>)}</select></label><div className="merge-field-grid">{fields.map((field)=><label key={field}>{labels[field]}<select value={selections[field]||primaryId} onChange={(event)=>{setSelections({...selections,[field]:event.target.value});setPreview(null)}}>{details.map((client)=><option key={client.id} value={client.id}>{client.company_name}: {String(client[field]??'Não informado').slice(0,90)}</option>)}</select></label>)}</div><section className="merge-impact"><h3>Vínculos e conflitos observados</h3><div><span>{contractCandidates.length} contrato(s)</span><span>{contractCandidates.filter((item)=>item.status==='active').length} ativo(s)</span><span>{installmentCandidates.length} parcela(s)</span><span>{installmentCandidates.filter((item)=>item.status==='paid'||item.paid_at).length} paga(s), preservadas</span><span>{suspectInstallments.length} grupo(s) de parcelas semelhantes</span><span>{links.filter((link)=>details.some((client)=>client.id===link.client_id)).length} vínculo(s) WhatsApp</span><span>{details.reduce((sum,item)=>sum+(item.documents?.length||0),0)} documento(s)</span></div>{contractCandidates.filter((item)=>item.status==='active').length>1&&<FeedbackMessage type="warning">Há mais de um contrato ativo. Eles serão preservados e continuarão sob revisão; valores não serão somados como duplicidade confirmada.</FeedbackMessage>}{suspectInstallments.length>0&&<FeedbackMessage type="warning">Há parcelas com mesma competência, vencimento e valor. Nenhuma parcela será apagada ou terá valores alterados.</FeedbackMessage>}</section>{!preview?<button className="button" disabled={!canWrite} onClick={generatePreview}><ShieldCheck size={16}/>Gerar preview transacional</button>:<section className="merge-confirmation"><h3>Preview aprovado</h3><div className="merge-counts">{Object.entries(preview.counts||{}).map(([table,count])=><span key={table}>{table}: {count}</span>)}</div><label><input type="checkbox" checked={understood} onChange={(event)=>setUnderstood(event.target.checked)}/>Entendo que vínculos serão movidos e cadastros secundários serão arquivados, sem exclusão física.</label><label>Motivo<textarea value={reason} onChange={(event)=>setReason(event.target.value)} placeholder="Descreva a evidência e a decisão (mínimo 10 caracteres)"/></label><label>Digite exatamente “{primary.company_name}”<input value={confirmation} onChange={(event)=>setConfirmation(event.target.value)}/></label><button className="button danger" disabled={!canWrite||!understood||reason.trim().length<10||confirmation!==primary.company_name} onClick={merge}><AlertTriangle size={16}/>Consolidar em transação única</button></section>}</section>}<section className="dashboard-panel"><h2>Contratos e parcelas sob revisão</h2><p>Contratos distintos não são tratados automaticamente como duplicados. Nesta auditoria há {groups.reduce((sum,group)=>sum+group.members.reduce((subtotal,item)=>subtotal+(item.contracts?.length||0),0),0)} contrato(s) associados aos grupos encontrados.</p><p>Receita potencialmente repetida permanece sinalizada; nenhuma parcela paga pode ser apagada.</p></section></div>}
+export function ClientDuplicatesPage() {
+  const [clients, setClients] = useState([]),
+    [links, setLinks] = useState([]),
+    [details, setDetails] = useState([]),
+    [selected, setSelected] = useState(null),
+    [preview, setPreview] = useState(null),
+    [error, setError] = useState(""),
+    [loading, setLoading] = useState(true);
+  useEffect(() => {
+    Promise.all([
+      listClientsForReview(),
+      listConversationLinks().catch(() => []),
+    ])
+      .then(([rows, whatsapp]) => {
+        setClients(rows);
+        setLinks(whatsapp);
+      })
+      .catch((cause) =>
+        setError(
+          cause.message || "Não foi possível carregar a auditoria por RLS.",
+        ),
+      )
+      .finally(() => setLoading(false));
+  }, []);
+  const groups = useMemo(
+    () => groupPossibleDuplicateClients(clients),
+    [clients],
+  );
+  const involved = new Set(
+    groups.flatMap((group) => group.members.map((row) => row.id)),
+  );
+  const archived = clients.filter(
+    (row) => row.status === "archived" || row.deleted_at,
+  );
+  async function inspect(plan) {
+    setSelected(plan);
+    setPreview(null);
+    setError("");
+    try {
+      setDetails(await Promise.all(planClientIds(plan).map(getClient)));
+    } catch (cause) {
+      setDetails([]);
+      setError(
+        cause.message || "Não foi possível carregar os vínculos deste plano.",
+      );
+    }
+  }
+  async function readPreview() {
+    try {
+      setPreview(
+        await previewClientMerge(selected.primaryId, selected.secondaryIds),
+      );
+    } catch (cause) {
+      setError(
+        cause.message || "O preview somente leitura não pôde ser gerado.",
+      );
+    }
+  }
+  const contract = details
+    .flatMap((row) => row.contracts || [])
+    .find((row) => row.id === selected?.contractId);
+  const future = details.flatMap((row) =>
+    futureInstallments(row, selected?.contractId),
+  );
+  const futurePaid = future.filter(paidEvidence);
+  return (
+    <div>
+      <PageHeader
+        eyebrow="Administração · somente leitura"
+        title="Auditoria e consolidação assistida"
+        description="Snapshot real e dados visíveis pela sessão autenticada. Nenhuma alteração é executada nesta tela."
+      />
+      {error && <FeedbackMessage type="error">{error}</FeedbackMessage>}
+      <section className="duplicate-summary">
+        <article>
+          <span>Clientes visíveis por RLS</span>
+          <strong>{clients.length}</strong>
+        </article>
+        <article>
+          <span>Grupos suspeitos</span>
+          <strong>{groups.length}</strong>
+        </article>
+        <article>
+          <span>Cadastros envolvidos</span>
+          <strong>{involved.size}</strong>
+        </article>
+        <article>
+          <span>Arquivados</span>
+          <strong>{archived.length}</strong>
+        </article>
+      </section>
+      <FeedbackMessage type="info">
+        Modo de preparação: preview permitido; consolidação, atualização
+        contratual e geração de parcelas estão desativadas.
+      </FeedbackMessage>
+      <section className="duplicate-groups">
+        {assistedConsolidationPlans.map((plan) => {
+          const found = clients.filter((row) =>
+            planClientIds(plan).includes(row.id),
+          );
+          return (
+            <article key={plan.key}>
+              <header>
+                <div>
+                  <strong>{plan.label}</strong>
+                  <span>
+                    {plan.kind === "merge"
+                      ? "Consolidação preparada"
+                      : plan.kind === "contract-change"
+                        ? "Mudança contratual"
+                        : plan.kind === "decision"
+                          ? "Decisão pendente"
+                          : "Em definição"}{" "}
+                    · confiança {plan.confidence}
+                  </span>
+                </div>
+                <button
+                  className="button secondary small"
+                  onClick={() => inspect(plan)}
+                >
+                  <Eye size={15} />
+                  Revisar
+                </button>
+              </header>
+              <div>
+                <small>
+                  {found.length}/{planClientIds(plan).length} cadastro(s)
+                  localizados
+                </small>
+                <small>
+                  Atual: {money(plan.currentMonthly)} · dia{" "}
+                  {plan.currentBillingDay ?? "pendente"}
+                </small>
+                <small>
+                  Informado: {money(plan.proposedMonthly)} · dia{" "}
+                  {plan.proposedBillingDay ?? "pendente"}
+                </small>
+              </div>
+              <footer>
+                {found.map((row) => (
+                  <span key={row.id}>
+                    {row.company_name} · {row.status}
+                    {row.deleted_at ? " · deleted_at" : ""}
+                  </span>
+                ))}
+              </footer>
+            </article>
+          );
+        })}
+      </section>
+      {loading ? (
+        <p>Carregando dados reais…</p>
+      ) : (
+        groups.length === 0 && (
+          <div className="empty-state">
+            <CheckCircle2 />
+            Nenhum grupo adicional atingiu o limiar automático.
+          </div>
+        )
+      )}
+      {selected && (
+        <section className="merge-workspace">
+          <header>
+            <div>
+              <small>Plano {selected.label}</small>
+              <h2>Preview assistido — nenhuma escrita disponível</h2>
+            </div>
+            <button
+              className="button secondary"
+              onClick={() => {
+                setSelected(null);
+                setDetails([]);
+                setPreview(null);
+              }}
+            >
+              Fechar
+            </button>
+          </header>
+          {details.map((client) => (
+            <article className="dashboard-panel" key={client.id}>
+              <h3>{client.company_name}</h3>
+              <p>
+                {client.id} · {client.status} · completude{" "}
+                {clientCompleteness(client)} · criado{" "}
+                {String(client.created_at || "").slice(0, 10)} · atualizado{" "}
+                {String(client.updated_at || "").slice(0, 10)}
+              </p>
+              <p>
+                {(client.contracts || []).length} contrato(s) ·{" "}
+                {(client.proposals || []).length} proposta(s) ·{" "}
+                {(client.invoice_installments || []).length} parcela(s) ·{" "}
+                {(client.documents || []).length} documento(s) ·{" "}
+                {(client.commercial_events || []).length} evento(s) ·{" "}
+                {links.filter((link) => link.client_id === client.id).length}{" "}
+                vínculo(s) WhatsApp
+              </p>
+            </article>
+          ))}
+          <section className="merge-impact">
+            <h3>Contrato e parcelas potencialmente afetadas</h3>
+            <div>
+              <span>
+                Contrato:{" "}
+                {contract?.id || selected.contractId || "não definido"}
+              </span>
+              <span>
+                Mensal atual:{" "}
+                {money(contract?.monthly_value ?? selected.currentMonthly)}
+              </span>
+              <span>
+                Vencimento atual: dia{" "}
+                {contract?.billing_day ??
+                  selected.currentBillingDay ??
+                  "pendente"}
+              </span>
+              <span>Mensal informado: {money(selected.proposedMonthly)}</span>
+              <span>
+                Vencimento informado: dia{" "}
+                {selected.proposedBillingDay ?? "pendente"}
+              </span>
+              <span>Parcelas futuras: {future.length}</span>
+              <span>
+                Futuras com evidência de pagamento: {futurePaid.length}
+              </span>
+            </div>
+            {future.map((row) => (
+              <p key={row.id}>
+                <strong>{row.reference_month}</strong> · vence {row.due_date} ·{" "}
+                {money(row.amount)} · status {row.status} · recebido{" "}
+                {money(row.received_amount ?? row.paid_amount ?? 0)} ·
+                idempotência {row.idempotency_key || "ausente"}{" "}
+                {paidEvidence(row) ? "· PRESERVAR" : ""}
+              </p>
+            ))}
+            {selected.requiresStartDate && (
+              <FeedbackMessage type="warning">
+                Competência/data inicial precisa ser definida antes de qualquer
+                alteração futura.
+              </FeedbackMessage>
+            )}
+            {selected.notes.map((note) => (
+              <p key={note}>• {note}</p>
+            ))}
+          </section>
+          {selected.kind === "merge" && (
+            <button className="button secondary" onClick={readPreview}>
+              <ShieldCheck size={16} />
+              Gerar preview RPC somente leitura
+            </button>
+          )}
+          {preview && (
+            <section className="dashboard-panel">
+              <h3>Preview retornado pelo banco</h3>
+              <p>
+                Organização:{" "}
+                {preview.organization_id || SNAPSHOT_ORGANIZATION_ID}
+              </p>
+              <div className="merge-counts">
+                {Object.entries(preview.counts || {}).map(([table, count]) => (
+                  <span key={table}>
+                    {table}: {count}
+                  </span>
+                ))}
+              </div>
+              <p>Nenhuma operação foi executada.</p>
+            </section>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}

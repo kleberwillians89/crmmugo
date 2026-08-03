@@ -592,7 +592,7 @@ export function ClientsPage() {
     initial = storedFilters();
   const [items, setItems] = useState([]),
     [query, setQuery] = useState(initial.query || ""),
-    [status, setStatus] = useState(initial.status || "all"),
+    [status, setStatus] = useState(initial.status || "current"),
     [contractFilter, setContractFilter] = useState(
       initial.contractFilter || "all",
     ),
@@ -662,7 +662,10 @@ export function ClientsPage() {
         rows
           .filter(
             (client) =>
-              (status === "all" || client.status === status) &&
+              (status === "all" ||
+                (status === "current"
+                  ? client.status !== "archived" && !client.deleted_at
+                  : client.status === status)) &&
               (contractFilter === "all" ||
                 (contractFilter === "active") ===
                   Boolean(client.activeContract)) &&
@@ -774,14 +777,6 @@ export function ClientsPage() {
         eyebrow="Relacionamento comercial"
         title="Clientes"
         description="Cadastros, contratos e pendências em uma visão consolidada."
-        actions={
-          canWrite && (
-            <button className="button" onClick={() => openForm()}>
-              <Plus size={16} />
-              Novo cliente
-            </button>
-          )
-        }
       />
       {dataProvider === "legacy" && (
         <FeedbackMessage type="info">
@@ -823,7 +818,8 @@ export function ClientsPage() {
           value={status}
           onChange={(event) => setStatus(event.target.value)}
         >
-          <option value="all">Todos os status</option>
+          <option value="current">Atuais (sem arquivados)</option>
+          <option value="all">Todos, incluindo arquivados</option>
           {["lead", "active", "inactive", "former", "archived"].map((value) => (
             <option key={value}>{value}</option>
           ))}
