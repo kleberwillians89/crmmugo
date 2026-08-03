@@ -52,6 +52,7 @@ import { AccountsPayablePage, CashFlowPage, ClientContractReviewPage, FinanceSum
 import { FinancialPageLayout } from './components/FinancialPageLayout'
 import { FinancialSettingsPage } from './components/FinancialSettingsPage'
 import { FinancialImportPage } from './components/FinancialImportPage'
+import { ClientDuplicatesPage } from './components/ClientDuplicatesPage'
 
 const initialFormState = {
   client_id: '',
@@ -405,6 +406,7 @@ export default function App() {
         {activePage === 'organization-settings' && <OrganizationSettingsPage />}
         {['expense-categories','cost-centers','financial-accounts'].includes(activePage) && <FinancialSettingsPage section={activePage}/>}
         {activePage === 'financial-import' && <FinancialImportPage/>}
+        {activePage === 'client-duplicates' && <ClientDuplicatesPage/>}
         {activePage === 'commercial-trash' && <CommercialTrashPage />}
         {activePage === 'commercial-integrity' && <CommercialIntegrityPage />}
         {activePage === 'system-audit' && <SystemAuditPage />}

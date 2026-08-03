@@ -34,6 +34,7 @@ export const NAVIGATION_GROUPS = [
     { id: 'cost-centers', label: 'Centros de custo', icon: CircleDollarSign }, { id: 'financial-accounts', label: 'Contas financeiras', icon: Landmark },
     { id: 'financial-import', label: 'Importação financeira', icon: FileInput },
     { id: 'client-contract-review', label: 'Revisão de clientes', icon: ClipboardCheck },
+    { id: 'client-duplicates', label: 'Duplicidades de clientes', icon: Users },
     { id: 'system-audit', label: 'Auditoria', icon: ShieldCheck }, { id: 'backup', label: 'Backup', icon: DatabaseBackup },
     { id: 'restore', label: 'Restauração', icon: FileClock }, { id: 'diagnostic', label: 'Diagnóstico', icon: Settings2 },
   ] },

@@ -14,6 +14,7 @@ export const APP_ROUTES = {
   'intelligence-health': '/intelligence/saude', 'intelligence-ai': '/intelligence/ia',
   'system-audit': '/administracao/auditoria', backup: '/administracao/backup', restore: '/administracao/restauracao',
   diagnostic: '/administracao/diagnostico', 'crm-health': '/administracao/saude',
+  'client-duplicates': '/administracao/duplicidades-clientes',
 }
 
 export const ROUTE_ALIASES = {

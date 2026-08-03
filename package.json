@@ -33,7 +33,7 @@
     "test:whatsapp-projection": "node scripts/test-whatsapp-connection-projection.mjs && node tests/whatsapp-projection-signature.test.mjs && node tests/whatsapp-connection-outbox-worker.test.mjs",
     "test:whatsapp-demo": "node scripts/test-whatsapp-demo-stability.mjs",
     "test:temporal": "node scripts/test-sprint15-1-temporal.mjs",
-    "test:crm-v2": "node tests/crm-v2-expenses.test.mjs && node tests/crm-v2-structure.test.mjs && node tests/crm-v2-import.test.mjs"
+    "test:crm-v2": "node tests/crm-v2-expenses.test.mjs && node tests/crm-v2-structure.test.mjs && node tests/crm-v2-import.test.mjs && node tests/crm-v2-client-deduplication.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.3",
