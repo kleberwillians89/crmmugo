@@ -16,8 +16,10 @@ const brazilianPhone = (value: unknown) => {
 }
 const metaStatus = (value: unknown) => text(value, 30).toUpperCase()
 const availableTemplate = (value: unknown) => metaStatus(value) === 'APPROVED'
-const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation','get_template_test_access','send_template_message'])
+const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation','get_template_test_access','send_template_message','list_whatsapp_connections','get_whatsapp_connection','get_whatsapp_connection_health','validate_whatsapp_connection','resolve_whatsapp_connection_shadow'])
 const publicOperation = (operation: string) => operation === 'list_messages' ? 'get_conversation_messages' : operation
+let upstreamFailureCount=0
+let upstreamCircuitOpenUntil=0
 const maskAuditPhone = (value: unknown) => {
   const digits=String(value??'').replace(/\D/g,'')
   return digits.length>=4?`•••••••••${digits.slice(-4)}`:'[masked]'
@@ -210,6 +212,7 @@ const fetchTemplates = async (config: any) => {
 
 const routes: Record<string, { method: string, path: (payload: any) => string, body?: (payload: any) => unknown, write?: boolean, admin?: boolean }> = {
   health: { method: 'GET', path: () => '/health' },
+  health_check: { method: 'GET', path: () => '/health' },
   list_conversations: { method: 'GET', path: () => '/api/conversations' },
   find_conversation_by_phone: { method: 'GET', path: p => `/api/conversations/by-phone/${encodeURIComponent(text(p.phone, 40))}` },
   list_messages: { method: 'GET', path: p => `/api/messages?wa_id=${encodeURIComponent(text(p.waId, 40))}&limit=${Math.min(Math.max(Number(p.limit) || 80, 1), 200)}` },
@@ -233,6 +236,11 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
     return `/api/templates/${encodeURIComponent(name)}?language=pt_BR`
   } },
   get_usage: { method: 'GET', path: p => `/api/whatsapp/usage?days=${Math.min(Math.max(Number(p.days)||30,1),366)}` },
+  list_whatsapp_connections: { method: 'GET', path: () => '/internal/v2/connections' },
+  get_whatsapp_connection: { method: 'GET', path: () => '/internal/v2/connections' },
+  get_whatsapp_connection_health: { method: 'GET', path: () => '/internal/v2/connections' },
+  validate_whatsapp_connection: { method: 'GET', path: () => '/internal/v2/connections' },
+  resolve_whatsapp_connection_shadow: { method: 'GET', path: () => '/internal/v2/connections' },
 }
 
 const timeoutFor = (operation: string) => {
@@ -286,13 +294,50 @@ const handleRequest = async (request: Request, requestId: string) => {
 
     const incoming = await request.json().catch(() => null)
     if (!incoming || JSON.stringify(incoming).length > 12000) return fail('INVALID_PAYLOAD', 'Payload inválido ou acima do limite.', 413)
-    const operation = text(incoming.operation, 60), route = routes[operation]
+    const requestedOperation=text(incoming.operation,60)
+    const operationAliases:Record<string,string>={get_conversation_messages:'list_messages',send_template:'send_template_message'}
+    const operation = operationAliases[requestedOperation]||requestedOperation, route = routes[operation]
     auditOperation('edge_received',operation,{request_id:requestId,organization_id:profile.organization_id,payload_received:incoming.payload||{}})
     console.log(JSON.stringify({event:'mugozap_request',request_id:requestId,operation,user_id:user.id,organization_id:profile.organization_id,role:profile.role,authenticated:true,status:200,duration_ms:Date.now()-requestStartedAt}))
     if (!route) return fail('INVALID_OPERATION', 'Operação não autorizada.', 400)
     if (route.write && !['admin','manager'].includes(profile.role)) return fail('FORBIDDEN', operation==='sync_templates'?'Seu perfil não pode sincronizar templates.':'Seu perfil não pode alterar conversas.', 403)
     if (route.admin && profile.role !== 'admin') return fail('FORBIDDEN', 'Somente administradores podem consultar usuários do WhatsApp.', 403)
     const payload = incoming.payload || {}
+    const connectionOperations = new Set(['list_whatsapp_connections','get_whatsapp_connection','get_whatsapp_connection_health','validate_whatsapp_connection','resolve_whatsapp_connection_shadow'])
+    if(connectionOperations.has(operation)){
+      const enabled=text(Deno.env.get('WHATSAPP_CONNECTIONS_V2')||'false',10).toLowerCase()==='true'
+      if(!enabled)return fail('WHATSAPP_CONNECTIONS_V2_DISABLED','O registro multicliente ainda não está habilitado.',404)
+      const connectionId=text(payload.connection_id,80)
+      if(operation!=='list_whatsapp_connections'&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(connectionId)){
+        return fail('INVALID_CONNECTION_ID','Identificador de conexão inválido.',400)
+      }
+      if(operation==='list_whatsapp_connections'){
+        const result=await client.from('whatsapp_connections_public').select('id,provider,display_phone_number,verified_name,status,connection_health,capabilities,last_sync_at,last_health_check_at,created_at,updated_at').order('created_at')
+        if(result.error)return fail('CONNECTION_REGISTRY_UNAVAILABLE','O registro de conexões está indisponível.',503)
+        return json({ok:true,data:{items:result.data||[]}})
+      }
+      if(operation==='resolve_whatsapp_connection_shadow'){
+        const mode=text(Deno.env.get('WHATSAPP_CONNECTIONS_V2_READ_MODE')||'shadow',20).toLowerCase()
+        if(mode!=='shadow')return fail('CONNECTION_SHADOW_MODE_REQUIRED','A resolução comparativa não está disponível neste modo.',409)
+        const result=await client.rpc('resolve_whatsapp_connection_shadow',{p_connection_id:connectionId,p_legacy_workspace_id:authorizedWorkspace})
+        if(result.error)return fail('CONNECTION_REGISTRY_UNAVAILABLE','O registro de conexões está indisponível.',503)
+        const connection=result.data?.[0]
+        if(!connection)return fail('CONNECTION_NOT_FOUND','Conexão não encontrada.',404)
+        return json({ok:true,data:{connection:{...connection,workspace_match:Boolean(connection.workspace_match)},mode:'shadow'}})
+      }
+      const result=await client.rpc('get_whatsapp_connection_public',{p_connection_id:connectionId})
+      if(result.error)return fail('CONNECTION_REGISTRY_UNAVAILABLE','O registro de conexões está indisponível.',503)
+      const connection=result.data?.[0]
+      if(!connection)return fail('CONNECTION_NOT_FOUND','Conexão não encontrada.',404)
+      if(operation==='get_whatsapp_connection_health'){
+        return json({ok:true,data:{id:connection.id,status:connection.status,connection_health:connection.connection_health||{},last_health_check_at:connection.last_health_check_at}})
+      }
+      if(operation==='validate_whatsapp_connection'){
+        const valid=connection.status==='active'
+        return json({ok:true,data:{id:connection.id,valid,status:connection.status,provider:connection.provider,capabilities:connection.capabilities||{},error_code:valid?null:`CONNECTION_${String(connection.status||'configuration_missing').toUpperCase()}`}})
+      }
+      return json({ok:true,data:{connection}})
+    }
     if (operation === 'list_templates') {
       const wabaId=text(Deno.env.get('WABA_ID'),80)
       if(!wabaId||!/^\d+$/.test(wabaId))return fail('WABA_ID_INVALID','O WABA ID não foi configurado corretamente no backend.',503)
@@ -464,16 +509,30 @@ const handleRequest = async (request: Request, requestId: string) => {
 
     const timeoutMs = timeoutFor(operation)
     const startedAt = Date.now()
-    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), timeoutMs)
     const body = verifiedPayload || (route.body ? route.body(payload) : undefined)
     if (body && JSON.stringify(body).length > 8000) return fail('PAYLOAD_TOO_LARGE', 'Conteúdo acima do limite permitido.', 413)
     const mugoZapHeaders: Record<string,string> = { 'X-Panel-Key': panelKey, ...(body ? {'Content-Type':'application/json'} : {}) }
     if (workspaceId) mugoZapHeaders['X-Workspace-Id'] = workspaceId
-    let response: Response
+    let response: Response | undefined
     if(operation==='send_template_message')console.log(JSON.stringify({event:'template_send_homologation_request',request_id:requestId,template_name:text(payload.template_name,100),language:text(payload.language,20),contract_mode:text(payload.contract_mode||'minimal',30),components:componentSummary(payload.components),phone_masked:maskPhone(payload.recipient),endpoint:path,method:route.method,timeout_ms:timeoutMs}))
     auditOperation('edge_upstream_request',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:path,payload_sent:body||null})
     try {
-      response = await fetch(`${apiUrl}${path}`, { method: route.method, signal: controller.signal, headers: mugoZapHeaders, body: body ? JSON.stringify(body) : undefined })
+      if(Date.now()<upstreamCircuitOpenUntil)return fail('UPSTREAM_CIRCUIT_OPEN','O MugoZap está se recuperando. Tente novamente em instantes.',503,0,true)
+      const maxRetries=route.method==='GET'?2:0
+      let lastError:any
+      for(let attempt=0;attempt<=maxRetries;attempt++){
+        const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),timeoutMs)
+        try{
+          response=await fetch(`${apiUrl}${path}`, { method: route.method, signal: controller.signal, headers: mugoZapHeaders, body: body ? JSON.stringify(body) : undefined })
+          if(response.ok||response.status<500||attempt===maxRetries)break
+        }catch(error){lastError=error;if(attempt===maxRetries)throw error}
+        finally{clearTimeout(timeout)}
+        await new Promise(resolve=>setTimeout(resolve,250*(2**attempt)))
+      }
+      if(!response)throw lastError||new Error('UPSTREAM_NO_RESPONSE')
+      if(response.ok)upstreamFailureCount=0
+      else if(response.status>=500)upstreamFailureCount+=1
+      if(upstreamFailureCount>=5){upstreamCircuitOpenUntil=Date.now()+30_000;upstreamFailureCount=0}
     } catch (error) {
       if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',error_code:'MUGOZAP_REQUEST_FAILED',error_message:'Serviço do WhatsApp indisponível.'}).eq('id',alertReservationId)
       const durationMs = Date.now() - startedAt
@@ -481,8 +540,6 @@ const handleRequest = async (request: Request, requestId: string) => {
       console.log(JSON.stringify({event:'mugozap_upstream',request_id:requestId,operation,user_id:user.id,organization_id:profile.organization_id,method:route.method,upstream_path:path,duration_ms:durationMs,upstream_status:0,timeout_ms:timeoutMs,success:false}))
       if (timedOut) return fail(operation === 'health' ? 'UPSTREAM_COLD_START' : 'UPSTREAM_TIMEOUT', operation === 'health' ? 'O serviço está inicializando. Tente novamente em alguns segundos.' : 'O MugoZap demorou para responder.', 504, 0, true)
       return fail('UPSTREAM_UNAVAILABLE', 'O MugoZap está temporariamente indisponível.', 503, 0, true)
-    } finally {
-      clearTimeout(timeout)
     }
     const responseBody = await response.json().catch(() => null)
     if(operation==='send_template_message')console.log(JSON.stringify({event:'template_send_homologation_response',request_id:requestId,template_name:text(payload.template_name,100),language:text(payload.language,20),contract_mode:text(payload.contract_mode||'minimal',30),phone_masked:maskPhone(payload.recipient),endpoint:path,status_http:response.status,body:sanitizedMugoZapResponse(responseBody)}))
@@ -502,6 +559,24 @@ const handleRequest = async (request: Request, requestId: string) => {
       if (operation === 'send_manual_message') return fail('MESSAGE_SEND_FAILED', 'Não foi possível enviar a mensagem.', response.status, response.status, response.status >= 500)
       const [code,message,retryable] = upstreamFailure(response.status)
       return fail(code, message, response.status, response.status, retryable)
+    }
+    if(operation==='health_check'){
+      const [lastTemplateSync,pendingOutbox,connectionResult]=await Promise.all([
+        client.from('whatsapp_message_templates').select('last_synced_at').eq('organization_id',profile.organization_id).order('last_synced_at',{ascending:false}).limit(1).maybeSingle(),
+        client.from('whatsapp_connection_outbox').select('id',{count:'exact',head:true}).eq('organization_id',profile.organization_id).in('status',['pending','failed']),
+        client.from('whatsapp_connections_public').select('id,status').limit(1).maybeSingle(),
+      ])
+      return json({ok:true,data:{
+        edge_function:'online',
+        supabase:'online',
+        mugozap_backend:response.ok?'online':'unavailable',
+        meta_configured:Boolean(Deno.env.get('WABA_ID')&&Deno.env.get('META_ACCESS_TOKEN')&&Deno.env.get('GRAPH_API_VERSION')),
+        whatsapp_connection_found:Boolean(connectionResult.data),
+        whatsapp_connection_status:connectionResult.data?.status||null,
+        last_template_sync:lastTemplateSync.data?.last_synced_at||null,
+        pending_projection_events:Number(pendingOutbox.count||0),
+        timestamp:new Date().toISOString(),
+      }})
     }
     if (operation === 'start_template_conversation') {
       const sent:any = responseBody || {}, conversation = sent.conversation || {}, normalizedPhone = brazilianPhone(payload.phone)
@@ -544,9 +619,14 @@ Deno.serve(async request => {
   const response=await handleRequest(request,requestId)
   const responseText=await response.text()
   let responseBody:any=responseText
-  try{responseBody=JSON.parse(responseText);if(responseBody?.ok===false)responseBody={...responseBody,request_id:requestId,details:responseBody.details||{}};else if(responseBody?.ok===true)responseBody={...responseBody,request_id:requestId}}catch{/* resposta não JSON, como preflight */}
+  const durationMs=Date.now()-startedAt
+  try{
+    responseBody=JSON.parse(responseText)
+    if(responseBody?.ok===false)responseBody={...responseBody,request_id:requestId,duration_ms:durationMs,details:responseBody.details||{}}
+    else if(responseBody?.ok===true)responseBody={code:'OK',message:'Operação concluída.',...responseBody,request_id:requestId,duration_ms:durationMs}
+  }catch{/* resposta não JSON, como preflight */}
   const headers=new Headers(response.headers)
   headers.set('X-Request-Id',requestId)
-  console.log(JSON.stringify({event:'mugozap_complete',request_id:requestId,status:response.status,duration_ms:Date.now()-startedAt,result:response.ok?'success':'error',error_code:responseBody?.code||null}))
+  console.log(JSON.stringify({event:'mugozap_complete',request_id:requestId,status:response.status,duration_ms:durationMs,result:response.ok?'success':'error',error_code:responseBody?.code||null}))
   return new Response(typeof responseBody==='string'?responseBody:JSON.stringify(responseBody),{status:response.status,headers})
 })

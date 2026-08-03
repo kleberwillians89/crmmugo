@@ -17,7 +17,8 @@ Entregar o atendimento WhatsApp estável, seguro e utilizável em desktop e mobi
 - A verificação restrita `get_template_test_access` está publicada e exige administrador autenticado e vinculado à organização.
 - A última tentativa de verificação não chegou à Edge porque a sessão do navegador estava expirada.
 - `VITE_WHATSAPP_TEMPLATE_SEND_ENABLED` permanece `false`.
-- O frontend de homologação ainda não foi publicado.
+- O frontend restrito de homologação foi publicado pelo commit `9d05ca1954472a9869166f487ffaac910ab7a71a`.
+- `VITE_WHATSAPP_TEMPLATE_TEST_ENABLED` está ativo no deployment de homologação.
 - Nenhuma mensagem ou template foi enviado durante esta missão.
 - Há mudanças locais preexistentes do frontend, preservadas e ainda sem commit.
 
@@ -99,6 +100,10 @@ Entregar o atendimento WhatsApp estável, seguro e utilizável em desktop e mobi
 ## Próximo checkpoint
 
 Checkpoint obrigatório: sessão administrativa autenticada no CRM. Depois do login, executar somente `get_template_test_access`. Se qualquer indicador for falso, interromper. Se todos forem verdadeiros, apresentar o resultado e solicitar aprovação para o deploy do frontend.
+
+### Tentativa de validação autenticada
+
+Em 2026-07-27, a sessão administrativa foi confirmada na aba publicada do CRM. O frontend restrito com `get_template_test_access` foi publicado com sucesso. A automação direta da aba continua bloqueada pela configuração segura do Chrome que desativa JavaScript por Eventos da Apple; nenhum JWT foi extraído. A verificação deve ser disparada pela seleção do template no próprio drawer autenticado, sem confirmar envio.
 
 ## Rollback
 

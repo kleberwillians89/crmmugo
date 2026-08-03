@@ -1,4 +1,4 @@
-import { getSupabaseClient } from '../../lib/supabase/client.js'
+import { getSupabaseClient, getSupabasePublicConfig } from '../../lib/supabase/client.js'
 import { getConversationIdentifier, RETRYABLE_WHATSAPP_CODES, WHATSAPP_OPERATION_CONTRACTS } from '../whatsapp/operationContracts.js'
 import { blockWhatsAppAuth, buildWhatsAppHeaders, isWhatsAppAuthBlocked, resolveWhatsAppSession } from '../whatsapp/authGuard.js'
 export { getConversationIdentifier, hasValidConversationIdentifier } from '../whatsapp/operationContracts.js'
@@ -98,7 +98,7 @@ async function invoke(operation, payload = {}, options = {}) {
     if (isWhatsAppAuthBlocked()) throw new WhatsAppOperationError({ code: 'AUTH_BLOCKED', message: 'Sua sessão expirou. Entre novamente no CRM.', status: 403 })
     const sessionUser = session.user || {}
     const workspaceId = clean(sessionUser.app_metadata?.workspace_id || sessionUser.workspace_id)
-    const publicKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+    const publicKey = getSupabasePublicConfig().key
     trace('repository_sent', operation, { payload, endpoint: 'supabase.functions.invoke:mugozap-api' })
     const { data, error } = await client.functions.invoke('mugozap-api', {
       body: { operation, payload },
@@ -198,6 +198,7 @@ const messageRows = data => {
 }
 
 export async function health(options) { return invoke('health', {}, options) }
+export async function getWhatsAppSystemHealth(options) { return invoke('health_check', {}, options) }
 export async function listConversations(filters = {}, options) {
   const data = await invoke('list_conversations', { limit: Math.min(Number(filters.limit) || 200, 200) }, options)
   return asArray(data?.items || data).map(normalizeConversation).sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))

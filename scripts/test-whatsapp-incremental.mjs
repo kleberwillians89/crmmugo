@@ -27,7 +27,7 @@ assert.equal(normalizeTemplateRecipient('(11) 99999-9999'),'')
 const edge=fs.readFileSync(new URL('../supabase/functions/mugozap-api/index.ts',import.meta.url),'utf8')
 for(const token of ['send_template_message','TEMPLATE_NOT_APPROVED','TEMPLATE_PARAMETERS_INVALID','TEMPLATE_PARAMETERS_MISSING','provider_message_id'])assert.match(edge,new RegExp(token))
 const page=fs.readFileSync(new URL('../src/components/WhatsAppPage.jsx',import.meta.url),'utf8')
-for(const token of ['postgres_changes','removeChannel','visibilityState','5000','15000','mergeMessages','shouldAutoScrollRef'])assert.match(page,new RegExp(token))
+for(const token of ['postgres_changes','removeChannel','visibilityState','30000','60000','mergeMessages','shouldAutoScrollRef','realtimeConnectedRef'])assert.match(page,new RegExp(token))
 assert.match(page,/import\.meta\.env\.DEV/)
 assert.doesNotMatch(page,/META_ACCESS_TOKEN/)
 

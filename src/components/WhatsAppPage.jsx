@@ -19,9 +19,12 @@ import { WhatsAppClientLinkModal } from './WhatsAppClientLinkModal'
 import { WhatsAppConversationTemplateDrawer } from './WhatsAppConversationTemplateDrawer'
 import { whatsappVisualConversations, whatsappVisualMessages, whatsappVisualTemplates } from '../services/whatsapp/visualFixtures'
 import { getSupabaseClient } from '../lib/supabase/client'
+import { WhatsAppAutomationPanel } from './WhatsAppAutomationPanel'
+import { WhatsAppAiPanel } from './WhatsAppAiPanel'
+import { WhatsAppSystemStatusPanel } from './WhatsAppSystemStatusPanel'
 import './WhatsAppPage.css'
 
-const tabs = [['inbox','Caixa de entrada'],['collections','Cobranças'],['contacts','Contatos'],['templates','Modelos'],['usage','Uso e custos']]
+const tabs = [['inbox','Caixa de entrada'],['collections','Cobranças'],['contacts','Contatos'],['templates','Modelos'],['usage','Uso e custos'],['automations','Automações'],['ai','IA'],['status','Status']]
 const fmtTime = value => value ? new Intl.DateTimeFormat('pt-BR',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'}).format(new Date(value)) : '—'
 const money = value => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(value || 0))
 const samePhone = (a,b) => normalizeBrazilianPhone(a) && normalizeBrazilianPhone(a) === normalizeBrazilianPhone(b)
@@ -63,10 +66,14 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   const composerTextareaRef=useRef(null)
   const shouldAutoScrollRef=useRef(true)
   const conversationsRef=useRef([])
+  const selectedIdRef=useRef(selectedId)
+  const realtimeConnectedRef=useRef(false)
   const [connection,setConnection]=useState('initializing')
+  const [realtimeState,setRealtimeState]=useState('connecting')
   const templateSendEnabled=import.meta.env.VITE_WHATSAPP_TEMPLATE_SEND_ENABLED==='true'
   const templateTestEnabled=import.meta.env.VITE_WHATSAPP_TEMPLATE_TEST_ENABLED==='true'
-  const canCompose=canWrite||visualMock
+  const demoMode=import.meta.env.VITE_WHATSAPP_DEMO_MODE==='true'
+  const canCompose=(canWrite||visualMock)&&!demoMode
 
   const refresh = useCallback(async (quiet=false, force=false) => {
     if(visualMock){setConversations(visualConversations);setSummary({conversations_open:visualConversations.length});setLoading(false);return}
@@ -99,6 +106,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   useEffect(()=>{refresh();Promise.allSettled([listCollectionAlerts(),getOrganizationSettings(),listConversationLinks()]).then(([alertsResult,settingsResult,linksResult])=>{if(alertsResult.status==='fulfilled')setCollectionAlerts(alertsResult.value);if(settingsResult.status==='fulfilled')setSettings(settingsResult.value);if(linksResult.status==='fulfilled')setConversationLinks(linksResult.value)})},[refresh])
   useEffect(()=>{let active=true;health().then(()=>active&&setConnection('connected')).catch(error=>active&&setConnection(error.code==='UPSTREAM_COLD_START'?'initializing':error.code==='UPSTREAM_UNAUTHORIZED'?'auth-error':'unavailable'));return()=>{active=false}},[])
   useEffect(()=>{conversationsRef.current=conversations},[conversations])
+  useEffect(()=>{selectedIdRef.current=selectedId},[selectedId])
   useEffect(()=>{setMessages([]);shouldAutoScrollRef.current=true;const conversation=conversationsRef.current.find(item=>item.waId===selectedId);if(conversation)loadHistory(conversation)},[selectedId,loadHistory])
   useEffect(()=>{
     if(!selectedId||visualMock)return
@@ -106,31 +114,36 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     const poll=async()=>{
       const conversation=conversationsRef.current.find(item=>item.waId===selectedId)
       if(document.visibilityState==='visible'&&conversation)await loadHistory(conversation,true)
-      if(active)timer=setTimeout(poll,document.visibilityState==='visible'?5000:30000)
+      if(active)timer=setTimeout(poll,realtimeConnectedRef.current?60000:30000)
     }
     realtimeLog('fallback_polling',{resource:'active_conversation'})
-    timer=setTimeout(poll,5000)
+    timer=setTimeout(poll,30000)
     return()=>{active=false;clearTimeout(timer)}
   },[selectedId,loadHistory,visualMock])
   useEffect(()=>{
     if(visualMock)return
     let active=true,timer
-    const poll=async()=>{if(document.visibilityState==='visible')await refresh(true,true);if(active)timer=setTimeout(poll,document.visibilityState==='visible'?15000:60000)}
+    const poll=async()=>{if(document.visibilityState==='visible')await refresh(true,true);if(active)timer=setTimeout(poll,realtimeConnectedRef.current?60000:30000)}
     realtimeLog('fallback_polling',{resource:'conversation_list'})
-    timer=setTimeout(poll,15000)
+    timer=setTimeout(poll,30000)
     return()=>{active=false;clearTimeout(timer)}
   },[refresh,visualMock])
   useEffect(()=>{
     if(visualMock)return
     const supabase=getSupabaseClient()
     if(!supabase)return
-    const onChange=payload=>{realtimeLog(payload.table==='whatsapp_collection_alerts'?'message_insert':'conversation_update',{eventType:payload.eventType});refresh(true,true);const conversation=conversationsRef.current.find(item=>item.waId===selectedId);if(conversation)loadHistory(conversation,true)}
-    const channel=supabase.channel(`whatsapp-crm-${crypto.randomUUID()}`)
+    const onChange=payload=>{realtimeLog(payload.table==='whatsapp_collection_alerts'?'message_insert':'conversation_update',{eventType:payload.eventType});refresh(true,true);const conversation=conversationsRef.current.find(item=>item.waId===selectedIdRef.current);if(conversation)loadHistory(conversation,true)}
+    const channel=supabase.channel('whatsapp-crm-singleton')
       .on('postgres_changes',{event:'*',schema:'public',table:'whatsapp_collection_alerts'},onChange)
       .on('postgres_changes',{event:'*',schema:'public',table:'whatsapp_conversation_links'},onChange)
-      .subscribe(status=>realtimeLog(status==='SUBSCRIBED'?'connected':status==='CLOSED'?'disconnected':'fallback_polling',{status}))
-    return()=>{realtimeLog('disconnected');supabase.removeChannel(channel)}
-  },[loadHistory,refresh,selectedId,visualMock])
+      .subscribe(status=>{
+        const next=status==='SUBSCRIBED'?'online':status==='CHANNEL_ERROR'||status==='TIMED_OUT'?'fallback':status==='CLOSED'?'unavailable':'reconnecting'
+        realtimeConnectedRef.current=next==='online'
+        setRealtimeState(next)
+        realtimeLog(next,{status})
+      })
+    return()=>{realtimeConnectedRef.current=false;realtimeLog('disconnected');supabase.removeChannel(channel)}
+  },[loadHistory,refresh,visualMock])
   useEffect(()=>{if(shouldAutoScrollRef.current)historyEndRef.current?.scrollIntoView({block:'end'})},[messages])
   useEffect(()=>{if(selectedId)auditFrontend('react_rendered','get_conversation_messages',{selected_id:selectedId,row_count:messages.length,message_ids:messages.map(item=>item.id)})},[selectedId,messages])
   useEffect(()=>()=>historyControllerRef.current?.abort(),[])
@@ -148,13 +161,14 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
 
   function handleOperationError(cause){const message=cause.status===403&&['AUTH_SESSION_MISSING','AUTH_INVALID_TOKEN','AUTH_BLOCKED'].includes(cause.code)?'Sua sessão expirou. Entre novamente no CRM.':cause.code==='UPSTREAM_TIMEOUT'||cause.status===504?'O MugoZap demorou mais que o esperado. Os dados anteriores foram preservados.':cause.message;setError(`${message}${cause.requestId?` Protocolo: ${cause.requestId}.`:''}`);if(['AUTH_SESSION_MISSING','AUTH_INVALID_TOKEN','AUTH_BLOCKED'].includes(cause.code))setConnection('auth-error');else if(cause.code==='UPSTREAM_TIMEOUT'||cause.status===504)setConnection('unstable')}
   async function signInAgain(){await getSupabaseClient()?.auth.signOut();window.location.reload()}
-  async function mutate(action,success='Ação concluída.'){if(!selected||!canWrite||actionRef.current||typeof action!=='function')return;actionRef.current=true;try{setError('');setActionFeedback('');await action();setActionFeedback(success);await refresh(true,true)}catch(cause){handleOperationError(cause)}finally{actionRef.current=false}}
+  async function mutate(action,success='Ação concluída.'){if(demoMode){setActionFeedback('Modo demonstração: esta ação não foi executada.');return}if(!selected||!canWrite||actionRef.current||typeof action!=='function')return;actionRef.current=true;try{setError('');setActionFeedback('');await action();setActionFeedback(success);await refresh(true,true)}catch(cause){handleOperationError(cause)}finally{actionRef.current=false}}
   async function linkClient(clientId,options){const link=await linkConversationToClient(selected,clientId,options);setConversationLinks(current=>[...current.filter(item=>item.wa_id!==link.wa_id),link]);setActionFeedback('Conversa vinculada ao cliente.')}
   async function unlinkClient(){if(!selectedLink||!window.confirm('Desvincular esta conversa do cliente?'))return;await unlinkConversation(selected);setConversationLinks(current=>current.filter(item=>item.wa_id!==selectedIdentifier));setActionFeedback('Vínculo removido.')}
   function handleTabKey(event,index){if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;setTab(tabs[next][0]);event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[next]?.focus()}
   async function send(event, retryMessage=null){
     event?.preventDefault()
     const text=(retryMessage?.text||draft).trim()
+    if(demoMode){setActionFeedback('Modo demonstração: nenhuma mensagem foi enviada.');return}
     if(!selected||!hasValidConversationIdentifier(selected)||!text||sendingRef.current||!canWrite)return
     if(selected.serviceWindowOpen===false){setError('A janela de atendimento está encerrada. Use um modelo aprovado para retomar a conversa.');setTemplateDrawerOpen(true);return}
     sendingRef.current=true;setSending(true);optimisticIdRef.current+=1
@@ -237,7 +251,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   const checkTemplateTestAccess=template=>getTemplateTestAccess(selectedIdentifier,template.name,template.language||'pt_BR',{force:true})
 
   return <section className="whatsapp-page">
-    <header className="whatsapp-compact-header"><div><h1>WhatsApp</h1><span className={`whatsapp-status-badge ${connection}`}>{loading?'Verificando':connection==='connected'?'Conectado':connection==='unstable'?'Instável':connection==='auth-error'?'Indisponível':connection==='initializing'?'Verificando':'Indisponível'}</span></div><dl><div><dt>Conversas</dt><dd>{summary.conversations_open??conversations.length}</dd></div><div><dt>Aguardando</dt><dd>{summary.waiting_human??conversations.filter(x=>x.awaitingHuman).length}</dd></div><div><dt>Bot ativo</dt><dd>{summary.bot_active??conversations.filter(x=>modeLabel(x)==='Bot ativo').length}</dd></div></dl><button className="button secondary" onClick={()=>refresh(false,true)} disabled={loading}><RefreshCw className={loading?'spin':''} size={15}/><span>{loading?'Atualizando…':'Atualizar'}</span></button></header>
+    <header className="whatsapp-compact-header"><div><h1>WhatsApp</h1><span className={`whatsapp-status-badge ${connection}`}>{loading?'Verificando':connection==='connected'?'Conectado':connection==='unstable'?'Instável':connection==='auth-error'?'Indisponível':connection==='initializing'?'Verificando':'Indisponível'}</span><small>Realtime: {realtimeState==='online'?'online':realtimeState==='connecting'?'conectando':realtimeState==='reconnecting'?'reconectando':realtimeState==='fallback'?'modo fallback':'indisponível'}</small></div><dl><div><dt>Conversas</dt><dd>{summary.conversations_open??conversations.length}</dd></div><div><dt>Aguardando</dt><dd>{summary.waiting_human??conversations.filter(x=>x.awaitingHuman).length}</dd></div><div><dt>Bot ativo</dt><dd>{summary.bot_active??conversations.filter(x=>modeLabel(x)==='Bot ativo').length}</dd></div></dl><button className="button secondary" onClick={()=>refresh(false,true)} disabled={loading}><RefreshCw className={loading?'spin':''} size={15}/><span>{loading?'Atualizando…':'Atualizar'}</span></button></header>
     <nav className="whatsapp-tabs" role="tablist" aria-label="Áreas do WhatsApp">{tabs.map(([id,label],index)=><button key={id} role="tab" aria-selected={tab===id} tabIndex={tab===id?0:-1} className={tab===id?'active':''} onKeyDown={event=>handleTabKey(event,index)} onClick={()=>setTab(id)}>{label}</button>)}</nav>
     {error&&<FeedbackMessage type="error">{error}</FeedbackMessage>}
     {connection==='auth-error'&&<button className="button whatsapp-sign-in-again" onClick={signInAgain}>Entrar novamente</button>}
@@ -257,6 +271,9 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     {tab==='collections'&&<button className="button secondary whatsapp-batch-trigger" onClick={()=>setBatchOpen(true)}>Envio em lote</button>}
     {tab==='templates'&&<WhatsAppTemplatesPanel clients={clients} onSendTemplate={sendApprovedTemplate} onStatusesChanged={templates=>{const template=templates.find(item=>item.name==='mugo_alerta_pagamento_pendente');if(template)setTemplateStatus(template)}}/>}
     {tab==='usage'&&<WhatsAppUsagePanel/>}
+    {tab==='automations'&&<WhatsAppAutomationPanel/>}
+    {tab==='ai'&&<WhatsAppAiPanel/>}
+    {tab==='status'&&<WhatsAppSystemStatusPanel/>}
     {phoneModal&&collectionTarget&&<WhatsAppPhoneModal client={collectionTarget.client} onClose={()=>setPhoneModal(false)} onSave={savePhone}/>}
     {startModal&&collectionTarget&&<StartWhatsAppConversationModal client={collectionTarget.client} installment={collectionTarget.installment} phone={collectionTarget.phone} canWrite={canWrite} loading={starting} syncing={templateSyncing} templateConfigured={isTemplateAvailable('mugo_alerta_pagamento_pendente',[templateStatus])} templateStatus={templateStatus.status} templateError={templateStatus.error} onClose={()=>setStartModal(false)} onStart={startCollection} onSync={syncCollectionTemplate}/>}
     {batchOpen&&<WhatsAppBatchModal installments={installments} clients={clients} contracts={contracts} alerts={collectionAlerts} templateStatus={templateStatus.status} templateAvailable={isTemplateAvailable('mugo_alerta_pagamento_pendente',[templateStatus])} onClose={()=>setBatchOpen(false)} onSend={sendBatch}/>}

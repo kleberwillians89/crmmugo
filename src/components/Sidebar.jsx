@@ -1,49 +1,14 @@
-import {
-  Building2,
-  ChevronLeft,
-  ClipboardCheck,
-  FileText,
-  Library,
-  Users,
-  WalletCards,
-  Upload,
-  LogOut,
-  SlidersHorizontal,
-  LayoutDashboard,
-  BellRing,
-  CalendarDays,
-  Lightbulb,
-  MessageCircle,
-  X,
-} from 'lucide-react'
+import { useState } from 'react'
+import { Building2, ChevronDown, ChevronLeft, LogOut, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { MugoBrand } from './brand/MugoBrand'
 import { NAVIGATION_LABELS } from '../config/navigationLabels'
 import { statusLabel } from '../config/statusLabels'
-
-const groups = [
-  { label: 'Operação', links: [
-    { id: 'dashboard', label: 'Painel', icon: LayoutDashboard },
-    { id: 'clients', label: 'Clientes', icon: Users },
-    { id: 'proposals', label: 'Propostas', icon: FileText },
-    { id: 'contracts', label: 'Contratos', icon: ClipboardCheck },
-    { id: 'finance', label: 'Financeiro', icon: WalletCards },
-  ] },
-  { label: 'Comunicação', links: [{ id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, supabaseOnly: true }] },
-  { label: 'Gestão', links: [
-    { id: 'intelligence-today', label: 'Hoje', icon: CalendarDays },
-    { id: 'intelligence-attention', label: 'Atenção', icon: BellRing, supabaseOnly: true },
-    { id: 'intelligence-insights', label: 'Insights', icon: Lightbulb },
-  ] },
-  { label: 'Configuração', links: [
-    { id: 'services', label: 'Serviços', icon: Library },
-    { id: 'documents', label: 'Documentos', icon: Upload },
-    { id: 'organization-settings', label: 'Configurações', icon: SlidersHorizontal, adminOnly: true, supabaseOnly: true },
-  ] },
-]
+import { NAVIGATION_GROUPS } from '../config/navigationGroups'
 
 export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onToggleCollapse }) {
   const { isLegacy, signOut, profile, loading: profileLoading } = useAuth()
+  const [closedGroups, setClosedGroups] = useState({})
   function navigate(id) {
     onNavigate(id)
     onClose()
@@ -66,10 +31,12 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
         </button>
       </div>
       <nav className="sidebar-nav">
-        {groups.map((group) => (
+        {NAVIGATION_GROUPS.filter((group)=>!group.adminOnly||profileLoading||profile?.role==='admin').map((group) => (
           <div className="nav-group" key={group.label}>
-            <p className="nav-group-label">{group.label}</p>
-            {group.links.filter((link)=>!link.supabaseOnly||!isLegacy).filter((link)=>!link.adminOnly||profileLoading||profile?.role==='admin').map((link) => {
+            <button type="button" className="nav-group-label" onClick={()=>setClosedGroups((current)=>({...current,[group.id]:!current[group.id]}))} aria-expanded={!closedGroups[group.id]}>
+              <span>{group.label}</span><ChevronDown size={13}/>
+            </button>
+            {!closedGroups[group.id]&&group.links.filter((link)=>!link.supabaseOnly||!isLegacy).filter((link)=>!link.adminOnly||profileLoading||profile?.role==='admin').map((link) => {
               const Icon = link.icon
               return (
                 <button

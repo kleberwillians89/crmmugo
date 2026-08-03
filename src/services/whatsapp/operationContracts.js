@@ -1,5 +1,6 @@
 export const WHATSAPP_OPERATION_CONTRACTS = Object.freeze({
   health: { kind: 'read', ttl: 60_000 },
+  health_check: { kind: 'read', ttl: 60_000 },
   list_conversations: { kind: 'read', ttl: 30_000 },
   list_messages: { kind: 'read', ttl: 15_000, identifier: true },
   send_manual_message: { kind: 'write', identifier: true },

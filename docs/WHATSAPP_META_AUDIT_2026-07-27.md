@@ -4,6 +4,9 @@
 
 `WhatsAppTemplatesPanel` usa `templateCatalog.js`, que chama
 `whatsappRepository.js`. O repositório envia uma operação autenticada para a Edge
+
+
+2
 Function `mugozap-api`. A função valida o JWT e o `profile`, consulta a Graph API
 com `WABA_ID`, persiste o catálogo no Supabase e devolve os dados ao frontend.
 Conversas, mensagens, envio efetivo, webhook e métricas continuam pertencendo ao

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import {readFileSync} from 'node:fs'
 const read=(path)=>readFileSync(new URL(`../${path}`,import.meta.url),'utf8')
-const foundation=read('supabase/migrations/202607130001_sprint7_foundation.sql'),integration=read('supabase/migrations/202607140003_sprint13_5_commercial_integration.sql'),architecture=read('supabase/migrations/202607170002_crm_information_architecture.sql'),app=read('src/App.jsx'),proposal=read('src/components/ProposalForm.jsx'),search=read('src/components/GlobalSearch.jsx'),sidebar=read('src/components/Sidebar.jsx'),dashboard=read('src/components/Dashboard.jsx'),today=read('src/components/TodayPage.jsx')
+const foundation=read('supabase/migrations/202607130001_sprint7_foundation.sql'),integration=read('supabase/migrations/202607140003_sprint13_5_commercial_integration.sql'),architecture=read('supabase/migrations/202607170002_crm_information_architecture.sql'),app=read('src/App.jsx'),proposal=read('src/components/ProposalForm.jsx'),search=read('src/components/GlobalSearch.jsx'),sidebar=read('src/components/Sidebar.jsx'),navigation=read('src/config/navigationGroups.js'),dashboard=read('src/components/Dashboard.jsx'),today=read('src/components/TodayPage.jsx')
 assert.match(foundation,/proposals\([^;]*client_id uuid not null references public\.clients/s)
 assert.match(foundation,/contracts\([^;]*client_id uuid not null references public\.clients[^;]*proposal_id uuid references public\.proposals/s)
 assert.match(foundation,/invoice_installments\([^;]*client_id uuid not null references public\.clients[^;]*contract_id uuid not null references public\.contracts/s)
@@ -10,7 +10,8 @@ assert.match(integration,/on conflict\(organization_id,contract_id,installment_t
 assert.match(proposal,/structuredClients\?<Field label="Cliente" name="client_id"/)
 assert.doesNotMatch(proposal,/structuredClients\?<[^]*Telefone[^]*E-mail/)
 assert.match(app,/clients=\{clients\}/)
-for(const label of['Operação','Comunicação','Gestão','Configuração'])assert.match(sidebar,new RegExp(label))
+assert.match(sidebar,/NAVIGATION_GROUPS/)
+for(const label of['Visão geral','Comercial','Relacionamento','Financeiro','Operações','Inteligência','Administração'])assert.match(navigation,new RegExp(label))
 for(const entity of['Clientes','Propostas','Contratos','Parcelas'])assert.match(search,new RegExp(entity))
 for(const label of['Receita recorrente ativa','Receita recebida no mês','Propostas em aberto','Contratos ativos','Parcelas atrasadas','Tarefas da semana'])assert.match(dashboard,new RegExp(label))
 for(const column of['primary_responsible_id','delivery_responsible_id','financial_responsible_id','assigned_to','client_id','proposal_id','contract_id','installment_id'])assert.match(architecture,new RegExp(column))

@@ -47,6 +47,11 @@ import {NotFoundPage} from './components/NotFoundPage'
 import {VersionBadge} from './components/VersionBadge'
 import {GlobalSearch} from './components/GlobalSearch'
 import {TodayPage} from './components/TodayPage'
+import { pageFromPath, pathForPage } from './config/appRoutes'
+import { AccountsPayablePage, CashFlowPage, ClientContractReviewPage, FinanceSummaryPage, FinancialReportsPage, RecurringAccountsPage } from './components/FinanceV2Pages'
+import { FinancialPageLayout } from './components/FinancialPageLayout'
+import { FinancialSettingsPage } from './components/FinancialSettingsPage'
+import { FinancialImportPage } from './components/FinancialImportPage'
 
 const initialFormState = {
   client_id: '',
@@ -71,27 +76,7 @@ const initialFormState = {
   notes: '',
 }
 
-const PAGE_PATHS = {
-  dashboard: '/',
-  proposals: '/propostas',
-  contracts: '/contratos',
-  clients: '/clientes',
-  finance: '/financeiro',
-  whatsapp: '/whatsapp',
-  services: '/servicos',
-  documents: '/documentos',
-  'organization-settings': '/configuracoes',
-  'intelligence-today': '/intelligence/hoje',
-  'intelligence-attention': '/intelligence/atencao',
-  'intelligence-insights': '/intelligence/insights',
-  'intelligence-recommendations': '/intelligence/recomendacoes',
-  'intelligence-trends': '/intelligence/tendencias',
-  'intelligence-cross-analysis': '/intelligence/analise-cruzada',
-  'intelligence-health': '/intelligence/saude',
-  'intelligence-ai': '/intelligence/ia',
-}
-const PATH_PAGES = {...Object.fromEntries(Object.entries(PAGE_PATHS).map(([page, path]) => [path, page])), '/importar':'documents'}
-const pageFromLocation = () => PATH_PAGES[window.location.pathname.replace(/\/$/, '') || '/'] || 'not-found'
+const pageFromLocation = () => pageFromPath()
 
 function buildDateValue(value) {
   return value ? value.toString().slice(0, 10) : ''
@@ -185,7 +170,7 @@ export default function App() {
     }
     if (page === 'intelligence') page = 'intelligence-today'
     setActivePage(page)
-    const path=PAGE_PATHS[page]
+    const path=pathForPage(page)
     if(path&&window.location.pathname!==path)window.history.pushState({page},'',path)
     if (page === 'dashboard' || page.startsWith('intelligence-')) loadProposals()
     setMessage('')
@@ -357,6 +342,7 @@ export default function App() {
         onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
       />
       <main className={`main-content${activePage==='whatsapp'?' whatsapp-main':''}`}>
+        {import.meta.env.VITE_WHATSAPP_DEMO_MODE==='true'&&<div className="demo-mode-banner" role="status">Modo demonstração: envios e automações estão desativados.</div>}
         <PulseBell alerts={pulseAlerts} onOpen={()=>handleNavigate('intelligence-attention')} />
         <div className="mobile-topbar">
           <button type="button" className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="Abrir menu">
@@ -405,12 +391,20 @@ export default function App() {
         {activePage === 'services' && <ServicesCatalogPage />}
         {activePage === 'clients' && <ClientsPage />}
         {activePage === 'team' && <TeamPage />}
-        {activePage === 'finance' && <FinancePage />}
+        {activePage === 'finance' && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><FinancePage /></FinancialPageLayout>}
+        {activePage === 'finance-summary' && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><FinanceSummaryPage onNavigate={handleNavigate}/></FinancialPageLayout>}
+        {activePage === 'accounts-payable' && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><AccountsPayablePage/></FinancialPageLayout>}
+        {activePage === 'recurring-accounts' && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><RecurringAccountsPage onNavigate={handleNavigate}/></FinancialPageLayout>}
+        {activePage === 'cash-flow' && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><CashFlowPage/></FinancialPageLayout>}
         {activePage === 'whatsapp' && <WhatsAppPage clients={clients} contracts={intelligenceData.contracts} installments={installments} proposals={proposals} onNavigate={handleNavigate} onAskAI={()=>setAssistantOpen(true)} canWrite={canWrite} isAdmin={isAdmin} />}
-        {activePage === 'financial-reconciliation' && <FinancialReconciliationPage />}
+        {activePage === 'financial-reconciliation' && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><FinancialReconciliationPage /></FinancialPageLayout>}
+        {activePage === 'financial-reports' && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><FinancialReportsPage/></FinancialPageLayout>}
+        {activePage === 'client-contract-review' && <ClientContractReviewPage/>}
         {activePage === 'documents' && <ImportDocumentPage onImported={handleDocumentImported} />}
         {activePage === 'diagnostic' && <SupabaseDiagnosticPage />}
         {activePage === 'organization-settings' && <OrganizationSettingsPage />}
+        {['expense-categories','cost-centers','financial-accounts'].includes(activePage) && <FinancialSettingsPage section={activePage}/>}
+        {activePage === 'financial-import' && <FinancialImportPage/>}
         {activePage === 'commercial-trash' && <CommercialTrashPage />}
         {activePage === 'commercial-integrity' && <CommercialIntegrityPage />}
         {activePage === 'system-audit' && <SystemAuditPage />}
@@ -419,8 +413,10 @@ export default function App() {
         {activePage === 'restore' && <RestorePage />}
         {activePage === 'not-found' && <NotFoundPage />}
         {activePage === 'intelligence-attention' && <PulseAlertsPage alerts={pulseAlerts} teamMembers={teamMembers} onChanged={refreshPulse} onNavigate={handleNavigate} />}
+        {activePage === 'pulse-alerts' && <PulseAlertsPage alerts={pulseAlerts} teamMembers={teamMembers} onChanged={refreshPulse} onNavigate={handleNavigate} />}
         {activePage === 'intelligence-today' && <TodayPage teamMembers={teamMembers} onNavigate={handleNavigate}/>}
         {activePage === 'performance' && <CommercialPerformancePage />}
+        {activePage === 'responsibilities' && <TeamPage />}
         {activePage.startsWith('intelligence-') && !['intelligence-attention','intelligence-today'].includes(activePage) && <MugoIntelligencePage data={intelligenceData} loading={loading} error={errorMessage || intelligenceError} section={activePage.replace('intelligence-','')} onAskAI={()=>setAssistantOpen(true)} />}
         </>}
         </div>
