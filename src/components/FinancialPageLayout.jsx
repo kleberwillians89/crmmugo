@@ -1,13 +1,11 @@
 export function FinancialPageLayout({ children, active, onNavigate }) {
   const tabs = [
-    ["finance-summary", "Dashboard"],
-    ["finance", "A receber"],
-    ["accounts-payable", "A pagar"],
-    ["recurring-accounts", "Recorrentes"],
+    ["finance-summary", "Resumo"],
+    ["finance", "Contas a receber"],
+    ["accounts-payable", "Contas a pagar"],
     ["cash-flow", "Fluxo de caixa"],
-    ["financial-reconciliation", "Conciliação"],
-    ["financial-reports", "Relatórios"],
-    ["accounting-export", "Contabilidade"],
+    ["monthly-closing", "Fechamento mensal"],
+    ["accounting-export", "Exportar para contador"],
   ];
   return (
     <div className="financial-layout">

@@ -1,11 +1,174 @@
-import {useMemo} from 'react'
-import {PageHeader} from './PageHeader'
-import {calculateFinancialSummary} from '../lib/financialMetrics'
+import { useEffect, useMemo, useState } from "react";
+import { listExpenseInstallments } from "../services/data/expensesRepository";
+import { PageHeader } from "./PageHeader";
 
-const money=(value)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(value||0)
-const Stat=({label,value,note})=><article className="business-stat"><span>{label}</span><strong>{value}</strong>{note&&<small>{note}</small>}</article>
-const CURRENT_MONTH=new Date().toISOString().slice(0,7),WEEK_LIMIT=new Date(new Date().getTime()+7*86400000)
-export function Dashboard({proposals=[],contracts=[],installments=[],tasks=[]}){
-  const metrics=useMemo(()=>{const activeContracts=contracts.filter((item)=>item.status==='active'),openProposals=proposals.filter((item)=>!['won','lost','expired','cancelled','Fechada','Perdida'].includes(item.status||item.proposal_status)),received=installments.filter((item)=>String(item.manual_confirmation_at||item.paid_at||'').startsWith(CURRENT_MONTH)).reduce((sum,item)=>sum+Number(item.received_amount||0),0),overdue=installments.filter((item)=>item.status==='overdue'&&Number(item.amount||0)>Number(item.received_amount||0)),financial=calculateFinancialSummary(contracts,installments),commercialAssigned=new Set(contracts.map((item)=>item.responsible_id).filter(Boolean)).size,deliveryAssigned=new Set(contracts.flatMap((item)=>item.contract_services||[]).map((item)=>item.delivery_responsible_id).filter(Boolean)).size,financialAssigned=new Set(contracts.map((item)=>item.financial_responsible_id).filter(Boolean)).size,unassigned=activeContracts.filter((item)=>!item.responsible_id).length;return{activeContracts,openProposals,received,overdue,financial,commercialAssigned,deliveryAssigned,financialAssigned,unassigned,tasks:tasks.filter((item)=>item.status!=='completed'&&item.due_date&&new Date(item.due_date)<=WEEK_LIMIT).length,clients:new Set(proposals.map((item)=>item.clientId||item.client_id).filter(Boolean)).size}},[proposals,contracts,installments,tasks])
-  return <div className="dashboard-page business-dashboard"><PageHeader eyebrow="Operação da Mugô" title="Painel" description="Visão direta do fluxo entre clientes, propostas, contratos e recebimentos."/><section className="dashboard-core-metrics"><Stat label="Receita recorrente ativa" value={money(metrics.activeContracts.reduce((sum,item)=>sum+Number(item.monthly_value||0),0))}/><Stat label="Receita recebida no mês" value={money(metrics.received)}/><Stat label="Propostas em aberto" value={metrics.openProposals.length}/><Stat label="Contratos ativos" value={metrics.activeContracts.length}/><Stat label="Parcelas atrasadas" value={metrics.overdue.length}/><Stat label="Tarefas da semana" value={tasks.length?metrics.tasks:'Não configurado'} note={!tasks.length?'Disponível após ativar tarefas operacionais.':null}/></section><section className="dashboard-panel crm-flow-panel"><header><div><h2>Fluxo comercial</h2><p>Cada etapa reutiliza os dados da anterior.</p></div></header><div className="crm-flow"><article><span>Clientes</span><strong>{metrics.clients}</strong></article><i>→</i><article><span>Propostas</span><strong>{proposals.length}</strong></article><i>→</i><article><span>Contratos</span><strong>{contracts.length}</strong></article><i>→</i><article><span>Receita recebida</span><strong>{money(metrics.financial.totalReceived)}</strong></article></div></section><section className="dashboard-panel"><header><div><h2>Responsabilidades da equipe</h2><p>Quantidade de responsáveis identificados nos registros atuais.</p></div></header><div className="dashboard-responsibilities"><Stat label="Comercial" value={metrics.commercialAssigned}/><Stat label="Entrega" value={metrics.deliveryAssigned}/><Stat label="Financeiro" value={metrics.financialAssigned||'Não configurado'}/><Stat label="Contratos sem responsável" value={metrics.unassigned}/></div></section></div>
+const money = (value) =>
+  new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(value || 0);
+const currentMonth = new Date().toISOString().slice(0, 7);
+const today = new Date().toISOString().slice(0, 10);
+const nextMonth = new Date(Date.now() + 30 * 86400000)
+  .toISOString()
+  .slice(0, 10);
+const balance = (row, paidField = "received_amount") =>
+  Math.max(Number(row.amount || 0) - Number(row[paidField] || 0), 0);
+
+function Stat({ label, value }) {
+  return (
+    <article className="business-stat">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
+export function Dashboard({
+  contracts = [],
+  installments = [],
+  clients = [],
+  alerts = [],
+}) {
+  const [payables, setPayables] = useState([]);
+  useEffect(() => {
+    listExpenseInstallments()
+      .then(setPayables)
+      .catch(() => setPayables([]));
+  }, []);
+  const metrics = useMemo(() => {
+    const uniqueIncome = [
+      ...new Map(installments.map((row) => [row.id, row])).values(),
+    ];
+    const uniquePayables = [
+      ...new Map(payables.map((row) => [row.id, row])).values(),
+    ].filter(
+      (row) =>
+        row.status !== "cancelled" && row.expenses?.scope !== "pending_review",
+    );
+    const monthIncome = uniqueIncome.filter((row) =>
+      String(row.reference_month || row.due_date).startsWith(currentMonth),
+    );
+    const monthPayables = uniquePayables.filter((row) =>
+      String(row.reference_month || row.due_date).startsWith(currentMonth),
+    );
+    const expected = monthIncome.reduce(
+      (sum, row) => sum + Number(row.amount || 0),
+      0,
+    );
+    const received = monthIncome.reduce(
+      (sum, row) => sum + Number(row.received_amount || 0),
+      0,
+    );
+    const overdue = uniqueIncome
+      .filter(
+        (row) =>
+          row.status === "overdue" ||
+          (row.due_date < today && !["paid", "cancelled"].includes(row.status)),
+      )
+      .reduce((sum, row) => sum + balance(row), 0);
+    const expenses = monthPayables.reduce(
+      (sum, row) => sum + Number(row.business_amount || 0),
+      0,
+    );
+    return {
+      expected,
+      received,
+      overdue,
+      expenses,
+      result: expected - expenses,
+      activeClients: clients.filter(
+        (row) => row.status === "active" && !row.deleted_at,
+      ).length,
+      upcomingIncome: uniqueIncome
+        .filter(
+          (row) =>
+            row.due_date >= today &&
+            row.due_date <= nextMonth &&
+            !["paid", "cancelled"].includes(row.status),
+        )
+        .sort((a, b) => a.due_date.localeCompare(b.due_date))
+        .slice(0, 5),
+      upcomingExpenses: uniquePayables
+        .filter(
+          (row) =>
+            row.due_date >= today &&
+            row.due_date <= nextMonth &&
+            row.status !== "paid",
+        )
+        .sort((a, b) => a.due_date.localeCompare(b.due_date))
+        .slice(0, 5),
+      importantAlerts: alerts
+        .filter((row) => !["resolved", "dismissed"].includes(row.status))
+        .slice(0, 5),
+      activeContracts: contracts.filter(
+        (row) => row.status === "active" && !row.deleted_at,
+      ).length,
+    };
+  }, [alerts, clients, contracts, installments, payables]);
+  return (
+    <div className="dashboard-page business-dashboard">
+      <PageHeader
+        eyebrow="Operação da Mugô"
+        title="Dashboard"
+        description="Acompanhamento diário do caixa, recebimentos e despesas."
+      />
+      <section className="dashboard-core-metrics">
+        <Stat label="Receita prevista" value={money(metrics.expected)} />
+        <Stat label="Receita recebida" value={money(metrics.received)} />
+        <Stat label="Receita vencida" value={money(metrics.overdue)} />
+        <Stat label="Contas a pagar" value={money(metrics.expenses)} />
+        <Stat label="Resultado operacional" value={money(metrics.result)} />
+        <Stat label="Clientes ativos" value={metrics.activeClients} />
+      </section>
+      <section className="dashboard-daily-grid">
+        <DailyList
+          title="Próximos recebimentos"
+          rows={metrics.upcomingIncome}
+          empty="Nenhum recebimento previsto para os próximos 30 dias. Cadastre parcelas nos contratos ativos."
+          label={(row) =>
+            row.clients?.company_name || row.description || "Recebimento"
+          }
+          value={(row) => money(balance(row))}
+        />
+        <DailyList
+          title="Próximas despesas"
+          rows={metrics.upcomingExpenses}
+          empty="Nenhuma despesa prevista para os próximos 30 dias. Cadastre pela tela Contas a pagar."
+          label={(row) => row.expenses?.name || "Despesa"}
+          value={(row) => money(balance(row, "paid_amount"))}
+        />
+        <DailyList
+          title="Alertas importantes"
+          rows={metrics.importantAlerts}
+          empty="Nenhum alerta importante no momento."
+          label={(row) => row.title || row.label || "Alerta"}
+          value={(row) => row.priority || row.severity || "Atenção"}
+        />
+      </section>
+    </div>
+  );
+}
+
+function DailyList({ title, rows, empty, label, value }) {
+  return (
+    <section className="dashboard-panel dashboard-daily-list">
+      <h2>{title}</h2>
+      {rows.length ? (
+        rows.map((row) => (
+          <article key={row.id}>
+            <div>
+              <strong>{label(row)}</strong>
+              <small>
+                {row.due_date || row.created_at?.slice(0, 10) || ""}
+              </small>
+            </div>
+            <span>{value(row)}</span>
+          </article>
+        ))
+      ) : (
+        <div className="compact-empty-state">{empty}</div>
+      )}
+    </section>
+  );
 }
