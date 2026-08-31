@@ -271,7 +271,7 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     {tab==='collections'&&<button className="button secondary whatsapp-batch-trigger" onClick={()=>setBatchOpen(true)}>Envio em lote</button>}
     {tab==='templates'&&<WhatsAppTemplatesPanel clients={clients} onSendTemplate={sendApprovedTemplate} onStatusesChanged={templates=>{const template=templates.find(item=>item.name==='mugo_alerta_pagamento_pendente');if(template)setTemplateStatus(template)}}/>}
     {tab==='usage'&&<WhatsAppUsagePanel/>}
-    {tab==='automations'&&<WhatsAppAutomationPanel/>}
+    {tab==='automations'&&<WhatsAppAutomationPanel canWrite={canWrite}/>}
     {tab==='ai'&&<WhatsAppAiPanel/>}
     {tab==='status'&&<WhatsAppSystemStatusPanel/>}
     {phoneModal&&collectionTarget&&<WhatsAppPhoneModal client={collectionTarget.client} onClose={()=>setPhoneModal(false)} onSave={savePhone}/>}

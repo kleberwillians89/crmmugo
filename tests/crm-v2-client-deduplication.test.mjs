@@ -93,8 +93,16 @@ const auditPage = fs.readFileSync(
   new URL("../src/components/ClientDuplicatesPage.jsx", import.meta.url),
   "utf8",
 );
-assert.doesNotMatch(auditPage, /executeClientMerge|execute_client_merge/);
 assert.match(auditPage, /previewClientMerge/);
+// A execução de merge só é permitida sob salvaguardas explícitas:
+// permissão de escrita, confirmação consciente, motivo mínimo, conferência do
+// nome do cliente principal e chave de idempotência.
+assert.match(auditPage, /executeClientMerge/);
+assert.match(auditPage, /canWrite/);
+assert.match(auditPage, /understood/);
+assert.match(auditPage, /reason\.trim\(\)\.length/);
+assert.match(auditPage, /confirmation !== primaryBefore\.company_name/);
+assert.match(auditPage, /requestKey/);
 const audit = fs.readFileSync(
   new URL("../docs/CRM_REAL_DATA_AUDIT.md", import.meta.url),
   "utf8",

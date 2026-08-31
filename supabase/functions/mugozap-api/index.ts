@@ -2,7 +2,24 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type, x-workspace-id','Access-Control-Allow-Methods':'POST, OPTIONS','Content-Type':'application/json'}
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: corsHeaders })
-const fail = (code: string, message: string, status = 400, upstreamStatus = 0, retryable = false, details: Record<string,unknown> = {}) => json({ ok: false, code, message, status, upstream_status: upstreamStatus, retryable, details }, status)
+const providerMessageFrom = (details: Record<string,unknown>) => {
+  const candidate = (details?.provider_message ?? details?.message ?? details?.detail) as unknown
+  const value = typeof candidate === 'string' ? candidate.trim() : ''
+  return value ? value.slice(0, 500) : null
+}
+// Contrato de erro entregue ao frontend: nunca um "Internal Server Error" opaco.
+// { code, message, provider_message, retryable, status, upstream_status, details, context }
+const fail = (code: string, message: string, status = 400, upstreamStatus = 0, retryable = false, details: Record<string,unknown> = {}) => json({
+  ok: false,
+  code,
+  message,
+  provider_message: providerMessageFrom(details),
+  retryable,
+  status,
+  upstream_status: upstreamStatus,
+  details,
+  context: { code, upstream_status: upstreamStatus },
+}, status)
 const text = (value: unknown, max = 300) => String(value ?? '').trim().slice(0, max)
 const identifier = (value: unknown) => {
   const normalized = text(value, 40).replace(/\D/g, '')
@@ -424,6 +441,7 @@ const handleRequest = async (request: Request, requestId: string) => {
     let genericTemplateClientId = ''
     if (operation === 'start_template_conversation') {
       const clientId = text(payload.client_id, 80), installmentId = text(payload.installment_id, 80)
+      const startIdempotencyKey = text(payload.idempotency_key, 120).replace(/[^A-Za-z0-9_-]/g, '')
       const templateName = text(payload.template_name, 100), language = text(payload.language, 20)
       if (!clientId || !installmentId || templateName !== 'mugo_alerta_pagamento_pendente' || language !== 'pt_BR') return fail('INVALID_TEMPLATE_REQUEST', 'Os dados para iniciar a conversa são inválidos.', 400)
       const [clientResult, installmentResult, duplicateResult] = await Promise.all([
@@ -445,7 +463,21 @@ const handleRequest = async (request: Request, requestId: string) => {
       const config:any=metaConfig(true)
       if(config.error)return config.error
       config.requestId=requestId
-      const phoneCheck=await fetchMeta(`https://graph.facebook.com/${config.version}/${config.phoneNumberId}?fields=id,account_mode`,config.accessToken)
+      let phoneCheck:any
+      try{
+        phoneCheck=await fetchMeta(`https://graph.facebook.com/${config.version}/${config.phoneNumberId}?fields=id,account_mode`,config.accessToken)
+      }catch(error){
+        const timedOut=error instanceof DOMException&&error.name==='TimeoutError'
+        console.log(JSON.stringify({event:'meta_whatsapp_error',request_id:requestId,operation:'start_template_conversation',phase:'phone_check',error_name:text((error as any)?.name,120),error_message:text((error as any)?.message,500)}))
+        return fail(
+          timedOut?'META_TIMEOUT':'META_UNREACHABLE',
+          timedOut?'A Meta demorou para responder ao validar o número.':'Não foi possível contatar a Meta para validar o número do WhatsApp.',
+          timedOut?504:502,
+          0,
+          timedOut,
+          {phase:'phone_check',name:text((error as any)?.name,120),message:text((error as any)?.message,500)},
+        )
+      }
       if(!phoneCheck.response.ok)return metaFailure(phoneCheck.response.status,phoneCheck.body,requestId)
       const templateResult:any=await fetchTemplates(config)
       if(templateResult.error)return templateResult.error
@@ -465,7 +497,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       const couponCode=text(payload.coupon_code,120)
       if(requiresCoupon&&!couponCode)return fail('TEMPLATE_COUPON_REQUIRED','Este template exige um código de cupom para o botão de copiar.',422)
       verifiedPayload = {wa_id:normalizedPhone,template_name:templateName,language,parameters:requiredBodyParameters?[safeName]:[],...(couponCode?{coupon_code:couponCode}:{}),source:'collection',client_id:clientRow.id,installment_id:installment.id}
-      const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,contract_id:installment.contract_id,wa_id:normalizedPhone,recipient:normalizedPhone,company_name:text(clientRow.company_name,200),meta_template_id:officialTemplate.id,template_name:templateName,template_language:language,template_status:'CHECKING',collection_stage:'sending',action:'template_send_requested',status:'sending',sent_by:user.id,origin:'collection',currency:'BRL',sanitized_payload:{to:normalizedPhone,template:{name:templateName,language,parameter_count:requiredBodyParameters,has_coupon:Boolean(couponCode)},source:'collection'}}).select('id').single()
+      const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,contract_id:installment.contract_id,wa_id:normalizedPhone,recipient:normalizedPhone,company_name:text(clientRow.company_name,200),meta_template_id:officialTemplate.id,template_name:templateName,template_language:language,template_status:'CHECKING',collection_stage:'sending',action:'template_send_requested',status:'sending',sent_by:user.id,origin:'collection',currency:'BRL',sanitized_payload:{to:normalizedPhone,template:{name:templateName,language,parameter_count:requiredBodyParameters,has_coupon:Boolean(couponCode)},source:'collection',idempotency_key:startIdempotencyKey||null}}).select('id').single()
       if (reservation.error) return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
       alertReservationId = reservation.data.id
     }
@@ -608,8 +640,18 @@ const handleRequest = async (request: Request, requestId: string) => {
     auditOperation('edge_frontend_response',operation,{request_id:requestId,organization_id:profile.organization_id,status_http:200,body_returned_to_frontend:responseBody})
     return json({ ok: true, data: responseBody })
   } catch (error) {
-    console.log(JSON.stringify({event:'mugozap_unhandled_error',request_id:requestId,duration_ms:Date.now()-requestStartedAt,error_name:text((error as any)?.name,80)}))
-    return fail('INTERNAL_ERROR', 'A integração com o WhatsApp está temporariamente indisponível.', 500)
+    const name=text((error as any)?.name,80)
+    const message=text((error as any)?.message,300)
+    const isNetwork=/TypeError|Timeout|Abort|fetch/i.test(`${name} ${message}`)
+    console.log(JSON.stringify({event:'mugozap_unhandled_error',request_id:requestId,duration_ms:Date.now()-requestStartedAt,error_name:name,error_message:message}))
+    return fail(
+      isNetwork?'UPSTREAM_UNAVAILABLE':'INTERNAL_ERROR',
+      isNetwork?'Não foi possível concluir a operação: um serviço externo (Meta ou MugoZap) não respondeu.':'A integração com o WhatsApp encontrou um erro inesperado.',
+      isNetwork?503:500,
+      0,
+      isNetwork,
+      {name,message},
+    )
   }
 }
 
@@ -622,7 +664,7 @@ Deno.serve(async request => {
   const durationMs=Date.now()-startedAt
   try{
     responseBody=JSON.parse(responseText)
-    if(responseBody?.ok===false)responseBody={...responseBody,request_id:requestId,duration_ms:durationMs,details:responseBody.details||{}}
+    if(responseBody?.ok===false)responseBody={...responseBody,request_id:requestId,duration_ms:durationMs,details:responseBody.details||{},provider_message:responseBody.provider_message??null,context:{...(responseBody.context||{}),request_id:requestId}}
     else if(responseBody?.ok===true)responseBody={code:'OK',message:'Operação concluída.',...responseBody,request_id:requestId,duration_ms:durationMs}
   }catch{/* resposta não JSON, como preflight */}
   const headers=new Headers(response.headers)

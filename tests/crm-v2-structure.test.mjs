@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-const routes=fs.readFileSync(new URL('../src/config/appRoutes.js',import.meta.url),'utf8')
+const { APP_ROUTES, ROUTE_ALIASES }=await import('../src/config/appRoutes.js')
 const migration=fs.readFileSync(new URL('../supabase/migrations/202608030001_crm_v2_expense_management.sql',import.meta.url),'utf8')
 const repository=fs.readFileSync(new URL('../src/services/data/expensesRepository.js',import.meta.url),'utf8')
 const foundation=fs.readFileSync(new URL('../supabase/migrations/202607130001_sprint7_foundation.sql',import.meta.url),'utf8')
 const importMigration=fs.readFileSync(new URL('../supabase/migrations/202608030002_financial_import_control.sql',import.meta.url),'utf8')
-for(const route of ["finance: '/financeiro'","'/financeiro/contas-a-receber': 'finance'","'/importar': 'documents'"])assert.ok(routes.includes(route),`Rota compatível ausente: ${route}`)
+assert.equal(APP_ROUTES.finance,'/financeiro','Rota finance deve apontar para /financeiro')
+assert.equal(ROUTE_ALIASES['/financeiro/contas-a-receber'],'finance','Alias /financeiro/contas-a-receber deve resolver para finance')
+assert.equal(ROUTE_ALIASES['/importar'],'documents','Alias /importar deve resolver para documents')
 for(const table of ['expense_categories','cost_centers','financial_accounts','expenses','expense_installments'])assert.ok(migration.includes(`public.${table}`),`Tabela ausente: ${table}`)
 assert.ok(migration.includes('enable row level security'))
 assert.ok(migration.includes('public.current_organization_id()'))
