@@ -50,6 +50,8 @@ import { PulseBell } from "./components/PulseBell";
 import { useAuth } from "./contexts/AuthContext";
 import { WhatsAppPage } from "./components/WhatsAppPage";
 import { NotFoundPage } from "./components/NotFoundPage";
+import { IntegrationsPage } from "./components/IntegrationsPage";
+import { ProductBreadcrumbs } from "./components/ProductBreadcrumbs";
 import { VersionBadge } from "./components/VersionBadge";
 import { GlobalSearch } from "./components/GlobalSearch";
 import { TodayPage } from "./components/TodayPage";
@@ -97,6 +99,15 @@ const initialFormState = {
 
 const pageFromLocation = () => pageFromPath();
 
+const WHATSAPP_DOMAIN_SECTIONS = {
+  contacts: "contacts",
+  inbox: "inbox",
+  automations: "automations",
+  templates: "templates",
+  whatsapp: "channel",
+  collections: "collections",
+};
+
 function buildDateValue(value) {
   return value ? value.toString().slice(0, 10) : "";
 }
@@ -130,6 +141,7 @@ export default function App() {
   const pulseSyncUnavailable = useRef(
     sessionStorage.getItem("mugo:pulse-sync-unavailable") === "1",
   );
+  const whatsappDomainSection = WHATSAPP_DOMAIN_SECTIONS[activePage];
 
   useEffect(() => {
     loadProposals();
@@ -521,7 +533,7 @@ export default function App() {
 
   return (
     <div
-      className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${activePage === "whatsapp" ? " whatsapp-shell" : ""}`}
+      className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${whatsappDomainSection ? " whatsapp-shell" : ""}`}
     >
       <Sidebar
         activePage={activePage}
@@ -532,7 +544,7 @@ export default function App() {
         onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
       />
       <main
-        className={`main-content${activePage === "whatsapp" ? " whatsapp-main" : ""}`}
+        className={`main-content${whatsappDomainSection ? " whatsapp-main" : ""}`}
       >
         {import.meta.env.VITE_WHATSAPP_DEMO_MODE === "true" && (
           <div className="demo-mode-banner" role="status">
@@ -556,7 +568,8 @@ export default function App() {
           <span aria-hidden="true" />
         </div>
         <div className="content-container">
-          {activePage !== "whatsapp" && (
+          {!whatsappDomainSection && <ProductBreadcrumbs page={activePage} />}
+          {!whatsappDomainSection && (
             <GlobalSearch
               clients={clients}
               proposals={proposals}
@@ -687,8 +700,10 @@ export default function App() {
                   <CashFlowPage />
                 </FinancialPageLayout>
               )}
-              {activePage === "whatsapp" && (
+              {whatsappDomainSection && (
                 <WhatsAppPage
+                  section={whatsappDomainSection}
+                  page={activePage}
                   clients={clients}
                   contracts={intelligenceData.contracts}
                   installments={installments}
@@ -732,6 +747,9 @@ export default function App() {
               {activePage === "diagnostic" && <SupabaseDiagnosticPage />}
               {activePage === "organization-settings" && (
                 <OrganizationSettingsPage onNavigate={handleNavigate} />
+              )}
+              {activePage === "integrations" && (
+                <IntegrationsPage onNavigate={handleNavigate} />
               )}
               {[
                 "expense-categories",
@@ -801,7 +819,7 @@ export default function App() {
             </>
           )}
         </div>
-        {activePage !== "whatsapp" && (
+        {!whatsappDomainSection && (
           <button
             type="button"
             className="assistant-trigger"

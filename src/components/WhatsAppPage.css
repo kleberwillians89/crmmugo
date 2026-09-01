@@ -34,6 +34,20 @@
 /* Contrato de altura do inbox: nenhum ancestral externo pode crescer com o conteúdo. */
 .whatsapp-shell .whatsapp-page{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .whatsapp-shell .whatsapp-compact-header,.whatsapp-shell .whatsapp-tabs{flex:0 0 auto}
+.whatsapp-page-heading{min-width:260px;display:grid!important;align-content:center!important;gap:0!important}
+.whatsapp-page-heading>div{display:flex;align-items:center;gap:9px}
+.whatsapp-page-heading p{margin:3px 0 0;color:var(--text-secondary);font-size:9px}
+.whatsapp-page-heading>small{margin-top:3px;color:var(--text-muted);font-size:8px}
+.whatsapp-shell .whatsapp-page>.whatsapp-table-card,
+.whatsapp-shell .whatsapp-page>.whatsapp-templates-panel,
+.whatsapp-shell .whatsapp-page>.whatsapp-usage-panel,
+.whatsapp-shell .whatsapp-page>.automation-panel,
+.whatsapp-shell .whatsapp-page>.dashboard-panel{flex:1 1 auto;height:auto;min-height:0;overflow:auto;border-radius:0 0 var(--radius-lg) var(--radius-lg)}
+.whatsapp-shell .whatsapp-page:not(.section-channel)>.whatsapp-compact-header{border-bottom:1px solid var(--border-subtle);border-radius:var(--radius-lg) var(--radius-lg) 0 0}
+.whatsapp-shell .whatsapp-page:not(.section-channel)>.whatsapp-table-card,
+.whatsapp-shell .whatsapp-page:not(.section-channel)>.whatsapp-templates-panel,
+.whatsapp-shell .whatsapp-page:not(.section-channel)>.automation-panel,
+.whatsapp-shell .whatsapp-page:not(.section-channel)>.dashboard-panel{border-top:0;border-radius:0 0 var(--radius-lg) var(--radius-lg)}
 .whatsapp-shell .whatsapp-workspace{flex:1 1 auto;height:auto;min-height:0;grid-template-columns:320px minmax(0,1fr);overflow:hidden}
 .whatsapp-shell .whatsapp-workspace.has-context{grid-template-columns:320px minmax(0,1fr) 300px}
 .whatsapp-shell .conversation-list,.whatsapp-shell .chat-panel,.whatsapp-shell .client-context{min-width:0;min-height:0;overflow:hidden}
@@ -76,6 +90,8 @@
   .whatsapp-shell .message-composer{grid-template-columns:40px 42px minmax(0,1fr) 44px;gap:6px}
   .whatsapp-shell .message-composer .composer-template{width:42px;min-width:42px;padding:0}
   .whatsapp-shell .message-composer>.button-primary{width:44px;min-width:44px;padding:0}
+  .whatsapp-page-heading p{display:none}
+  .product-breadcrumbs.compact{display:none}
 }
 
 /* Automações */
