@@ -212,9 +212,63 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     setStarting(true);setError('')
     try{
       const result=await startTemplateConversation({client_id:collectionTarget.client.id,installment_id:collectionTarget.installment.id,phone:collectionTarget.phone,template_name:'mugo_alerta_pagamento_pendente',language:'pt_BR'})
-      const waId=getConversationIdentifier(result?.conversation||{phone:collectionTarget.phone})
       const recipient=collectionTarget.client.contact_name||collectionTarget.client.company_name||'o cliente'
-      setStartModal(false);setActionFeedback(result?.already_sent?`Envio anterior para ${recipient} reconciliado sem reenvio.`:`Alerta enviado com sucesso para ${recipient}.`);const rows=await refresh(true,true);const canonical=rows?.find(item=>item.waId===waId);if(canonical)setSelectedId(conversationKey(canonical));setTab('inbox')
+      const startedConversation=result?.conversation
+        ? {...result.conversation,name:result.conversation.name||recipient}
+        : null
+      const waId=getConversationIdentifier(startedConversation||{phone:collectionTarget.phone})
+
+      setStartModal(false)
+      setActionFeedback(
+        result?.already_sent
+          ? `Envio anterior para ${recipient} reconciliado sem reenvio.`
+          : `Alerta enviado com sucesso para ${recipient}.`
+      )
+
+      // A resposta do backend já contém a conversa persistida.
+      // Colocamos essa conversa na Inbox e abrimos imediatamente.
+      if(startedConversation){
+        const key=conversationKey(startedConversation)
+
+        setConversations(current=>[
+          startedConversation,
+          ...current.filter(item=>conversationKey(item)!==key),
+        ])
+
+        conversationsRef.current=[
+          startedConversation,
+          ...conversationsRef.current.filter(item=>conversationKey(item)!==key),
+        ]
+
+        setTab('inbox')
+        setSelectedId(key)
+      }else{
+        setTab('inbox')
+      }
+
+      // Depois reconciliamos silenciosamente com o banco.
+      const rows=await refresh(true,true)
+      const canonical=rows?.find(item=>item.waId===waId)
+
+      if(canonical){
+        setSelectedId(conversationKey(canonical))
+      }else if(startedConversation){
+        // Se a leitura ainda não enxergou a conversa recém-criada,
+        // preserva a conversa devolvida pelo backend e mantém o chat aberto.
+        const key=conversationKey(startedConversation)
+
+        setConversations(current=>[
+          startedConversation,
+          ...current.filter(item=>conversationKey(item)!==key),
+        ])
+
+        conversationsRef.current=[
+          startedConversation,
+          ...conversationsRef.current.filter(item=>conversationKey(item)!==key),
+        ]
+
+        setSelectedId(key)
+      }
     }catch(cause){setError(cause.message||'Não foi possível iniciar a conversa pelo WhatsApp.')}finally{setStarting(false)}
   }
   async function syncCollectionTemplate(){

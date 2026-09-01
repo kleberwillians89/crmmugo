@@ -263,7 +263,14 @@ export async function markConversationRead(conversation, options = {}) {
 }
 export const startTemplateConversation = ({ idempotencyKey, ...payload } = {}) => {
   const key = clean(idempotencyKey) || (payload.installment_id ? `stc-${clean(payload.installment_id)}` : '')
-  return invoke('start_template_conversation', { ...payload, ...(key ? { idempotency_key: key } : {}) })
+  return invoke('start_template_conversation', {
+    ...payload,
+    ...(key ? { idempotency_key: key } : {}),
+  }).then(data => ({
+    ...data,
+    conversation: data?.conversation ? normalizeConversation(data.conversation) : null,
+    message: data?.message ? normalizeMessage(data.message) : null,
+  }))
 }
 export const sendTemplateMessage = payload => invoke('send_template_message', payload)
 export const getTemplateTestAccess = (recipient,templateName,language='pt_BR',options) => invoke('get_template_test_access', {recipient,template_name:templateName,language}, options)
