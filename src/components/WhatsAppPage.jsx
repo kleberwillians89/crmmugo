@@ -135,7 +135,14 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
     const supabase=getSupabaseClient()
     if(!supabase)return
     const onChange=payload=>{realtimeLog(payload.table==='whatsapp_messages'?'message_change':'conversation_update',{eventType:payload.eventType});refresh(true,true);const conversation=conversationsRef.current.find(item=>conversationKey(item)===selectedIdRef.current);if(conversation)loadHistory(conversation,true)}
-    const channel=supabase.channel('whatsapp-crm-singleton')
+    // O tópico precisa ser único por montagem. supabase-js reaproveita canais pelo tópico
+    // (RealtimeClient.channel devolve a instância existente), então um nome fixo faz uma
+    // remontagem via navegação SPA cair numa instância anterior ainda em teardown e
+    // chamar .on()/.subscribe() nela lança — o erro subia até o AppErrorBoundary.
+    // Um teardown que não terminou também deixa canais órfãos; removemo-los aqui.
+    for(const stale of [...supabase.getChannels()])
+      if(typeof stale?.topic==='string'&&stale.topic.startsWith('realtime:whatsapp-crm'))supabase.removeChannel(stale)
+    const channel=supabase.channel(`whatsapp-crm-${crypto.randomUUID()}`)
       .on('postgres_changes',{event:'*',schema:'public',table:'whatsapp_messages'},onChange)
       .on('postgres_changes',{event:'*',schema:'public',table:'whatsapp_conversations'},onChange)
       .on('postgres_changes',{event:'*',schema:'public',table:'whatsapp_collection_alerts'},onChange)
