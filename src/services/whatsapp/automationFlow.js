@@ -56,8 +56,7 @@ export const TRIGGER_CATALOG = Object.freeze([
     label: 'Mensagem recebida',
     description: 'Disparado quando um contato responde no WhatsApp.',
     origin: 'provider_webhook',
-    available: false,
-    unavailableReason: 'Requer o webhook do MugoZap encaminhando eventos ao Supabase (bloqueio externo).',
+    available: true,
     configFields: [],
   },
 ])

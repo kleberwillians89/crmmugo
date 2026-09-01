@@ -26,8 +26,12 @@ const crmFlow = { id: 'f2', status: 'active', triggerType: 'crm_event', triggerC
 assert.equal(matchFlow(crmFlow, { event_type: 'crm_event', sanitized_payload: { event_name: 'proposal_accepted' } }), true)
 assert.equal(matchFlow(crmFlow, { event_type: 'crm_event', sanitized_payload: { event_name: 'other' } }), false)
 
+const inboundFlow = { id: 'f3', status: 'active', triggerType: 'whatsapp_message_received', triggerConfig: {} }
+assert.equal(matchFlow(inboundFlow, { event_type: 'whatsapp_message_received', sanitized_payload: { conversation_id: 'conversation-1' } }), true)
+assert.equal(matchFlow({ ...inboundFlow, status: 'paused' }, { event_type: 'whatsapp_message_received' }), false)
+
 assert.deepEqual(
-  selectFlows({ event_type: 'invoice_overdue', sanitized_payload: { amount: 999 } }, [activeFlow, crmFlow]).map((f) => f.id),
+  selectFlows({ event_type: 'invoice_overdue', sanitized_payload: { amount: 999 } }, [activeFlow, crmFlow, inboundFlow]).map((f) => f.id),
   ['f1'],
 )
 

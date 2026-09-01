@@ -1,0 +1,19 @@
+{
+  "source": "https://github.com/kleberwillians89/mugozap.git",
+  "audited_at": "2026-08-31",
+  "endpoints": {
+    "health": "GET /health",
+    "conversations": "GET /api/conversations",
+    "messages": "GET /api/messages?wa_id={wa_id}",
+    "manual_send": "POST /api/conversations/{wa_id}/send",
+    "template_send": "POST /api/conversations/start-template",
+    "webhook_verify": "GET /webhook",
+    "webhook_receive": "POST /webhook"
+  },
+  "limitations": {
+    "manual_send_returns_provider_message_id": false,
+    "template_allowlist": ["mugo_alerta_pagamento_pendente:pt_BR"],
+    "webhook_validates_hmac": false,
+    "webhook_resolves_tenant_by_phone_number_id": false
+  }
+}

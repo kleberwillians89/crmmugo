@@ -136,6 +136,8 @@ function requireIdentifier(value) {
 }
 
 function normalizeConversation(item = {}) {
+  const contact = Array.isArray(item.whatsapp_contacts) ? item.whatsapp_contacts[0] : item.whatsapp_contacts || item.contact || {}
+  const lastMessage = item.lastMessage || item.last_message_record || {}
   const waId = getConversationIdentifier(item)
   const windowExpiresAt = item.service_window_expires_at || item.customer_care_window_expires_at || item.session_expires_at || null
   const explicitWindow = item.within_24h ?? item.service_window_open ?? item.can_send_freeform
@@ -143,8 +145,9 @@ function normalizeConversation(item = {}) {
     ...item,
     waId,
     phone: digits(waId || item.telefone || item.contact_phone),
-    name: clean(item.name || item.contact_name || item.push_name) || (waId ? `Contato • final ${waId.slice(-4)}` : 'Contato sem identificação'),
-    preview: clean(item.last_message || item.last_message_text || item.preview),
+    name: clean(item.name || contact.display_name || contact.profile_name || item.contact_name || item.push_name) || (waId ? `Contato • final ${waId.slice(-4)}` : 'Contato sem identificação'),
+    clientId: item.client_id || contact.client_id || null,
+    preview: clean(item.last_message || item.last_message_text || item.preview || lastMessage.text_content || (lastMessage.template_name ? `Modelo: ${lastMessage.template_name}` : '')),
     updatedAt: item.updated_at || item.last_message_at || item.created_at || null,
     unread: Number(item.unread_count || item.unread || 0),
     owner: clean(item.assigned_to || item.human_owner || item.owner),
@@ -154,7 +157,7 @@ function normalizeConversation(item = {}) {
     automationPaused: Boolean(item.automation_paused),
     botEnabled: item.bot_enabled !== false,
     awaitingHuman: Boolean(item.awaiting_human || item.handoff_pending || item.handoff_active),
-    collection: Boolean(item.collection_pending || item.cobranca || item.billing_status),
+    collection: Boolean(item.collection_pending || item.cobranca || item.billing_status || lastMessage.template_name === 'mugo_alerta_pagamento_pendente'),
     serviceWindowOpen: explicitWindow === undefined || explicitWindow === null ? (windowExpiresAt ? new Date(windowExpiresAt).getTime() > Date.now() : null) : Boolean(explicitWindow),
     serviceWindowExpiresAt: windowExpiresAt,
   }
@@ -164,7 +167,7 @@ function normalizeMessage(item = {}) {
   const direction = clean(item.direction || item.dir || item.message_direction).toLowerCase()
   const messageType = clean(item.message_type || item.type || item.content?.type || 'text').toLowerCase()
   const providerMessageId = clean(item.provider_message_id || item.message_id || item.meta_message_id || item.wa_message_id)
-  const textContent = item.content?.text?.body || item.content?.body || item.text?.body || item.text || item.message || item.body || item.caption
+  const textContent = item.text_content || item.content?.text?.body || item.content?.body || item.text?.body || item.text || item.message || item.body || item.caption
   return {
     ...item,
     id: item.id || providerMessageId || `${item.created_at || item.sent_at || item.timestamp || ''}-${clean(textContent)}`,
@@ -191,33 +194,72 @@ function normalizeMessage(item = {}) {
   }
 }
 
-const messageRows = data => {
-  if (Array.isArray(data)) return data
-  for (const candidate of [data?.items, data?.messages, data?.data, data?.results]) if (Array.isArray(candidate)) return candidate
-  return []
-}
-
 export async function health(options) { return invoke('health', {}, options) }
 export async function getWhatsAppSystemHealth(options) { return invoke('health_check', {}, options) }
 export async function listConversations(filters = {}, options) {
-  const data = await invoke('list_conversations', { limit: Math.min(Number(filters.limit) || 200, 200) }, options)
-  return asArray(data?.items || data).map(normalizeConversation).sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
+  const client = options?.client || getSupabaseClient()
+  if (!client) throw new WhatsAppOperationError({ code: 'AUTH_SESSION_MISSING', message: 'Sua sessão expirou. Entre novamente no CRM.', status: 401 })
+  const limit = Math.min(Math.max(Number(filters.limit) || 200, 1), 200)
+  let query = client.from('whatsapp_conversations').select(
+    'id,organization_id,connection_id,contact_id,wa_id,status,attendance_mode,automation_paused,assigned_to,handoff_reason,service_window_expires_at,follow_up_at,last_message_at,last_inbound_at,last_outbound_at,unread_count,created_at,updated_at,whatsapp_contacts!inner(id,client_id,wa_id,display_name,profile_name)',
+  ).order('last_message_at', { ascending: false, nullsFirst: false }).limit(limit)
+  if (options?.signal && typeof query.abortSignal === 'function') query = query.abortSignal(options.signal)
+  const { data: conversations, error } = await query
+  if (error) throw new WhatsAppOperationError({ code: 'WHATSAPP_HISTORY_UNAVAILABLE', message: 'Não foi possível carregar a Caixa de Entrada do CRM.', status: 503, details: { database_code: error.code } })
+  if (!conversations?.length) return []
+  const history = await client.from('whatsapp_messages')
+    .select('conversation_id,text_content,template_name,status,created_at,sent_at,provider_timestamp')
+    .in('conversation_id', conversations.map((item) => item.id))
+    .order('created_at', { ascending: false })
+  if (history.error) throw new WhatsAppOperationError({ code: 'WHATSAPP_HISTORY_UNAVAILABLE', message: 'Não foi possível carregar as últimas mensagens do CRM.', status: 503, details: { database_code: history.error.code } })
+  const lastByConversation = new Map()
+  for (const message of history.data || []) if (!lastByConversation.has(message.conversation_id)) lastByConversation.set(message.conversation_id, message)
+  return conversations.map((item) => normalizeConversation({ ...item, lastMessage: lastByConversation.get(item.id) })).sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
 }
 export async function listMessages(conversation, limit = 80, options) {
-  const waId = requireIdentifier(conversation)
-  const data = await invoke('list_messages', { waId, limit: Math.min(Math.max(Number(limit) || 80, 1), 200) }, options)
-  return messageRows(data).map(normalizeMessage).sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
+  const client = options?.client || getSupabaseClient()
+  if (!client) throw new WhatsAppOperationError({ code: 'AUTH_SESSION_MISSING', message: 'Sua sessão expirou. Entre novamente no CRM.', status: 401 })
+  let conversationId = clean(conversation?.id)
+  if (!conversationId) {
+    const waId = requireIdentifier(conversation)
+    const found = await client.from('whatsapp_conversations').select('id').eq('wa_id', waId).order('last_message_at', { ascending: false }).limit(1).maybeSingle()
+    if (found.error) throw new WhatsAppOperationError({ code: 'WHATSAPP_HISTORY_UNAVAILABLE', message: 'Não foi possível localizar a conversa no CRM.', status: 503 })
+    conversationId = found.data?.id || ''
+  }
+  if (!conversationId) return []
+  let query = client.from('whatsapp_messages')
+    .select('id,conversation_id,provider_message_id,idempotency_key,direction,message_type,status,text_content,media,template_name,template_language,template_components,error_code,error_message,pricing,provider_timestamp,sent_at,delivered_at,read_at,failed_at,created_at,updated_at')
+    .eq('conversation_id', conversationId).order('created_at', { ascending: true }).limit(Math.min(Math.max(Number(limit) || 80, 1), 200))
+  if (options?.signal && typeof query.abortSignal === 'function') query = query.abortSignal(options.signal)
+  const { data, error } = await query
+  if (error) throw new WhatsAppOperationError({ code: 'WHATSAPP_HISTORY_UNAVAILABLE', message: 'Não foi possível carregar o histórico canônico.', status: 503, details: { database_code: error.code } })
+  return asArray(data).map(normalizeMessage)
+}
+export async function listCrmMessageHistory(conversation, limit = 100, options) {
+  return listMessages(conversation, limit, options)
+}
+export async function listCrmWhatsAppContacts({ limit = 100 } = {}, options) {
+  const client = options?.client || getSupabaseClient()
+  if (!client) throw new WhatsAppOperationError({ code: 'AUTH_SESSION_MISSING', message: 'Sua sessão expirou. Entre novamente no CRM.', status: 401 })
+  const result = await client.from('whatsapp_contacts').select('id,connection_id,client_id,wa_id,display_name,profile_name,first_seen_at,last_seen_at,updated_at').order('last_seen_at', { ascending: false }).limit(Math.min(Math.max(Number(limit) || 100, 1), 200))
+  if (result.error) throw new WhatsAppOperationError({ code: 'WHATSAPP_HISTORY_UNAVAILABLE', message: 'Não foi possível carregar os contatos do CRM.', status: 503 })
+  return asArray(result.data).map((item) => ({
+    ...item,
+    waId: clean(item.wa_id),
+    name: clean(item.display_name || item.profile_name) || `Contato • final ${clean(item.wa_id).slice(-4)}`,
+  }))
 }
 export async function findConversationByPhone(phone, options) {
   const normalized = normalizePhone(phone)
   if (!/^55[1-9]{2}9?\d{8}$/.test(normalized)) throw new WhatsAppOperationError({ code: 'INVALID_PAYLOAD', message: 'Informe um número de WhatsApp válido com DDD.', status: 400 })
-  try {
-    const data = await invoke('find_conversation_by_phone', { phone: normalized }, options)
-    return data?.conversation ? normalizeConversation(data.conversation) : null
-  } catch (error) {
-    if (error.code === 'UPSTREAM_NOT_FOUND') return null
-    throw error
-  }
+  const rows = await listConversations({ limit: 200 }, options)
+  return rows.find((item) => item.waId === normalized) || null
+}
+export async function markConversationRead(conversation, options = {}) {
+  const client = options.client || getSupabaseClient()
+  if (!client || !conversation?.id) return
+  const { error } = await client.rpc('mark_whatsapp_conversation_read', { p_conversation_id: conversation.id })
+  if (error) throw new WhatsAppOperationError({ code: 'WHATSAPP_READ_STATE_FAILED', message: 'Não foi possível marcar a conversa como lida.', status: 503 })
 }
 export const startTemplateConversation = ({ idempotencyKey, ...payload } = {}) => {
   const key = clean(idempotencyKey) || (payload.installment_id ? `stc-${clean(payload.installment_id)}` : '')
@@ -240,17 +282,18 @@ export const getWhatsAppUsage = (days = 30, options) => invoke('get_usage', { da
 export const sendManualMessage = (conversation, text, idempotencyKey) => {
   const value = clean(text)
   if (!value) throw new WhatsAppOperationError({ code: 'INVALID_PAYLOAD', message: 'Digite uma mensagem antes de enviar.', status: 400 })
-  return invoke('send_manual_message', { waId: requireIdentifier(conversation), text: value, idempotencyKey: clean(idempotencyKey) })
+  return invoke('send_manual_message', { waId: requireIdentifier(conversation), conversationId: clean(conversation?.id), connectionId: clean(conversation?.connection_id), text: value, idempotencyKey: clean(idempotencyKey) })
 }
 export const assignConversation = (conversation, userId) => invoke('assign_conversation', { waId: requireIdentifier(conversation), assignedTo: clean(userId) })
 export const pauseAutomation = conversation => invoke('pause_automation', { waId: requireIdentifier(conversation) })
 export const resumeAutomation = conversation => invoke('resume_automation', { waId: requireIdentifier(conversation) })
 export const closeConversation = conversation => invoke('close_conversation', { waId: requireIdentifier(conversation) })
-export const updateConversation = (conversation, changes) => invoke('pause_automation', { waId: requireIdentifier(conversation), changes })
+export const updateConversation = (conversation, changes) => invoke('update_conversation', { waId: requireIdentifier(conversation), changes })
 export const closeHandoff = resumeAutomation
 export const getAttendanceMeta = options => invoke('get_attendance_meta', {}, options)
 export const listWhatsAppUsers = options => invoke('list_users', {}, options).then(data => asArray(data?.items || data))
 export const getWhatsAppSummary = options => invoke('get_dashboard_summary', {}, options).then(data => data?.summary || data || {})
+export const reconcileWhatsAppHistory = (limit = 200, options) => invoke('reconcile_whatsapp_history', { limit }, options)
 
 function normalizePhone(value) {
   let phone = digits(value)

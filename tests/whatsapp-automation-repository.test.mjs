@@ -12,6 +12,7 @@ import {
   toFlowSummary,
   toRunView,
 } from '../src/services/data/automationsRepository.js'
+import { legacyDefinitionToGraph } from '../src/services/whatsapp/automationGraph.js'
 
 // ---- helpers puros --------------------------------------------------------------
 assert.equal(nextVersionNumber([]), 1)
@@ -39,6 +40,14 @@ assert.equal(summary.actionCount, 2)
 assert.equal(summary.conditionCount, 1)
 assert.equal(summary.activeVersion, 3)
 assert.equal(summary.triggerLabel, 'Lead criado')
+
+const graphDefinition = legacyDefinitionToGraph({ trigger: { type: 'manual_event' }, actions: [{ key: 'finish', type: 'end_flow' }] })
+const graphSummary = toFlowSummary(
+  { id: 'graph-flow', name: 'Grafo', trigger_type: 'manual_event', status: 'draft', active_version_id: 'graph-v1' },
+  { id: 'graph-v1', version: 1, definition: graphDefinition },
+)
+assert.equal(graphSummary.definition.schema_version, 2)
+assert.equal(graphSummary.actionCount, 1)
 
 const runView = toRunView(
   { id: 'r1', flow_id: 'f1', status: 'failed', trigger_type: 'lead_created', error_code: 'X', error_message: 'boom', attempts: 2 },
@@ -150,6 +159,18 @@ const opts = (client) => ({ client, organizationId: 'org-1' })
   assert.equal(client.__store.automation_flows.length, 0)
 }
 
+// ---- grafo v2 persiste, recarrega e ativa a mesma versão ---------------------
+{
+  const client = makeClient()
+  const created = await createAutomationFlow({ name: 'Fluxo em grafo', definition: graphDefinition }, opts(client))
+  assert.equal(created.definition.schema_version, 2)
+  assert.deepEqual(client.__store.automation_versions[0].definition, graphDefinition)
+  const listed = await listAutomationFlows(opts(client))
+  assert.deepEqual(listed[0].definition, graphDefinition)
+  const active = await setAutomationFlowStatus(created.id, 'activate', opts(client))
+  assert.equal(active.status, 'active')
+}
+
 // ---- saveAutomationFlowDefinition cria uma nova versão incremental ------------
 {
   const client = makeClient({
@@ -174,7 +195,8 @@ const opts = (client) => ({ client, organizationId: 'org-1' })
 // ---- setAutomationFlowStatus: transições e bloqueios --------------------------
 {
   const client = makeClient({
-    automation_flows: [{ id: 'flow-1', organization_id: 'org-1', name: 'F', trigger_type: 'manual_event', status: 'draft', active_version_id: 'v-1' }],
+    automation_flows: [{ id: 'flow-1', organization_id: 'org-1', name: 'Fluxo', trigger_type: 'manual_event', status: 'draft', active_version_id: 'v-1' }],
+    automation_versions: [{ id: 'v-1', organization_id: 'org-1', flow_id: 'flow-1', version: 1, definition: { trigger: { type: 'manual_event' }, actions: [{ type: 'end_flow' }] } }],
   })
   const activated = await setAutomationFlowStatus('flow-1', 'activate', opts(client))
   assert.equal(activated.status, 'active')
@@ -192,7 +214,7 @@ const opts = (client) => ({ client, organizationId: 'org-1' })
 }
 {
   const client = makeClient({
-    automation_flows: [{ id: 'flow-3', organization_id: 'org-1', name: 'Gatilho externo', trigger_type: 'whatsapp_message_received', status: 'draft', active_version_id: 'v-9' }],
+    automation_flows: [{ id: 'flow-3', organization_id: 'org-1', name: 'Gatilho agendado', trigger_type: 'client_inactive', status: 'draft', active_version_id: 'v-9' }],
   })
   await assert.rejects(() => setAutomationFlowStatus('flow-3', 'activate', opts(client)), /não pode ser executado/)
 }

@@ -6,6 +6,7 @@ export const WHATSAPP_OPERATION_CONTRACTS = Object.freeze({
   send_manual_message: { kind: 'write', identifier: true },
   assign_conversation: { kind: 'write', identifier: true },
   pause_automation: { kind: 'write', identifier: true },
+  update_conversation: { kind: 'write', identifier: true },
   resume_automation: { kind: 'write', identifier: true },
   close_conversation: { kind: 'write', identifier: true },
   find_conversation_by_phone: { kind: 'read', ttl: 30_000 },
@@ -22,6 +23,9 @@ export const WHATSAPP_OPERATION_CONTRACTS = Object.freeze({
   get_attendance_meta: { kind: 'read', ttl: 60_000 },
   list_users: { kind: 'read', ttl: 60_000 },
   get_dashboard_summary: { kind: 'read', ttl: 30_000 },
+  list_crm_contacts: { kind: 'read', ttl: 30_000 },
+  list_crm_message_history: { kind: 'read', ttl: 15_000, identifier: true },
+  reconcile_whatsapp_history: { kind: 'write' },
 })
 
 export const RETRYABLE_WHATSAPP_CODES = new Set([

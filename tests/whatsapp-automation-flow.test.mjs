@@ -17,7 +17,7 @@ import {
 assert.ok(TRIGGER_CATALOG.length >= 4)
 assert.ok(TRIGGER_CATALOG.every((t) => typeof t.type === 'string' && typeof t.available === 'boolean'))
 assert.equal(isTriggerAvailable('manual_event'), true)
-assert.equal(isTriggerAvailable('whatsapp_message_received'), false)
+assert.equal(isTriggerAvailable('whatsapp_message_received'), true)
 assert.equal(describeTrigger('nope'), null)
 assert.equal(describeAction('send_template').type, 'send_template')
 assert.deepEqual(ACTION_TYPES.slice().sort(), ACTION_CATALOG.map((a) => a.type).slice().sort())
@@ -42,9 +42,8 @@ assert.equal(compileAction({ type: 'wait', config: { minutes: '0' } }).minutes, 
 assert.equal(compileAction({ type: 'create_task', config: { priority: 'bogus' } }).priority, 'medium')
 
 // ---- validação: caminhos de erro --------------------------------------------------
-const invalidTrigger = validateFlowDefinition({ trigger: { type: 'whatsapp_message_received' }, actions: [{ type: 'end_flow' }] }, { name: 'Fluxo' })
-assert.equal(invalidTrigger.valid, false)
-assert.ok(invalidTrigger.errors.some((e) => e.path === 'trigger.type'))
+const inboundTrigger = validateFlowDefinition({ trigger: { type: 'whatsapp_message_received' }, actions: [{ type: 'end_flow' }] }, { name: 'Fluxo' })
+assert.equal(inboundTrigger.valid, true)
 
 const noActions = validateFlowDefinition({ trigger: { type: 'manual_event' }, actions: [] }, { name: 'Fluxo' })
 assert.equal(noActions.valid, false)

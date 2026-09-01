@@ -5,6 +5,7 @@ import {
   normalizeFlowDefinition,
   validateFlowDefinition,
 } from '../whatsapp/automationFlow.js'
+import { graphTrigger, isGraphDefinition, normalizeGraph, validateGraph } from '../whatsapp/automationGraph.js'
 
 const unwrap = ({ data, error }) => {
   if (error) throw error
@@ -29,27 +30,38 @@ async function context(options = {}) {
 const FLOW_COLUMNS =
   'id,organization_id,name,description,trigger_type,trigger_config,status,active_version_id,run_count,last_run_at,archived_at,created_at,updated_at'
 
+const validateDefinition = (name, definition) => {
+  if (!isGraphDefinition(definition)) return validateFlowDefinition(definition, { name })
+  const result = validateGraph(definition)
+  const normalizedName = String(name || '').trim()
+  const nameErrors = normalizedName.length >= 2 && normalizedName.length <= 120
+    ? []
+    : [{ path: 'name', code: 'NAME_INVALID', message: 'Informe um nome entre 2 e 120 caracteres.' }]
+  return { valid: result.valid && !nameErrors.length, errors: [...nameErrors, ...result.errors], definition: result.graph }
+}
+
 // ---- helpers puros (testáveis isoladamente) -------------------------------------------
 
 export function toFlowSummary(row = {}, version = null) {
   const definition = version?.definition
-    ? compileFlowDefinition(version.definition)
+    ? (isGraphDefinition(version.definition) ? normalizeGraph(version.definition) : compileFlowDefinition(version.definition))
     : compileFlowDefinition({ trigger: { type: row.trigger_type, config: row.trigger_config } })
+  const trigger = isGraphDefinition(definition) ? graphTrigger(definition) : definition.trigger
   return {
     id: row.id,
     name: row.name || 'Fluxo sem nome',
     description: row.description || '',
-    triggerType: row.trigger_type || definition.trigger.type || '',
-    triggerLabel: describeTrigger(row.trigger_type || definition.trigger.type)?.label || row.trigger_type || '—',
-    triggerConfig: row.trigger_config || definition.trigger.config || {},
+    triggerType: row.trigger_type || trigger.type || '',
+    triggerLabel: describeTrigger(row.trigger_type || trigger.type)?.label || row.trigger_type || '—',
+    triggerConfig: row.trigger_config || trigger.config || {},
     status: row.status || 'draft',
     activeVersionId: row.active_version_id || version?.id || null,
     activeVersion: version?.version ?? null,
     runCount: Number(row.run_count || 0),
     lastRunAt: row.last_run_at || null,
     definition,
-    actionCount: definition.actions.length,
-    conditionCount: definition.conditions.length,
+    actionCount: isGraphDefinition(definition) ? definition.nodes.filter(node => !['trigger','condition'].includes(node.type)).length : definition.actions.length,
+    conditionCount: isGraphDefinition(definition) ? definition.nodes.filter(node => node.type === 'condition').length : definition.conditions.length,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
   }
@@ -60,12 +72,13 @@ export function nextVersionNumber(existing = []) {
 }
 
 export function buildFlowRow({ organizationId, name, definition, createdBy = null }) {
-  const compiled = compileFlowDefinition(definition)
+  const compiled = isGraphDefinition(definition) ? normalizeGraph(definition) : compileFlowDefinition(definition)
+  const trigger = isGraphDefinition(compiled) ? graphTrigger(compiled) : compiled.trigger
   return {
     organization_id: organizationId,
     name: String(name || '').trim(),
-    trigger_type: compiled.trigger.type,
-    trigger_config: compiled.trigger.config,
+    trigger_type: trigger.type,
+    trigger_config: trigger.config,
     status: 'draft',
     run_count: 0,
     created_by: createdBy,
@@ -78,7 +91,7 @@ export function buildVersionRow({ organizationId, flowId, version, definition, c
     organization_id: organizationId,
     flow_id: flowId,
     version,
-    definition: compileFlowDefinition(definition),
+    definition: isGraphDefinition(definition) ? normalizeGraph(definition) : compileFlowDefinition(definition),
     created_by: createdBy,
     note,
   }
@@ -161,7 +174,7 @@ export async function getAutomationFlow(id, options = {}) {
 
 export async function createAutomationFlow({ name, definition }, options = {}) {
   const { client, organizationId } = await context(options)
-  const check = validateFlowDefinition(definition, { name })
+  const check = validateDefinition(name, definition)
   if (!check.valid) {
     const error = new Error(check.errors[0]?.message || 'Fluxo inválido.')
     error.validation = check.errors
@@ -195,7 +208,7 @@ export async function createAutomationFlow({ name, definition }, options = {}) {
 
 export async function saveAutomationFlowDefinition(id, { name, definition }, options = {}) {
   const { client, organizationId } = await context(options)
-  const check = validateFlowDefinition(definition, { name })
+  const check = validateDefinition(name, definition)
   if (!check.valid) {
     const error = new Error(check.errors[0]?.message || 'Fluxo inválido.')
     error.validation = check.errors
@@ -214,13 +227,14 @@ export async function saveAutomationFlowDefinition(id, { name, definition }, opt
       .single(),
   )
   const compiled = check.definition
+  const trigger = isGraphDefinition(compiled) ? graphTrigger(compiled) : compiled.trigger
   const updated = unwrap(
     await client
       .from('automation_flows')
       .update({
         name: String(name || '').trim(),
-        trigger_type: compiled.trigger.type,
-        trigger_config: compiled.trigger.config,
+        trigger_type: trigger.type,
+        trigger_config: trigger.config,
         active_version_id: inserted.id,
         updated_by: createdBy,
       })
@@ -248,6 +262,26 @@ export async function setAutomationFlowStatus(id, action, options = {}) {
     if (!current.active_version_id) throw new Error('Salve o fluxo antes de ativá-lo.')
     if (!describeTrigger(current.trigger_type)?.available) {
       throw new Error('O gatilho deste fluxo ainda não pode ser executado nesta infraestrutura.')
+    }
+    const version = unwrap(
+      await client.from('automation_versions').select('definition')
+        .eq('id', current.active_version_id).eq('organization_id', organizationId).single(),
+    )
+    const validation = validateDefinition(current.name, version.definition)
+    if (!validation.valid) {
+      const error = new Error(validation.errors[0]?.message || 'O grafo ativo é inválido.')
+      error.validation = validation.errors
+      throw error
+    }
+    if (isGraphDefinition(version.definition)) {
+      const templates = [...new Set(version.definition.nodes.filter((node) => node.type === 'send_template').map((node) => String(node.config?.template_name || '').trim()).filter(Boolean))]
+      if (templates.length) {
+        const approved = unwrap(await client.from('whatsapp_message_templates').select('name')
+          .eq('organization_id', organizationId).eq('status', 'APPROVED').eq('is_active', true).in('name', templates))
+        const approvedNames = new Set(approved.map((item) => item.name))
+        const missing = templates.find((name) => !approvedNames.has(name))
+        if (missing) throw new Error(`O template "${missing}" não está aprovado e ativo nesta organização.`)
+      }
     }
   }
   const patch = { status: target, updated_by: options.userId || null }
@@ -279,7 +313,7 @@ export async function duplicateAutomationFlow(id, options = {}) {
     const version = unwrap(
       await client.from('automation_versions').select('definition').eq('id', source.active_version_id).maybeSingle(),
     )
-    if (version?.definition) definition = compileFlowDefinition(version.definition)
+    if (version?.definition) definition = isGraphDefinition(version.definition) ? normalizeGraph(version.definition) : compileFlowDefinition(version.definition)
   }
   return createAutomationFlow({ name: `${source.name} (cópia)`.slice(0, 120), definition }, options)
 }

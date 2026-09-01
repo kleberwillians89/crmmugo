@@ -130,6 +130,51 @@ const sanitizedMetaError = (body: any) => ({
   details: text(body?.error?.error_data?.details, 500),
   fbtrace_id: text(body?.error?.fbtrace_id, 120),
 })
+const persistOutboundMessage = async ({
+  supabaseUrl, serviceKey, organizationId, recipient, providerMessageId, idempotencyKey,
+  messageType, textContent, templateName, templateLanguage, templateComponents, clientId, connectionId, sentAt, status = 'accepted',
+}: any) => {
+  if (!serviceKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY_MISSING')
+  const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } })
+  const phoneNumberId = text(Deno.env.get('PHONE_NUMBER_ID'), 80)
+  let connectionQuery = admin.from('whatsapp_connections')
+    .select('id,organization_id').eq('organization_id', organizationId).in('status', ['active','degraded'])
+  if (connectionId) connectionQuery = connectionQuery.eq('id', connectionId)
+  if (phoneNumberId) connectionQuery = connectionQuery.eq('phone_number_id', phoneNumberId)
+  const connectionResult = await connectionQuery.order('updated_at', { ascending: false }).limit(1).maybeSingle()
+  if (connectionResult.error || !connectionResult.data) throw connectionResult.error || new Error('WHATSAPP_CONNECTION_NOT_FOUND')
+  const connection = connectionResult.data
+  let displayName = ''
+  if (clientId) {
+    const client = await admin.from('clients').select('contact_name,trade_name,company_name').eq('id', clientId).eq('organization_id', organizationId).maybeSingle()
+    displayName = text(client.data?.contact_name || client.data?.trade_name || client.data?.company_name, 240)
+  }
+  const contactResult = await admin.from('whatsapp_contacts').upsert({
+    organization_id: organizationId, connection_id: connection.id, wa_id: recipient,
+    ...(clientId ? { client_id: clientId } : {}), ...(displayName ? { display_name: displayName } : {}), last_seen_at: new Date().toISOString(),
+  }, { onConflict: 'connection_id,wa_id' }).select('id,client_id,display_name,profile_name').single()
+  if (contactResult.error) throw contactResult.error
+  const now = sentAt || new Date().toISOString()
+  const conversationResult = await admin.from('whatsapp_conversations').upsert({
+    organization_id: organizationId, connection_id: connection.id, contact_id: contactResult.data.id,
+    wa_id: recipient, status: 'open', last_message_at: now, last_outbound_at: now,
+  }, { onConflict: 'connection_id,wa_id' }).select('id,connection_id,contact_id,wa_id,status,attendance_mode,automation_paused,assigned_to,service_window_expires_at,last_message_at,last_outbound_at,unread_count,created_at,updated_at').single()
+  if (conversationResult.error) throw conversationResult.error
+  const messageResult = await admin.from('whatsapp_messages').upsert({
+    organization_id: organizationId, connection_id: connection.id, conversation_id: conversationResult.data.id,
+    provider_message_id: providerMessageId, idempotency_key: idempotencyKey || null,
+    direction: 'out', message_type: messageType, status, text_content: textContent || null,
+    template_name: templateName || null, template_language: templateLanguage || null,
+    template_components: Array.isArray(templateComponents) ? templateComponents : [], sent_at: status === 'queued' ? null : now,
+  }, { onConflict: idempotencyKey ? 'connection_id,idempotency_key' : 'connection_id,provider_message_id' }).select('id,provider_message_id,status,sent_at').single()
+  if (messageResult.error) throw messageResult.error
+  return {
+    connection_id: connection.id,
+    conversation_id: conversationResult.data.id,
+    conversation: { ...conversationResult.data, whatsapp_contacts: contactResult.data },
+    message: messageResult.data,
+  }
+}
 const metaFailure = (status: number, body: any, requestId = '') => {
   const error = sanitizedMetaError(body)
   console.log(JSON.stringify({event:'meta_whatsapp_error',request_id:requestId,status,...error}))
@@ -189,6 +234,17 @@ const fetchMeta = async (url: string, accessToken: string, diagnostic: any = nul
     throw error
   }
 }
+
+const sendMetaMessage = async (config: any, payload: unknown) => {
+  const response = await fetch(`https://graph.facebook.com/${config.version}/${config.phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(20_000),
+  })
+  const body = await response.json().catch(() => ({}))
+  return { response, body }
+}
 const fetchTemplates = async (config: any) => {
   const fields = 'id,name,language,status,category,components,quality_score,rejected_reason,previous_category,parameter_format'
   let url = `https://graph.facebook.com/${config.version}/${config.wabaId}/message_templates?fields=${encodeURIComponent(fields)}&limit=100`
@@ -236,11 +292,19 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
   send_manual_message: { method: 'POST', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}/send`, body: p => ({ text: text(p.text, 4000), idempotency_key:text(p.idempotencyKey,120) }), write: true },
   assign_conversation: { method: 'PATCH', path: p => `/api/attendance/conversations/${encodeURIComponent(text(p.waId, 40))}/assign`, body: p => ({ assigned_to: text(p.assignedTo, 120) }), write: true },
   pause_automation: { method: 'PATCH', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}`, body: () => ({ attendance_mode:'human', automation_paused:true, bot_enabled:false }), write: true },
+  update_conversation: { method: 'PATCH', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}`, body: p => ({
+    ...(p.changes?.status ? { status: text(p.changes.status, 30) } : {}),
+    ...(p.changes?.attendance_mode ? { attendance_mode: text(p.changes.attendance_mode, 30) } : {}),
+    ...(typeof p.changes?.automation_paused === 'boolean' ? { automation_paused: p.changes.automation_paused } : {}),
+  }), write: true },
   resume_automation: { method: 'POST', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}/handoff/close`, write: true },
   close_conversation: { method: 'PATCH', path: p => `/api/conversations/${encodeURIComponent(text(p.waId, 40))}`, body: () => ({ status:'closed' }), write: true },
   get_attendance_meta: { method: 'GET', path: () => '/api/attendance/meta' },
   list_users: { method: 'GET', path: () => '/api/users', admin: true },
   get_dashboard_summary: { method: 'GET', path: () => '/api/dashboard/summary' },
+  reconcile_whatsapp_history: { method: 'POST', path: () => '/internal/crm/reconcile', write: true },
+  list_crm_contacts: { method: 'GET', path: () => '/internal/crm/contacts' },
+  list_crm_message_history: { method: 'GET', path: () => '/internal/crm/messages' },
   start_template_conversation: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
   send_template_message: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
   get_template_test_access: { method: 'GET', path: () => '/internal/template-test-access', admin: true },
@@ -288,6 +352,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       return fail('AUTH_SESSION_MISSING', 'Sua sessão expirou. Entre novamente no CRM.', 403)
     }
     const supabaseUrl = Deno.env.get('SUPABASE_URL'), anonKey = Deno.env.get('SUPABASE_ANON_KEY')
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
     const apiUrl = text(Deno.env.get('MUGOZAP_API_URL'), 500).replace(/\/$/, '')
     const panelKey = Deno.env.get('PANEL_API_KEY')
     const workspaceId = text(request.headers.get('X-Workspace-Id'), 120)
@@ -320,6 +385,45 @@ const handleRequest = async (request: Request, requestId: string) => {
     if (route.write && !['admin','manager'].includes(profile.role)) return fail('FORBIDDEN', operation==='sync_templates'?'Seu perfil não pode sincronizar templates.':'Seu perfil não pode alterar conversas.', 403)
     if (route.admin && profile.role !== 'admin') return fail('FORBIDDEN', 'Somente administradores podem consultar usuários do WhatsApp.', 403)
     const payload = incoming.payload || {}
+    if(operation==='list_crm_contacts'){
+      const limit=Math.min(Math.max(Number(payload.limit)||100,1),200)
+      const result=await client.from('whatsapp_contacts')
+        .select('id,connection_id,client_id,wa_id,display_name,profile_name,first_seen_at,last_seen_at,updated_at')
+        .eq('organization_id',profile.organization_id).order('last_seen_at',{ascending:false}).limit(limit)
+      if(result.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível ler os contatos do WhatsApp.',503)
+      return json({ok:true,data:{items:result.data||[],source:'crm'}})
+    }
+    if(operation==='list_crm_message_history'){
+      const waId=identifier(payload.waId),limit=Math.min(Math.max(Number(payload.limit)||100,1),200)
+      if(!waId)return fail('INVALID_CONVERSATION_ID','Identificador da conversa ausente.',400)
+      const conversations=await client.from('whatsapp_conversations').select('id').eq('organization_id',profile.organization_id).eq('wa_id',waId)
+      if(conversations.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível localizar a conversa.',503)
+      if(!conversations.data?.length)return json({ok:true,data:{items:[],source:'crm'}})
+      const result=await client.from('whatsapp_messages')
+        .select('id,conversation_id,provider_message_id,direction,message_type,status,text_content,media,template_name,template_language,error_code,error_message,provider_timestamp,sent_at,delivered_at,read_at,failed_at,created_at')
+        .in('conversation_id',conversations.data.map((item:any)=>item.id)).order('created_at',{ascending:true}).limit(limit)
+      if(result.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível ler o histórico do WhatsApp.',503)
+      return json({ok:true,data:{items:result.data||[],source:'crm'}})
+    }
+    if(operation==='reconcile_whatsapp_history'){
+      if(!serviceKey)return fail('SUPABASE_SERVICE_ROLE_KEY_MISSING','A reconciliação canônica não está configurada.',503)
+      const alerts=await client.from('whatsapp_collection_alerts')
+        .select('id,client_id,wa_id,provider_message_id,template_name,template_language,status,sent_at')
+        .eq('organization_id',profile.organization_id).not('provider_message_id','is',null)
+        .order('sent_at',{ascending:false}).limit(Math.min(Math.max(Number(payload.limit)||200,1),500))
+      if(alerts.error)return fail('CANONICAL_RECONCILIATION_FAILED','Não foi possível ler os envios confirmados.',503)
+      const summary={checked:alerts.data?.length||0,reconciled:0,failed:0,items:[] as any[]}
+      for(const alert of alerts.data||[]){
+        try{
+          const canonical=await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,
+            recipient:brazilianPhone(alert.wa_id),providerMessageId:text(alert.provider_message_id,200),
+            idempotencyKey:`collection-alert-${alert.id}`,messageType:'template',templateName:alert.template_name,
+            templateLanguage:alert.template_language||'pt_BR',clientId:alert.client_id,sentAt:alert.sent_at,status:'sent'})
+          summary.reconciled+=1;summary.items.push({alert_id:alert.id,provider_message_id:alert.provider_message_id,conversation_id:canonical.conversation_id})
+        }catch(error){summary.failed+=1;summary.items.push({alert_id:alert.id,error_code:text((error as any)?.code||(error as any)?.message,120)})}
+      }
+      return json({ok:true,data:summary})
+    }
     const connectionOperations = new Set(['list_whatsapp_connections','get_whatsapp_connection','get_whatsapp_connection_health','validate_whatsapp_connection','resolve_whatsapp_connection_shadow'])
     if(connectionOperations.has(operation)){
       const enabled=text(Deno.env.get('WHATSAPP_CONNECTIONS_V2')||'false',10).toLowerCase()==='true'
@@ -434,6 +538,44 @@ const handleRequest = async (request: Request, requestId: string) => {
       auditOperation('edge_frontend_response',operation,{request_id:requestId,organization_id:profile.organization_id,status_http:200,body_returned_to_frontend:frontendBody})
       return json({ok:true,data:frontendBody})
     }
+    // O contrato real do MugoZap responde apenas {ok:boolean} no envio manual e
+    // descarta o wamid retornado pela Meta. Para não confirmar um envio sem ledger
+    // nem induzir retry/duplicidade, o CRM usa a Meta diretamente nesta operação.
+    if(operation==='send_manual_message'){
+      const recipient=identifier(payload.waId),bodyText=text(payload.text,4000),idempotencyKey=text(payload.idempotencyKey,120)
+      if(!recipient||!bodyText)return fail('INVALID_PAYLOAD','Digite uma mensagem e informe uma conversa válida.',422)
+      if(!idempotencyKey)return fail('IDEMPOTENCY_KEY_MISSING','Não foi possível identificar esta tentativa de envio.',422)
+      if(!serviceKey)return fail('SUPABASE_SERVICE_ROLE_KEY_MISSING','O histórico canônico não está configurado.',503)
+      const existing=await client.from('whatsapp_messages').select('id,provider_message_id,status,conversation_id')
+        .eq('organization_id',profile.organization_id).eq('idempotency_key',idempotencyKey).maybeSingle()
+      if(existing.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível validar a idempotência do envio.',503)
+      if(existing.data?.provider_message_id)return json({ok:true,data:{already_sent:true,provider_message_id:existing.data.provider_message_id,message_id:existing.data.provider_message_id,status:existing.data.status,conversation_id:existing.data.conversation_id}})
+      if(existing.data)return fail('SEND_OUTCOME_UNKNOWN','Já existe uma tentativa sem confirmação para esta chave. A mensagem não será reenviada automaticamente.',409)
+      let conversationQuery=client.from('whatsapp_conversations').select('id,connection_id,service_window_expires_at')
+        .eq('organization_id',profile.organization_id).eq('wa_id',recipient)
+      if(text(payload.conversationId,80))conversationQuery=conversationQuery.eq('id',text(payload.conversationId,80))
+      const conversation=await conversationQuery.maybeSingle()
+      if(conversation.error||!conversation.data)return fail('CONVERSATION_NOT_FOUND','A conversa canônica não foi encontrada.',404)
+      if(!conversation.data.service_window_expires_at||new Date(conversation.data.service_window_expires_at).getTime()<=Date.now())return fail('SERVICE_WINDOW_CLOSED','A janela de atendimento está encerrada. Use um template aprovado.',409)
+      const config:any=metaConfig(true)
+      if(config.error)return config.error
+      try{await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,recipient,connectionId:conversation.data.connection_id,providerMessageId:null,idempotencyKey,messageType:'text',textContent:bodyText,status:'queued'})}
+      catch(error){return fail('CRM_AUDIT_FAILED','Não foi possível reservar a mensagem no histórico canônico; nada foi enviado.',503,0,true,{code:text((error as any)?.code||(error as any)?.message,120)})}
+      let sent:any
+      try{sent=await sendMetaMessage(config,{messaging_product:'whatsapp',recipient_type:'individual',to:recipient,type:'text',text:{preview_url:false,body:bodyText}})}
+      catch(error){const timedOut=error instanceof DOMException&&error.name==='TimeoutError';return fail(timedOut?'META_TIMEOUT':'META_UNAVAILABLE',timedOut?'A Meta demorou para responder.':'Não foi possível enviar pela Meta.',timedOut?504:503,0,true)}
+      if(!sent.response.ok)return metaFailure(sent.response.status,sent.body,requestId)
+      const providerMessageId=text(sent.body?.messages?.[0]?.id,200)
+      if(!providerMessageId)return fail('MESSAGE_SEND_UNCONFIRMED','A Meta não confirmou o envio. Verifique o histórico antes de tentar novamente.',502)
+      try{
+        const canonical=await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,recipient,connectionId:conversation.data.connection_id,providerMessageId,idempotencyKey,messageType:'text',textContent:bodyText})
+        const admin=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
+        await admin.from('whatsapp_conversations').update({attendance_mode:'human',automation_paused:true,handoff_reason:'manual_message'}).eq('id',canonical.conversation_id)
+        await admin.from('whatsapp_conversation_events').insert({organization_id:profile.organization_id,connection_id:canonical.connection_id,conversation_id:canonical.conversation_id,event_type:'manual_message_sent',actor_id:user.id,details:{provider_message_id:providerMessageId}})
+        return json({ok:true,data:{provider_message_id:providerMessageId,message_id:providerMessageId,status:'accepted',conversation:canonical.conversation,message:canonical.message}})
+      }catch(error){console.log(JSON.stringify({event:'whatsapp_history_write_failed',request_id:requestId,operation,error_code:text((error as any)?.code||(error as any)?.message,120)}));return fail('CRM_AUDIT_FAILED','A mensagem foi enviada, mas o histórico canônico não pôde ser registrado. Não repita o envio.',502)}
+    }
+
     if (!apiUrl || !panelKey) return fail('MUGOZAP_CONFIGURATION_MISSING', 'A integração com o MugoZap ainda não foi configurada.', 503)
     if (!/^https?:\/\//.test(apiUrl)) return fail('MUGOZAP_CONFIGURATION_INVALID', 'A URL interna do MugoZap é inválida.', 503)
     let alertReservationId = ''
@@ -447,13 +589,27 @@ const handleRequest = async (request: Request, requestId: string) => {
       const [clientResult, installmentResult, duplicateResult] = await Promise.all([
         client.from('clients').select('id,organization_id,company_name,trade_name,contact_name,phone,billing_contact_phone').eq('id',clientId).eq('organization_id',profile.organization_id).single(),
         client.from('invoice_installments').select('id,organization_id,client_id,contract_id,status,due_date,amount').eq('id',installmentId).eq('organization_id',profile.organization_id).single(),
-        client.from('whatsapp_collection_alerts').select('id,status').eq('organization_id',profile.organization_id).eq('installment_id',installmentId).eq('template_name',templateName).maybeSingle(),
+        client.from('whatsapp_collection_alerts').select('id,status,client_id,wa_id,provider_message_id,template_name,template_language,sent_at').eq('organization_id',profile.organization_id).eq('installment_id',installmentId).eq('template_name',templateName).maybeSingle(),
       ])
       if (clientResult.error || !clientResult.data || installmentResult.error || !installmentResult.data) return fail('COLLECTION_NOT_FOUND', 'Cliente ou parcela não encontrado.', 404)
       const clientRow:any = clientResult.data, installment:any = installmentResult.data
       if (installment.client_id !== clientRow.id) return fail('CLIENT_MISMATCH', 'A parcela não pertence ao cliente informado.', 403)
       if (installment.status === 'paid') return fail('INSTALLMENT_PAID', 'Esta parcela já foi paga e não pode ser cobrada.', 409)
-      if (duplicateResult.data && duplicateResult.data.status !== 'failed') return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
+      if (duplicateResult.data && duplicateResult.data.status !== 'failed') {
+        const previous:any=duplicateResult.data
+        if(!previous.provider_message_id)return fail('COLLECTION_DUPLICATE','Um alerta desta cobrança já foi enviado, mas ainda não possui confirmação canônica.',409)
+        try{
+          const canonical=await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,
+            recipient:brazilianPhone(previous.wa_id),providerMessageId:text(previous.provider_message_id,200),
+            idempotencyKey:`collection-alert-${previous.id}`,messageType:'template',templateName:previous.template_name,
+            templateLanguage:previous.template_language||'pt_BR',clientId:previous.client_id,sentAt:previous.sent_at,status:'sent'})
+          return json({ok:true,data:{already_sent:true,reconciled:true,provider_message_id:previous.provider_message_id,
+            message_id:previous.provider_message_id,status:'sent',conversation:canonical.conversation,message:canonical.message}})
+        }catch(error){
+          console.log(JSON.stringify({event:'whatsapp_reconciliation_failed',request_id:requestId,alert_id:previous.id,error_code:text((error as any)?.code||(error as any)?.message,120)}))
+          return fail('CANONICAL_RECONCILIATION_FAILED','O envio anterior foi confirmado, mas não pôde ser reconstruído no histórico. A mensagem não foi reenviada.',503)
+        }
+      }
       if (duplicateResult.data?.status === 'failed') await client.from('whatsapp_collection_alerts').delete().eq('id',duplicateResult.data.id)
       const normalizedPhone = brazilianPhone(payload.phone)
       const storedPhones = [clientRow.phone,clientRow.billing_contact_phone].map(brazilianPhone).filter(Boolean)
@@ -530,7 +686,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       const couponCode=(components||[]).find((item:any)=>metaStatus(item.type)==='BUTTON'&&metaStatus(item.sub_type)==='COPY_CODE')?.parameters?.find((item:any)=>metaStatus(item.type)==='COUPON_CODE')?.coupon_code
       verifiedPayload={wa_id:recipient,template_name:templateName,language,...(contractMode==='minimal'?{}:{components}),...(bodyParameters.length?{parameters:bodyParameters}:{}),...(couponCode?{coupon_code:text(couponCode,120)}:{}),source:'crm_homologation',idempotency_key:idempotencyKey}
     }
-    const identifierOperations = ['list_messages','send_manual_message','assign_conversation','pause_automation','resume_automation','close_conversation']
+    const identifierOperations = ['list_messages','send_manual_message','assign_conversation','pause_automation','resume_automation','close_conversation','update_conversation']
     if (identifierOperations.includes(operation) && !identifier(payload.waId)) return fail('INVALID_CONVERSATION_ID', 'Identificador da conversa ausente.', 400)
     if(operation==='send_manual_message'){
       if(!text(payload.text,4000))return fail('INVALID_PAYLOAD','Digite uma mensagem antes de enviar.',422)
@@ -621,6 +777,39 @@ const handleRequest = async (request: Request, requestId: string) => {
       const alertResult = await client.from('whatsapp_collection_alerts').update({wa_id:String(conversation.wa_id||normalizedPhone),provider_message_id:providerMessageId,template_status:'APPROVED',collection_stage:'waiting_customer',action:'template_sent',status:'sent',sent_at:new Date().toISOString(),raw_response:{provider_message_id:providerMessageId,conversation_id:text(conversation.id||conversation.wa_id,200)},error_code:null,error_message:null}).eq('id',alertReservationId)
       await client.from('commercial_events').insert({organization_id:profile.organization_id,client_id:payload.client_id,installment_id:payload.installment_id,event_type:'whatsapp_collection_alert_sent',title:'Alerta de cobrança enviado pelo WhatsApp',new_value:{wa_id:String(conversation.wa_id||normalizedPhone),template_name:'mugo_alerta_pagamento_pendente',provider_message_id:providerMessageId,language:'pt_BR',source:'collection'},created_by:user.id})
       if (linkResult.error || alertResult.error) return fail('CRM_AUDIT_FAILED', 'O alerta foi enviado, mas o vínculo não pôde ser registrado. Não repita o envio.', 502)
+      try{
+        const canonical=await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,recipient:normalizedPhone,providerMessageId,
+          idempotencyKey:text(payload.idempotency_key,120),messageType:'template',templateName:'mugo_alerta_pagamento_pendente',
+          templateLanguage:'pt_BR',clientId:payload.client_id})
+        return json({ok:true,data:{...sent,provider_message_id:providerMessageId,message_id:providerMessageId,status:'accepted',conversation:canonical.conversation,message:canonical.message}})
+      }catch(error){
+        console.log(JSON.stringify({event:'whatsapp_history_write_failed',request_id:requestId,operation,error_code:text((error as any)?.code||(error as any)?.message,120)}))
+        return fail('CRM_AUDIT_FAILED','O alerta foi enviado, mas o histórico canônico não pôde ser registrado. Não repita o envio.',502)
+      }
+    }
+    if(['pause_automation','resume_automation','close_conversation','update_conversation'].includes(operation)&&serviceKey){
+      const admin=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
+      const waId=identifier(payload.waId)
+      const found=await admin.from('whatsapp_conversations').select('id,connection_id')
+        .eq('organization_id',profile.organization_id).eq('wa_id',waId).maybeSingle()
+      if(found.data){
+        const requested=payload.changes||{}
+        const patch=operation==='pause_automation'
+          ?{attendance_mode:'human',automation_paused:true,handoff_reason:'manual_handoff'}
+          :operation==='resume_automation'
+            ?{attendance_mode:'bot',automation_paused:false,handoff_reason:null}
+            :operation==='close_conversation'
+              ?{status:'closed'}
+              :{
+                ...(['open','pending','resolved','closed'].includes(text(requested.status,30))?{status:text(requested.status,30)}:{}),
+                ...(['bot','human','paused'].includes(text(requested.attendance_mode,30))?{attendance_mode:text(requested.attendance_mode,30)}:{}),
+                ...(typeof requested.automation_paused==='boolean'?{automation_paused:requested.automation_paused}:{}),
+              }
+        const mirrored=await admin.from('whatsapp_conversations').update(patch).eq('id',found.data.id)
+        const event=await admin.from('whatsapp_conversation_events').insert({organization_id:profile.organization_id,
+          connection_id:found.data.connection_id,conversation_id:found.data.id,event_type:operation,actor_id:user.id,details:{source:'crm'}})
+        if(mirrored.error||event.error)return fail('CRM_AUDIT_FAILED','O estado foi alterado no provedor, mas não pôde ser espelhado no CRM.',502)
+      }
     }
     if(operation==='send_template_message'){
       const providerMessageId=text(responseBody?.provider_message_id||responseBody?.message_id||responseBody?.messages?.[0]?.id,200)
@@ -630,11 +819,27 @@ const handleRequest = async (request: Request, requestId: string) => {
         const linkResult=await client.from('whatsapp_conversation_links').upsert({organization_id:profile.organization_id,client_id:genericTemplateClientId,wa_id:String(conversation.wa_id||recipient),phone:recipient,conversation_id:String(conversation.id||conversation.wa_id||recipient)},{onConflict:'organization_id,wa_id'})
         if(linkResult.error)return fail('CRM_AUDIT_FAILED','O template foi enviado, mas o vínculo com o contato não pôde ser registrado. Não repita o envio.',502)
       }
-      return json({ok:true,data:{message_id:providerMessageId,status:'accepted',conversation:responseBody?.conversation||null,template_name:text(payload.template_name,100),language:text(payload.language,20),recipient}})
+      try{
+        const canonical=await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,recipient,providerMessageId,
+          idempotencyKey:text(payload.idempotency_key,120),messageType:'template',templateName:text(payload.template_name,100),
+          templateLanguage:text(payload.language,20),templateComponents:payload.components,clientId:genericTemplateClientId})
+        return json({ok:true,data:{message_id:providerMessageId,provider_message_id:providerMessageId,status:'accepted',conversation:canonical.conversation,message:canonical.message,template_name:text(payload.template_name,100),language:text(payload.language,20),recipient}})
+      }catch(error){
+        console.log(JSON.stringify({event:'whatsapp_history_write_failed',request_id:requestId,operation,error_code:text((error as any)?.code||(error as any)?.message,120)}))
+        return fail('CRM_AUDIT_FAILED','O template foi enviado, mas o histórico canônico não pôde ser registrado. Não repita o envio.',502)
+      }
     }
     if(operation==='send_manual_message'){
       const providerMessageId=text(responseBody?.provider_message_id||responseBody?.message_id||responseBody?.messages?.[0]?.id,200)
       if(!providerMessageId)return fail('MESSAGE_SEND_UNCONFIRMED','O provedor não confirmou o envio. Verifique o histórico antes de tentar novamente.',502)
+      try{
+        const canonical=await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,recipient:identifier(payload.waId),providerMessageId,
+          idempotencyKey:text(payload.idempotencyKey,120),messageType:'text',textContent:text(payload.text,4000)})
+        return json({ok:true,data:{provider_message_id:providerMessageId,message_id:providerMessageId,status:'accepted',conversation:canonical.conversation,message:canonical.message}})
+      }catch(error){
+        console.log(JSON.stringify({event:'whatsapp_history_write_failed',request_id:requestId,operation,error_code:text((error as any)?.code||(error as any)?.message,120)}))
+        return fail('CRM_AUDIT_FAILED','A mensagem foi enviada, mas o histórico canônico não pôde ser registrado. Não repita o envio.',502)
+      }
     }
     auditOperation('edge_transformed',operation,{request_id:requestId,organization_id:profile.organization_id,body_transformed:responseBody})
     auditOperation('edge_frontend_response',operation,{request_id:requestId,organization_id:profile.organization_id,status_http:200,body_returned_to_frontend:responseBody})

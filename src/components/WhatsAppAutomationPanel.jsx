@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FeedbackMessage } from './FeedbackMessage'
+import { AutomationFlowBuilder } from './AutomationFlowBuilder'
 import {
   ACTION_CATALOG,
   CONDITION_OPERATORS,
@@ -19,6 +20,12 @@ import {
   setAutomationFlowStatus,
   validateFlowDefinition,
 } from '../services/data/automationsRepository'
+import {
+  createEmptyGraph,
+  isGraphDefinition,
+  legacyDefinitionToGraph,
+  normalizeGraph,
+} from '../services/whatsapp/automationGraph'
 
 const OPERATOR_LABELS = {
   eq: 'igual a', neq: 'diferente de', gt: 'maior que', gte: 'maior ou igual',
@@ -35,17 +42,19 @@ const CONTEXT_FIELD_HINTS = [
 const emptyDraft = () => ({
   id: null,
   name: '',
-  definition: { trigger: { type: '', config: {} }, conditions: [], actions: [] },
+  definition: createEmptyGraph(),
 })
 
 const fromFlow = (flow) => ({
   id: flow.id,
   name: flow.name,
-  definition: {
-    trigger: { type: flow.triggerType, config: flow.triggerConfig || {} },
-    conditions: flow.definition?.conditions || [],
-    actions: flow.definition?.actions || [],
-  },
+  definition: isGraphDefinition(flow.definition)
+    ? normalizeGraph(flow.definition)
+    : legacyDefinitionToGraph({
+        trigger: { type: flow.triggerType, config: flow.triggerConfig || {} },
+        conditions: flow.definition?.conditions || [],
+        actions: flow.definition?.actions || [],
+      }),
 })
 
 export function WhatsAppAutomationPanel({ canWrite = false }) {
@@ -134,7 +143,7 @@ export function WhatsAppAutomationPanel({ canWrite = false }) {
 
   if (draft) {
     return (
-      <FlowEditor
+      <AutomationFlowBuilder
         draft={draft}
         canWrite={canWrite}
         saving={busy === 'editor'}
@@ -249,7 +258,7 @@ export function WhatsAppAutomationPanel({ canWrite = false }) {
   )
 }
 
-function FlowEditor({ draft, canWrite = false, saving, onChange, onCancel, onSave, error }) {
+export function LegacyFlowEditor({ draft, canWrite = false, saving, onChange, onCancel, onSave, error }) {
   const [attempted, setAttempted] = useState(false)
   const trigger = describeTrigger(draft.definition.trigger.type)
   const validation = useMemo(
@@ -532,15 +541,17 @@ function RunHistory({ flow, runs, loading, onClose }) {
                   {run.errorMessage && <span className="automation-run-error">{run.errorCode}: {run.errorMessage}</span>}
                 </button>
                 {openRun === run.id && (
-                  <ol className="automation-step-list">
-                    {run.steps.length ? run.steps.map((step, index) => (
-                      <li key={index} className={`status-${step.status}`}>
-                        <span>{describeAction(step.actionType)?.label || step.actionType}</span>
-                        <em>{step.status}</em>
-                        {step.errorMessage && <small>{step.errorCode}: {step.errorMessage}</small>}
-                      </li>
-                    )) : <li>Sem passos registrados.</li>}
-                  </ol>
+                  isGraphDefinition(flow.definition)
+                    ? <RunGraph definition={flow.definition} run={run} />
+                    : <ol className="automation-step-list">
+                        {run.steps.length ? run.steps.map((step, index) => (
+                          <li key={index} className={`status-${step.status}`}>
+                            <span>{describeAction(step.actionType)?.label || step.actionType}</span>
+                            <em>{step.status}</em>
+                            {step.errorMessage && <small>{step.errorCode}: {step.errorMessage}</small>}
+                          </li>
+                        )) : <li>Sem passos registrados.</li>}
+                      </ol>
                 )}
               </article>
             ))}
@@ -548,5 +559,34 @@ function RunHistory({ flow, runs, loading, onClose }) {
         )}
       </aside>
     </>
+  )
+}
+
+function RunGraph({ definition, run }) {
+  const graph = normalizeGraph(definition)
+  const results = new Map(run.steps.map((step) => [step.key, step]))
+  const currentNodeId = run.status === 'waiting'
+    ? run.steps.findLast((step) => step.result?.resume_node_id)?.result?.resume_node_id
+    : run.status === 'running'
+      ? graph.nodes.find((node) => node.type !== 'trigger' && !results.has(node.id))?.id
+      : ''
+  return (
+    <div className="automation-run-graph">
+      {graph.nodes.map((node) => {
+        const step = results.get(node.id)
+        const label = node.type === 'trigger'
+          ? describeTrigger(node.config.trigger_type)?.label || 'Início'
+          : node.type === 'condition'
+            ? 'Condição'
+            : describeAction(node.type)?.label || node.type
+        return (
+          <div key={node.id} className={`run-graph-node status-${step?.status || (node.type === 'trigger' ? 'succeeded' : 'pending')}${currentNodeId === node.id ? ' current' : ''}`}>
+            <strong>{label}</strong>
+            <span>{step?.result?.branch ? `ramo ${step.result.branch === 'yes' ? 'SIM' : 'NÃO'}` : step?.status || (node.type === 'trigger' ? 'gatilho' : 'não executado')}</span>
+            {step?.errorMessage && <small>{step.errorCode}: {step.errorMessage}</small>}
+          </div>
+        )
+      })}
+    </div>
   )
 }

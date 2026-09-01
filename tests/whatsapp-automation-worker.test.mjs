@@ -47,14 +47,21 @@ assert.match(triggers, /revoke all on function public\.emit_automation_event/)
 // ---- worker: usa o executor testado e respeita idempotência/dead-letter -----
 assert.match(worker, /from '\.\.\/\.\.\/\.\.\/src\/services\/whatsapp\/automationExecutor\.js'/)
 assert.match(worker, /executeRun/)
+assert.equal((worker.match(/await executeRun\(/g) || []).length, 2, 'execução inicial e retomada aguardam o executor assíncrono')
 assert.match(worker, /claim_automation_events/)
 assert.match(worker, /idempotency_key: idempotencyKey/)
-assert.match(worker, /insert\.error\.code === '23505'/) // conflito de idempotência -> não reexecuta
+assert.match(worker, /insert\.error\.code !== '23505'/) // conflito de idempotência -> consulta execução existente
+assert.match(worker, /resumeFromIndex = Number\(existing\.data\.context\?\.resume_from_index\)/)
 assert.match(worker, /deadLetterDecision/)
 assert.match(worker, /automation_dead_letters/)
 assert.match(worker, /AUTOMATION_WORKER_KEY/)
 assert.match(worker, /X-Automation-Worker-Key/)
 assert.match(worker, /SUPABASE_SERVICE_ROLE_KEY/)
+assert.match(worker, /META_ACCESS_TOKEN/)
+assert.match(worker, /callMeta/)
+assert.match(worker, /status: 'queued'/)
+assert.match(worker, /SEND_OUTCOME_UNKNOWN/)
+assert.match(worker, /findAutomationOutbound/)
 // nunca loga segredos
 for (const line of worker.split('\n').filter((l) => l.includes('console.log'))) {
   assert.doesNotMatch(line, /SERVICE_ROLE_KEY|PANEL_API_KEY|AUTOMATION_WORKER_KEY|Authorization/)

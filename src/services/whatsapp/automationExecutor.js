@@ -3,12 +3,14 @@
 // que injetam handlers de ação para exercitar o comportamento real sem rede.
 
 import { CONDITION_OPERATORS, TERMINAL_ACTIONS, describeAction } from './automationFlow.js'
+import { graphNodeAction, graphTrigger, isGraphDefinition, nextGraphNode, normalizeGraph } from './automationGraph.js'
 
 const RETRYABLE_CODES = new Set([
   'UPSTREAM_TIMEOUT',
   'UPSTREAM_COLD_START',
   'UPSTREAM_UNAVAILABLE',
   'MUGOZAP_TEMPORARY_ERROR',
+  'META_TEMPORARY_ERROR',
   'RATE_LIMITED',
   'NETWORK_ERROR',
 ])
@@ -279,6 +281,60 @@ export async function executeRun({ plan, handlers = {}, context = {}, now, attem
   }
 
   return { status: 'succeeded', steps, startedAt, finishedAt: clock(now).toISOString(), wait: null }
+}
+
+export async function executeGraphRun({ definition, handlers = {}, context = {}, now, attempts = 1, resumeNodeId = null }) {
+  const graph = normalizeGraph(definition)
+  const trigger = graph.nodes.find(node => node.type === 'trigger')
+  let nodeId = resumeNodeId || (trigger ? nextGraphNode(graph, trigger.id) : null)
+  const steps = []
+  const startedAt = clock(now).toISOString()
+  let sequence = 0
+
+  while (nodeId && sequence <= graph.nodes.length) {
+    const node = graph.nodes.find(item => item.id === nodeId)
+    const stepStartedAt = clock(now).toISOString()
+    if (!node) return { status: 'failed', steps, errorCode: 'GRAPH_NODE_MISSING', errorMessage: `Node ${nodeId} não encontrado.`, startedAt, finishedAt: stepStartedAt }
+
+    if (node.type === 'condition') {
+      const passed = evaluateCondition({ field: node.config.field, operator: node.config.operator || 'eq', value: node.config.value }, context)
+      steps.push({ key: node.id, index: sequence, actionType: 'condition', status: 'succeeded', result: { branch: passed ? 'yes' : 'no', passed }, startedAt: stepStartedAt, finishedAt: clock(now).toISOString() })
+      nodeId = nextGraphNode(graph, node.id, passed ? 'yes' : 'no')
+      sequence += 1
+      continue
+    }
+
+    const action = graphNodeAction(node)
+    if (node.type === 'end_flow') {
+      steps.push({ key: node.id, index: sequence, actionType: node.type, status: 'succeeded', result: { ended: true }, startedAt: stepStartedAt, finishedAt: stepStartedAt })
+      return { status: 'succeeded', steps, startedAt, finishedAt: clock(now).toISOString(), wait: null }
+    }
+    if (node.type === 'wait') {
+      const minutes = Math.max(1, Math.trunc(Number(action.minutes) || 0))
+      const resumeAt = new Date(clock(now).getTime() + minutes * 60_000).toISOString()
+      const nextNodeId = nextGraphNode(graph, node.id)
+      steps.push({ key: node.id, index: sequence, actionType: node.type, status: 'succeeded', result: { waited_minutes: minutes, resume_at: resumeAt, resume_node_id: nextNodeId }, startedAt: stepStartedAt, finishedAt: stepStartedAt })
+      return { status: 'waiting', steps, startedAt, finishedAt: null, wait: { resumeNodeId: nextNodeId, resumeAt, minutes } }
+    }
+    const handler = handlers[node.type]
+    if (typeof handler !== 'function') return { status: 'failed', steps: [...steps, { key: node.id, index: sequence, actionType: node.type, status: 'failed', errorCode: 'HANDLER_MISSING', errorMessage: `Nenhum executor conectado para a ação "${node.type}".`, result: {}, startedAt: stepStartedAt, finishedAt: clock(now).toISOString() }], errorCode: 'HANDLER_MISSING', errorMessage: `Nenhum executor conectado para a ação "${node.type}".`, retryable: false, resumeNodeId: node.id, startedAt, finishedAt: clock(now).toISOString(), wait: null }
+    try {
+      const result = await handler(action, { ...context, step: { key: node.id, index: sequence, action }, attempts })
+      steps.push({ key: node.id, index: sequence, actionType: node.type, status: 'succeeded', result: result && typeof result === 'object' ? result : { ok: true }, startedAt: stepStartedAt, finishedAt: clock(now).toISOString() })
+      nodeId = nextGraphNode(graph, node.id)
+      sequence += 1
+    } catch (error) {
+      const classified = classifyActionError(error)
+      steps.push({ key: node.id, index: sequence, actionType: node.type, status: 'failed', errorCode: classified.code, errorMessage: classified.message, result: classified.provider_message ? { provider_message: classified.provider_message } : {}, startedAt: stepStartedAt, finishedAt: clock(now).toISOString() })
+      return { status: 'failed', steps, errorCode: classified.code, errorMessage: classified.message, retryable: classified.retryable, resumeNodeId: node.id, startedAt, finishedAt: clock(now).toISOString(), wait: null }
+    }
+  }
+  if (sequence > graph.nodes.length) return { status: 'failed', steps, errorCode: 'GRAPH_CYCLE_DETECTED', errorMessage: 'O grafo entrou em um ciclo inválido.', retryable: false, startedAt, finishedAt: clock(now).toISOString() }
+  return { status: 'succeeded', steps, startedAt, finishedAt: clock(now).toISOString(), wait: null }
+}
+
+export function graphFlowTrigger(definition) {
+  return isGraphDefinition(definition) ? graphTrigger(definition) : null
 }
 
 export { TERMINAL_ACTIONS }
