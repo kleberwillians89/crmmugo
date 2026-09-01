@@ -23,7 +23,7 @@ for(const expected of [
   'WABA_ID','PHONE_NUMBER_ID','META_ACCESS_TOKEN','GRAPH_API_VERSION',
   '/message_templates?fields=','quality_score','item.name===templateName&&item.language===language',
   "metaStatus(value) === 'APPROVED'",'requiredBodyParameters','requiredHeaderParameters','requiresCoupon',
-  'parameters:requiredBodyParameters?[safeName]:[]','provider_message_id || sent.messages?.[0]?.id',
+  'parameters:requiredBodyParameters?[safeName]:[]','collectionSend.body?.messages?.[0]?.id','homologationSend.body?.messages?.[0]?.id',
   'META_TOKEN_EXPIRED','META_PERMISSION_MISSING','TEMPLATE_NOT_FOUND',
   'TEMPLATE_PARAMETERS_MISSING','TEMPLATE_COUPON_REQUIRED','MESSAGE_SEND_UNCONFIRMED',
   'list_templates','raw_payload','rejected_reason','parameter_format','META_PAGINATION_LIMIT',
@@ -37,6 +37,11 @@ for(const status of [400,401,403])assert.match(edge,new RegExp(`status === ${sta
 assert.match(edge,/duplicateResult/)
 assert.match(edge,/status:'sending'/)
 assert.match(edge,/sanitized_payload/)
+// start_template_conversation e send_template_message enviam direto pela Meta Cloud API.
+assert.match(edge,/sendMetaMessage\(config, collectionMetaPayload\)/)
+assert.match(edge,/sendMetaMessage\(homologationConfig,homologationMetaPayload\)/)
+assert.match(edge,/buildTemplateMetaPayload\(normalizedPhone, templateName, language, collectionComponents\)/)
+assert.doesNotMatch(edge,/fetch\(`\$\{apiUrl\}`?\$\{path\}`\)?[\s\S]{0,200}start-template/)
 for(const line of edge.split('\n').filter(value=>value.includes('console.log')))assert.doesNotMatch(line,/META_ACCESS_TOKEN|accessToken|Authorization/)
 
 const modal=fs.readFileSync(new URL('../src/components/StartWhatsAppConversationModal.jsx',import.meta.url),'utf8')

@@ -49,7 +49,7 @@ const drawer=fs.readFileSync(new URL('../src/components/WhatsAppConversationTemp
 const css=fs.readFileSync(new URL('../src/components/WhatsAppPage.css',import.meta.url),'utf8')
 const edge=fs.readFileSync(new URL('../supabase/functions/mugozap-api/index.ts',import.meta.url),'utf8')
 for(const token of ['composer-template','Modelos','templateDrawerOpen','serviceWindowOpen===false','idempotencyKey',"status:'sending'",'mergeMessages'])assert.ok(page.includes(token),`Fluxo ausente: ${token}`)
-for(const token of ["item.status==='APPROVED'","item.is_active!==false",'template-context-filters','validateTemplateField','confirmed','aria-modal="true"',"event.key==='Escape'",'UPSTREAM_TIMEOUT'])assert.ok(drawer.includes(token),`Drawer ausente: ${token}`)
+for(const token of ["item.status==='APPROVED'","item.is_active!==false",'template-context-filters','validateTemplateField','confirmed','aria-modal="true"',"event.key==='Escape'",'isAmbiguousTemplateSendOutcome'])assert.ok(drawer.includes(token),`Drawer ausente: ${token}`)
 assert.match(css,/width:min\(420px,96vw\)/)
 assert.match(css,/height:min\(88dvh,760px\)/)
 assert.match(css,/grid-template-columns:auto auto minmax\(0,1fr\) auto/)

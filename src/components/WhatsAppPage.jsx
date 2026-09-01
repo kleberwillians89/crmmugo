@@ -22,6 +22,7 @@ import { getSupabaseClient } from '../lib/supabase/client'
 import { WhatsAppAutomationPanel } from './WhatsAppAutomationPanel'
 import { WhatsAppAiPanel } from './WhatsAppAiPanel'
 import { WhatsAppSystemStatusPanel } from './WhatsAppSystemStatusPanel'
+import { isAmbiguousTemplateSendOutcome } from '../services/whatsapp/templateSendAttempt'
 import './WhatsAppPage.css'
 
 const tabs = [['inbox','Caixa de entrada'],['collections','Cobranças'],['contacts','Contatos'],['templates','Modelos'],['usage','Uso e custos'],['automations','Automações'],['ai','IA'],['status','Status']]
@@ -297,13 +298,17 @@ export function WhatsAppPage({ clients = [], contracts = [], installments = [], 
   async function sendBatch(rows){const result={checked:rows.length,eligible:rows.length,sent:0,failed:0,skipped:0,reasons:[]};for(const row of rows){try{await startTemplateConversation({client_id:row.client.id,installment_id:row.item.id,phone:row.phone,template_name:'mugo_alerta_pagamento_pendente',language:'pt_BR'});result.sent+=1}catch(cause){result.failed+=1;result.reasons.push({installment_id:row.item.id,reason:cause.message})}}await refresh(true);return result}
   async function sendApprovedTemplate(payload){
     if(!selected||!isAdmin||!(templateSendEnabled||templateTestEnabled))throw Object.assign(new Error('Envio de modelos ainda não está liberado para este usuário.'),{code:'TEMPLATE_SEND_DISABLED'})
-    const idempotencyKey=crypto.randomUUID(),optimisticId=`template-${idempotencyKey}`
+    // A origem da tentativa é dona da chave. Gerar fallback aqui recriaria a brecha:
+    // cada nova invocação poderia se tornar, indevidamente, um novo envio lógico.
+    const idempotencyKey=String(payload.idempotency_key||'')
+    if(!/^[A-Za-z0-9_-]{16,120}$/.test(idempotencyKey))throw Object.assign(new Error('Não foi possível identificar esta tentativa de envio.'),{code:'IDEMPOTENCY_KEY_MISSING'})
+    const optimisticId=`template-${idempotencyKey}`
     const optimistic={id:optimisticId,idempotencyKey,conversation_id:selectedIdentifier,text:payload.preview?.body||`Modelo: ${payload.template_name}`,template_name:payload.template_name,template_display:payload.template?.display||payload.template_name,template:true,type:'template',direction:'out',status:'sending',createdAt:new Date().toISOString()}
     setMessages(current=>mergeMessages(current,[optimistic]))
     let result
     const requestPayload={recipient:normalizeBrazilianPhone(payload.recipient),template_name:payload.template_name,language:payload.language||'pt_BR',components:Array.isArray(payload.components)?payload.components:[],idempotency_key:idempotencyKey,contract_mode:'minimal'}
     try{result=await sendTemplateMessage(requestPayload)}
-    catch(cause){setMessages(current=>current.map(item=>item.id===optimisticId?{...item,status:cause.code==='UPSTREAM_TIMEOUT'||cause.status===504?'unknown':'failed',error_message:cause.message}:item));throw cause}
+    catch(cause){setMessages(current=>current.map(item=>item.id===optimisticId?{...item,status:isAmbiguousTemplateSendOutcome(cause)?'unknown':'failed',error_message:cause.message}:item));throw cause}
     const waId=getConversationIdentifier(result?.conversation||{phone:payload.recipient})
     const providerMessageId=result?.provider_message_id||result?.message_id
     setMessages(current=>mergeMessages(current,[{...optimistic,id:providerMessageId||optimisticId,provider_message_id:providerMessageId||'',conversation_id:waId,status:'sent'}]))

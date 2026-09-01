@@ -116,13 +116,6 @@ const componentSummary = (components: any) => Array.isArray(components)?componen
   parameter_count:Array.isArray(component?.parameters)?component.parameters.length:0,
   parameter_types:Array.isArray(component?.parameters)?component.parameters.map((parameter:any)=>metaStatus(parameter?.type)):[],
 })):[]
-const sanitizedMugoZapResponse = (body:any) => ({
-  message_id:text(body?.provider_message_id||body?.message_id||body?.messages?.[0]?.id,200)||null,
-  status:text(body?.status||body?.message_status,80)||null,
-  code:text(body?.code||body?.error?.code,120)||null,
-  detail:text(body?.detail||body?.message||body?.error?.message,500)||null,
-  conversation_id:text(body?.conversation?.id||body?.conversation?.wa_id,200)||null,
-})
 const sanitizedMetaError = (body: any) => ({
   code: Number(body?.error?.code || 0),
   error_subcode: Number(body?.error?.error_subcode || 0),
@@ -245,6 +238,48 @@ const sendMetaMessage = async (config: any, payload: unknown) => {
   const body = await response.json().catch(() => ({}))
   return { response, body }
 }
+// Índice do botão "copiar código" (coupon) nos componentes oficiais do template.
+const couponButtonIndex = (template: any) => {
+  for (const component of Array.isArray(template?.components) ? template.components : []) {
+    if (metaStatus(component?.type) !== 'BUTTONS' || !Array.isArray(component.buttons)) continue
+    const found = component.buttons.findIndex((button: any) => ['COPY_CODE', 'COPY_CODE_BUTTON'].includes(metaStatus(button?.type)))
+    if (found >= 0) return found
+  }
+  return 0
+}
+// Normaliza os componentes de template para o formato exato da Meta Cloud API
+// (tudo lowercase). O frontend já monta assim (buildTemplateComponents); para a
+// cobrança montamos a partir dos componentes oficiais do template. Puro/testável.
+const metaTemplateComponents = (components: any) => (Array.isArray(components) ? components : []).map((component: any) => {
+  const componentType = metaStatus(component?.type).toLowerCase()
+  const parameters = (Array.isArray(component?.parameters) ? component.parameters : []).map((parameter: any) => {
+    const parameterType = metaStatus(parameter?.type).toLowerCase()
+    if (parameterType === 'text') return { type: 'text', text: text(parameter?.text, 2000) }
+    if (parameterType === 'coupon_code') return { type: 'coupon_code', coupon_code: text(parameter?.coupon_code, 120) }
+    if (['image', 'video', 'document'].includes(parameterType)) return { type: parameterType, [parameterType]: { link: text(parameter?.[parameterType]?.link, 2000) } }
+    return null
+  }).filter(Boolean)
+  if (componentType === 'button') return { type: 'button', sub_type: metaStatus(component?.sub_type).toLowerCase(), index: String(text(component?.index, 2) || '0'), parameters }
+  return { type: componentType, parameters }
+}).filter((component: any) => component.parameters.length)
+// Payload de mensagem de template da Meta Cloud API. `components` já normalizados.
+const buildTemplateMetaPayload = (recipient: string, templateName: string, language: string, components: any[]) => ({
+  messaging_product: 'whatsapp',
+  recipient_type: 'individual',
+  to: recipient,
+  type: 'template',
+  template: {
+    name: templateName,
+    language: { code: language },
+    ...(Array.isArray(components) && components.length ? { components } : {}),
+  },
+})
+// Resposta da Meta sanitizada para log (nunca token, nunca telefone completo).
+const metaSendSummary = (body: any) => ({
+  message_id: text(body?.messages?.[0]?.id, 200) || null,
+  contacts: Array.isArray(body?.contacts) ? body.contacts.length : 0,
+  error_code: Number(body?.error?.code || 0) || null,
+})
 const fetchTemplates = async (config: any) => {
   const fields = 'id,name,language,status,category,components,quality_score,rejected_reason,previous_category,parameter_format'
   let url = `https://graph.facebook.com/${config.version}/${config.wabaId}/message_templates?fields=${encodeURIComponent(fields)}&limit=100`
@@ -617,11 +652,12 @@ const handleRequest = async (request: Request, requestId: string) => {
         await admin.from('whatsapp_conversations').update({attendance_mode:'human',automation_paused:true,handoff_reason:'manual_message'}).eq('id',canonical.conversation_id)
         await admin.from('whatsapp_conversation_events').insert({organization_id:profile.organization_id,connection_id:canonical.connection_id,conversation_id:canonical.conversation_id,event_type:'manual_message_sent',actor_id:user.id,details:{provider_message_id:providerMessageId}})
         return json({ok:true,data:{provider_message_id:providerMessageId,message_id:providerMessageId,status:'accepted',conversation:canonical.conversation,message:canonical.message}})
-      }catch(error){console.log(JSON.stringify({event:'whatsapp_history_write_failed',request_id:requestId,operation,error_code:text((error as any)?.code||(error as any)?.message,120)}));return fail('CRM_AUDIT_FAILED','A mensagem foi enviada, mas o histórico canônico não pôde ser registrado. Não repita o envio.',502)}
+      }catch(error){console.log(JSON.stringify({event:'whatsapp_history_write_failed',request_id:requestId,operation,provider_message_id:providerMessageId,error_code:text((error as any)?.code||(error as any)?.message,120)}));return fail('MESSAGE_PERSISTENCE_UNCONFIRMED','A mensagem foi ACEITA pela Meta, mas o histórico canônico não pôde ser concluído. NÃO reenvie — verifique o histórico da conversa.',502,0,false,{provider_message_id:providerMessageId})}
     }
 
-    if (!apiUrl || !panelKey) return fail('MUGOZAP_CONFIGURATION_MISSING', 'A integração com o MugoZap ainda não foi configurada.', 503)
-    if (!/^https?:\/\//.test(apiUrl)) return fail('MUGOZAP_CONFIGURATION_INVALID', 'A URL interna do MugoZap é inválida.', 503)
+    // Templates (cobrança e homologação) usam a Meta Cloud API diretamente e não
+    // dependem do MugoZap. A exigência de MugoZap é verificada mais abaixo, só para
+    // as operações que ainda o utilizam como transporte.
     let alertReservationId = ''
     let verifiedPayload: unknown = undefined
     let genericTemplateClientId = ''
@@ -700,6 +736,82 @@ const handleRequest = async (request: Request, requestId: string) => {
       const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,contract_id:installment.contract_id,wa_id:normalizedPhone,recipient:normalizedPhone,company_name:text(clientRow.company_name,200),meta_template_id:officialTemplate.id,template_name:templateName,template_language:language,template_status:'CHECKING',collection_stage:'sending',action:'template_send_requested',status:'sending',sent_by:user.id,origin:'collection',currency:'BRL',sanitized_payload:{to:normalizedPhone,template:{name:templateName,language,parameter_count:requiredBodyParameters,has_coupon:Boolean(couponCode)},source:'collection',idempotency_key:startIdempotencyKey||null}}).select('id').single()
       if (reservation.error) return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
       alertReservationId = reservation.data.id
+      if (!serviceKey) {
+        await client.from('whatsapp_collection_alerts').update({ status: 'failed', collection_stage: 'failed', action: 'template_send_failed', error_code: 'SUPABASE_SERVICE_ROLE_KEY_MISSING', error_message: 'O histórico canônico não está configurado; nada foi enviado.' }).eq('id', alertReservationId)
+        return fail('SUPABASE_SERVICE_ROLE_KEY_MISSING', 'O histórico canônico não está configurado; nada foi enviado.', 503)
+      }
+
+      // ===== Transporte direto Meta Cloud API — o MugoZap não participa do envio =====
+      const collectionComponents = metaTemplateComponents([
+        ...((verifiedPayload as any).parameters.length ? [{ type: 'body', parameters: (verifiedPayload as any).parameters.map((value: string) => ({ type: 'text', text: value })) }] : []),
+        ...(couponCode ? [{ type: 'button', sub_type: 'copy_code', index: String(couponButtonIndex(officialTemplate)), parameters: [{ type: 'coupon_code', coupon_code: couponCode }] }] : []),
+      ])
+      const collectionMetaPayload = buildTemplateMetaPayload(normalizedPhone, templateName, language, collectionComponents)
+      auditOperation('edge_upstream_request', operation, { request_id: requestId, organization_id: profile.organization_id, endpoint_called: `https://graph.facebook.com/${config.version}/${config.phoneNumberId}/messages`, payload_sent: collectionMetaPayload })
+      let collectionSend: any
+      try {
+        collectionSend = await sendMetaMessage(config, collectionMetaPayload)
+      } catch (error) {
+        // Timeout DEPOIS do disparo: a Meta pode ter aceitado. Nunca reenviar automaticamente.
+        // A reserva fica reconciliável (sem provider_message_id) e o operador confere o histórico.
+        const timedOut = error instanceof DOMException && error.name === 'TimeoutError'
+        await client.from('whatsapp_collection_alerts').update(timedOut
+          ? { action: 'template_send_unconfirmed', error_code: 'META_TIMEOUT', error_message: 'A Meta demorou para responder após o disparo. Verifique o histórico antes de tentar novamente.' }
+          : { status: 'failed', collection_stage: 'failed', action: 'template_send_failed', error_code: 'META_UNREACHABLE', error_message: 'Não foi possível contatar a Meta para enviar o template.' }
+        ).eq('id', alertReservationId)
+        return fail(
+          timedOut ? 'META_TIMEOUT' : 'META_UNAVAILABLE',
+          timedOut ? 'A Meta demorou para responder após o disparo. Verifique o histórico da conversa antes de tentar novamente; a mensagem não será reenviada automaticamente.' : 'Não foi possível enviar o template pela Meta.',
+          timedOut ? 504 : 503, 0, timedOut,
+        )
+      }
+      auditOperation('upstream_received', operation, { request_id: requestId, organization_id: profile.organization_id, status_http: collectionSend.response.status, body_received: collectionSend.body })
+      console.log(JSON.stringify({ event: 'meta_template_send', request_id: requestId, operation, status_http: collectionSend.response.status, phone_masked: maskPhone(normalizedPhone), result: metaSendSummary(collectionSend.body) }))
+      if (!collectionSend.response.ok) {
+        const collectionMetaError = sanitizedMetaError(collectionSend.body)
+        await client.from('whatsapp_collection_alerts').update({
+          status: 'failed', collection_stage: 'failed', action: 'template_send_failed',
+          error_code: collectionMetaError.code ? `META_${collectionMetaError.code}` : 'META_API_ERROR',
+          error_message: text(collectionMetaError.message, 500) || 'A Meta recusou o envio do template.',
+          raw_response: { provider: 'meta', error: collectionMetaError },
+        }).eq('id', alertReservationId)
+        return metaFailure(collectionSend.response.status, collectionSend.body, requestId)
+      }
+      const collectionMessageId = text(collectionSend.body?.messages?.[0]?.id, 200)
+      if (!collectionMessageId) {
+        await client.from('whatsapp_collection_alerts').update({
+          action: 'template_send_unconfirmed',
+          error_code: 'META_MESSAGE_ID_MISSING', error_message: 'A Meta respondeu sem o identificador da mensagem.',
+        }).eq('id', alertReservationId)
+        return fail('MESSAGE_SEND_UNCONFIRMED', 'A Meta não confirmou o envio (sem identificador de mensagem). Verifique o histórico antes de tentar novamente.', 502)
+      }
+      try {
+        const canonical = await persistOutboundMessage({
+          supabaseUrl, serviceKey, organizationId: profile.organization_id, recipient: normalizedPhone, providerMessageId: collectionMessageId,
+          idempotencyKey: startIdempotencyKey || `collection-alert-${alertReservationId}`, messageType: 'template',
+          templateName, templateLanguage: language, templateComponents: collectionComponents, clientId: clientRow.id, status: 'sent',
+        })
+        const alertUpdate = await client.from('whatsapp_collection_alerts').update({
+          wa_id: normalizedPhone, provider_message_id: collectionMessageId, template_status: 'APPROVED',
+          collection_stage: 'waiting_customer', action: 'template_sent', status: 'sent', sent_at: new Date().toISOString(),
+          raw_response: { provider: 'meta', provider_message_id: collectionMessageId, contacts: auditValue(collectionSend.body?.contacts) },
+          error_code: null, error_message: null,
+        }).eq('id', alertReservationId)
+        const linkResult = await client.from('whatsapp_conversation_links').upsert({
+          organization_id: profile.organization_id, client_id: clientRow.id, wa_id: normalizedPhone, phone: normalizedPhone,
+          conversation_id: String(canonical.conversation_id),
+        }, { onConflict: 'organization_id,client_id' })
+        await client.from('commercial_events').insert({
+          organization_id: profile.organization_id, client_id: clientRow.id, installment_id: installment.id,
+          event_type: 'whatsapp_collection_alert_sent', title: 'Alerta de cobrança enviado pelo WhatsApp',
+          new_value: { wa_id: normalizedPhone, template_name: templateName, provider_message_id: collectionMessageId, language, source: 'collection' }, created_by: user.id,
+        })
+        if (alertUpdate.error || linkResult.error) return fail('MESSAGE_PERSISTENCE_UNCONFIRMED', 'O alerta foi ACEITO pela Meta, mas o estado final no CRM não pôde ser concluído. NÃO reenvie — verifique o histórico da conversa.', 502, 0, false, { provider_message_id: collectionMessageId })
+        return json({ ok: true, data: { provider_message_id: collectionMessageId, message_id: collectionMessageId, status: 'accepted', conversation: canonical.conversation, message: canonical.message } })
+      } catch (error) {
+        console.log(JSON.stringify({ event: 'whatsapp_history_write_failed', request_id: requestId, operation, provider_message_id: collectionMessageId, error_code: text((error as any)?.code || (error as any)?.message, 120) }))
+        return fail('MESSAGE_PERSISTENCE_UNCONFIRMED', 'O alerta foi ACEITO pela Meta, mas o histórico canônico não pôde ser concluído. NÃO reenvie — verifique o histórico da conversa.', 502, 0, false, { provider_message_id: collectionMessageId })
+      }
     }
     if(operation==='send_template_message'){
       const recipient=brazilianPhone(payload.recipient),templateName=text(payload.template_name,100),language=text(payload.language,20),components=payload.components
@@ -726,9 +838,106 @@ const handleRequest = async (request: Request, requestId: string) => {
         const phones=[linkedClient.data.phone,linkedClient.data.billing_contact_phone].map(brazilianPhone).filter(Boolean)
         if(!phones.includes(recipient))return fail('PHONE_MISMATCH','O telefone não pertence ao contato selecionado.',403)
       }
-      const bodyParameters=(components||[]).find((item:any)=>metaStatus(item.type)==='BODY')?.parameters?.filter((item:any)=>metaStatus(item.type)==='TEXT').map((item:any)=>text(item.text,2000))||[]
-      const couponCode=(components||[]).find((item:any)=>metaStatus(item.type)==='BUTTON'&&metaStatus(item.sub_type)==='COPY_CODE')?.parameters?.find((item:any)=>metaStatus(item.type)==='COUPON_CODE')?.coupon_code
-      verifiedPayload={wa_id:recipient,template_name:templateName,language,...(contractMode==='minimal'?{}:{components}),...(bodyParameters.length?{parameters:bodyParameters}:{}),...(couponCode?{coupon_code:text(couponCode,120)}:{}),source:'crm_homologation',idempotency_key:idempotencyKey}
+      // ===== Transporte direto Meta Cloud API — o MugoZap não participa do envio =====
+      // `contract_mode` era negociação com o MugoZap; para a Meta enviamos sempre os
+      // componentes que o frontend montou (já validados acima). Fica só para auditoria.
+      if(!serviceKey)return fail('SUPABASE_SERVICE_ROLE_KEY_MISSING','O histórico canônico não está configurado; nada foi enviado.',503)
+
+      // Idempotência (mesmo contrato de send_manual_message): uma tentativa lógica por
+      // idempotency_key.
+      //  - já confirmada (provider_message_id) -> devolve o resultado anterior, não reenvia;
+      //  - reserva em estado incerto ('queued': timeout/unconfirmed) -> bloqueia retry cego;
+      //  - reserva 'failed' (a Meta recusou sem aceitar nada) -> nova tentativa é segura.
+      const priorSend=await client.from('whatsapp_messages').select('provider_message_id,status,conversation_id')
+        .eq('organization_id',profile.organization_id).eq('idempotency_key',idempotencyKey).maybeSingle()
+      if(priorSend.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível validar a idempotência do envio.',503)
+      if(priorSend.data?.provider_message_id)return json({ok:true,data:{already_sent:true,message_id:priorSend.data.provider_message_id,provider_message_id:priorSend.data.provider_message_id,status:priorSend.data.status||'accepted',conversation_id:priorSend.data.conversation_id,template_name:templateName,language,recipient}})
+      if(priorSend.data&&priorSend.data.status!=='failed')return fail('SEND_OUTCOME_UNKNOWN','O resultado de um envio anterior com esta chave ainda não foi confirmado. O template não será reenviado automaticamente; verifique o histórico.',409)
+      if(priorSend.data?.status==='failed')
+        await createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}}).from('whatsapp_messages')
+          .update({status:'queued',error_code:null,error_message:null,failed_at:null})
+          .eq('organization_id',profile.organization_id).eq('idempotency_key',idempotencyKey).is('provider_message_id',null)
+
+      const homologationConfig:any=metaConfig(true)
+      if(homologationConfig.error)return homologationConfig.error
+      const homologationComponents=metaTemplateComponents(components)
+      const homologationMetaPayload=buildTemplateMetaPayload(recipient,templateName,language,homologationComponents)
+
+      // 1) RESERVA canônica ANTES do envio (provider_message_id:null, status:'queued').
+      //    Só envia se a reserva funcionar.
+      let canonicalReservation:any
+      try{
+        canonicalReservation=await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,recipient,providerMessageId:null,
+          idempotencyKey,messageType:'template',templateName,templateLanguage:language,templateComponents:components,clientId:genericTemplateClientId,status:'queued'})
+      }catch(error){
+        return fail('CRM_AUDIT_FAILED','Não foi possível reservar o template no histórico canônico; nada foi enviado.',503,0,true,{code:text((error as any)?.code||(error as any)?.message,120)})
+      }
+
+      console.log(JSON.stringify({event:'template_send_homologation_request',request_id:requestId,template_name:templateName,language,contract_mode:contractMode,components:componentSummary(components),phone_masked:maskPhone(recipient),transport:'meta_cloud_api'}))
+      auditOperation('edge_upstream_request',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:`https://graph.facebook.com/${homologationConfig.version}/${homologationConfig.phoneNumberId}/messages`,payload_sent:homologationMetaPayload})
+
+      // 2) ENVIO — uma única chamada, sem retry.
+      let homologationSend:any
+      try{
+        homologationSend=await sendMetaMessage(homologationConfig,homologationMetaPayload)
+      }catch(error){
+        // 5) Timeout depois do disparo: NÃO reenviar. A reserva 'queued' permanece; uma
+        // nova tentativa com a mesma idempotency_key cai em SEND_OUTCOME_UNKNOWN.
+        const timedOut=error instanceof DOMException&&error.name==='TimeoutError'
+        return fail(
+          timedOut?'META_TIMEOUT':'META_UNAVAILABLE',
+          timedOut?'A Meta demorou para responder após o disparo. Verifique o histórico antes de tentar novamente; a mensagem não será reenviada automaticamente.':'Não foi possível enviar o template pela Meta.',
+          timedOut?504:503,0,timedOut,
+        )
+      }
+      console.log(JSON.stringify({event:'template_send_homologation_response',request_id:requestId,template_name:templateName,language,contract_mode:contractMode,phone_masked:maskPhone(recipient),status_http:homologationSend.response.status,result:metaSendSummary(homologationSend.body)}))
+      auditOperation('upstream_received',operation,{request_id:requestId,organization_id:profile.organization_id,status_http:homologationSend.response.status,body_received:homologationSend.body})
+
+      // 6) Erro HTTP confirmado da Meta: marca a reserva como failed (não fica queued eternamente).
+      if(!homologationSend.response.ok){
+        const homologationMetaError=sanitizedMetaError(homologationSend.body)
+        await createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}}).from('whatsapp_messages')
+          .update({status:'failed',error_code:homologationMetaError.code?`META_${homologationMetaError.code}`:'META_API_ERROR',error_message:text(homologationMetaError.message,500)||'A Meta recusou o envio do template.',failed_at:new Date().toISOString()})
+          .eq('organization_id',profile.organization_id).eq('idempotency_key',idempotencyKey).is('provider_message_id',null)
+        return metaFailure(homologationSend.response.status,homologationSend.body,requestId)
+      }
+
+      // 8) Sucesso HTTP sem messages[0].id: mantém 'queued'/unconfirmed, não confirma, sem retry cego.
+      const homologationMessageId=text(homologationSend.body?.messages?.[0]?.id,200)
+      if(!homologationMessageId)return fail('MESSAGE_SEND_UNCONFIRMED','A Meta não confirmou o envio (sem identificador de mensagem). Verifique o histórico antes de tentar novamente.',502)
+
+      // 7) Sucesso confirmado pela Meta. A partir daqui NUNCA se chama sendMetaMessage de
+      //    novo. Atualiza diretamente a MESMA linha reservada por connection_id +
+      //    idempotency_key. Só essa gravação no banco pode ter retry.
+      let canonical:any=null,persistError:any=null
+      const acceptedAt=new Date().toISOString()
+      const admin=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
+      for(let attempt=0;attempt<3;attempt++){
+        try{
+          const finalized=await admin.from('whatsapp_messages').update({provider_message_id:homologationMessageId,status:'accepted',sent_at:acceptedAt,error_code:null,error_message:null,failed_at:null})
+            .eq('organization_id',profile.organization_id).eq('connection_id',canonicalReservation.connection_id)
+            .eq('idempotency_key',idempotencyKey).is('provider_message_id',null)
+            .select('id,provider_message_id,status,sent_at').single()
+          if(finalized.error||!finalized.data)throw finalized.error||new Error('RESERVED_MESSAGE_NOT_FOUND')
+          canonical={...canonicalReservation,message:finalized.data}
+          persistError=null
+          break
+        }catch(error){persistError=error;if(attempt<2)await new Promise(resolve=>setTimeout(resolve,200*(attempt+1)))}
+      }
+      if(persistError){
+        // A Meta ACEITOU (temos messages[0].id) mas a gravação canônica não fechou.
+        // Este não é um erro de reserva pré-envio. Preserva o provider_message_id nos
+        // detalhes para reconciliação e devolve um erro
+        // de estado de persistência — o frontend NÃO deve reenviar.
+        console.log(JSON.stringify({event:'whatsapp_history_write_failed',request_id:requestId,operation,provider_message_id:homologationMessageId,error_code:text((persistError as any)?.code||(persistError as any)?.message,120)}))
+        return fail('MESSAGE_PERSISTENCE_UNCONFIRMED','O template foi ACEITO pela Meta, mas o registro canônico não pôde ser concluído. NÃO reenvie — verifique o histórico da conversa.',502,0,false,{provider_message_id:homologationMessageId})
+      }
+      if(genericTemplateClientId){
+        const linkResult=await client.from('whatsapp_conversation_links').upsert({organization_id:profile.organization_id,client_id:genericTemplateClientId,wa_id:recipient,phone:recipient,conversation_id:String(canonical.conversation_id)},{onConflict:'organization_id,wa_id'})
+        // vínculo é conveniência do CRM: se falhar, a mensagem canônica já está gravada.
+        if(linkResult.error)console.log(JSON.stringify({event:'whatsapp_client_link_failed',request_id:requestId,operation,provider_message_id:homologationMessageId,error_code:text(linkResult.error?.code||linkResult.error?.message,120)}))
+      }
+      return json({ok:true,data:{message_id:homologationMessageId,provider_message_id:homologationMessageId,status:'accepted',conversation:canonical.conversation,message:canonical.message,template_name:templateName,language,recipient}})
     }
     const identifierOperations = ['list_messages','send_manual_message','assign_conversation','pause_automation','resume_automation','close_conversation','update_conversation']
     if (identifierOperations.includes(operation) && !identifier(payload.waId)) return fail('INVALID_CONVERSATION_ID', 'Identificador da conversa ausente.', 400)
@@ -736,6 +945,10 @@ const handleRequest = async (request: Request, requestId: string) => {
       if(!text(payload.text,4000))return fail('INVALID_PAYLOAD','Digite uma mensagem antes de enviar.',422)
       if(!text(payload.idempotencyKey,120))return fail('IDEMPOTENCY_KEY_MISSING','Não foi possível identificar esta tentativa de envio.',422)
     }
+    // Daqui em diante o transporte é o MugoZap. Templates (start_template_conversation /
+    // send_template_message) e send_manual_message já retornaram acima via Meta Cloud API.
+    if (!apiUrl || !panelKey) return fail('MUGOZAP_CONFIGURATION_MISSING', 'A integração com o MugoZap ainda não foi configurada.', 503)
+    if (!/^https?:\/\//.test(apiUrl)) return fail('MUGOZAP_CONFIGURATION_INVALID', 'A URL interna do MugoZap é inválida.', 503)
     const path = route.path(payload)
     if (!path.startsWith('/api/') && path !== '/health') return fail('INVALID_OPERATION', 'Rota não autorizada.', 403)
 
@@ -746,7 +959,6 @@ const handleRequest = async (request: Request, requestId: string) => {
     const mugoZapHeaders: Record<string,string> = { 'X-Panel-Key': panelKey, ...(body ? {'Content-Type':'application/json'} : {}) }
     if (workspaceId) mugoZapHeaders['X-Workspace-Id'] = workspaceId
     let response: Response | undefined
-    if(operation==='send_template_message')console.log(JSON.stringify({event:'template_send_homologation_request',request_id:requestId,template_name:text(payload.template_name,100),language:text(payload.language,20),contract_mode:text(payload.contract_mode||'minimal',30),components:componentSummary(payload.components),phone_masked:maskPhone(payload.recipient),endpoint:path,method:route.method,timeout_ms:timeoutMs}))
     auditOperation('edge_upstream_request',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:path,payload_sent:body||null})
     try {
       if(Date.now()<upstreamCircuitOpenUntil)return fail('UPSTREAM_CIRCUIT_OPEN','O MugoZap está se recuperando. Tente novamente em instantes.',503,0,true)
@@ -766,7 +978,6 @@ const handleRequest = async (request: Request, requestId: string) => {
       else if(response.status>=500)upstreamFailureCount+=1
       if(upstreamFailureCount>=5){upstreamCircuitOpenUntil=Date.now()+30_000;upstreamFailureCount=0}
     } catch (error) {
-      if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',error_code:'MUGOZAP_REQUEST_FAILED',error_message:'Serviço do WhatsApp indisponível.'}).eq('id',alertReservationId)
       const durationMs = Date.now() - startedAt
       const timedOut = error instanceof DOMException && error.name === 'AbortError'
       console.log(JSON.stringify({event:'mugozap_upstream',request_id:requestId,operation,user_id:user.id,organization_id:profile.organization_id,method:route.method,upstream_path:path,duration_ms:durationMs,upstream_status:0,timeout_ms:timeoutMs,success:false}))
@@ -774,45 +985,21 @@ const handleRequest = async (request: Request, requestId: string) => {
       return fail('UPSTREAM_UNAVAILABLE', 'O MugoZap está temporariamente indisponível.', 503, 0, true)
     }
     const responseBody = await response.json().catch(() => null)
-    if(operation==='send_template_message')console.log(JSON.stringify({event:'template_send_homologation_response',request_id:requestId,template_name:text(payload.template_name,100),language:text(payload.language,20),contract_mode:text(payload.contract_mode||'minimal',30),phone_masked:maskPhone(payload.recipient),endpoint:path,status_http:response.status,body:sanitizedMugoZapResponse(responseBody)}))
     auditOperation('upstream_received',operation,{request_id:requestId,organization_id:profile.organization_id,endpoint_called:path,status_http:response.status,body_received:responseBody})
     console.log(JSON.stringify({event:'mugozap_upstream',request_id:requestId,operation,user_id:user.id,organization_id:profile.organization_id,method:route.method,upstream_path:path,duration_ms:Date.now()-startedAt,upstream_status:response.status,timeout_ms:timeoutMs,success:response.ok}))
     if (!response.ok) {
-      if (alertReservationId) await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',error_code:`MUGOZAP_${response.status}`,error_message:'O MugoZap não conseguiu concluir o envio.'}).eq('id',alertReservationId)
       const detail = String(responseBody?.detail || '')
       if (detail === 'Template pending approval') return fail('TEMPLATE_PENDING', 'O template ainda está em aprovação na Meta.', 409, response.status)
       if (detail === 'Template unavailable') return fail('TEMPLATE_NOT_CONFIGURED', 'O template ainda não está disponível na Meta.', 404, response.status)
       if (/template rejected/i.test(detail)) return fail('TEMPLATE_REJECTED', 'O template foi rejeitado pela Meta.', 409, response.status)
       if (/template paused/i.test(detail)) return fail('TEMPLATE_PAUSED', 'O template está pausado na Meta.', 409, response.status)
-      if(operation==='send_template_message'&&[400,422].includes(response.status)&&/components?|parameters?|unexpected|extra fields?/i.test(detail))return fail('MUGOZAP_COMPONENTS_UNSUPPORTED','O MugoZap não aceitou os componentes deste template.',422,response.status,false,{contract_mode:text(payload.contract_mode||'minimal',30),provider:sanitizedMugoZapResponse(responseBody)})
-      if(operation==='send_template_message'&&response.status===401)return fail('MUGOZAP_AUTH_FAILED','A autenticação com o MugoZap falhou.',502,response.status,false)
-      if(operation==='send_template_message'&&response.status===404)return fail('MUGOZAP_ENDPOINT_NOT_FOUND','O endpoint de templates do MugoZap não foi encontrado.',502,response.status,false)
-      if(operation==='send_template_message'&&[502,503,504].includes(response.status))return fail('MUGOZAP_TEMPORARY_ERROR','O MugoZap está temporariamente indisponível.',503,response.status,true)
       if (operation === 'send_manual_message') return fail('MESSAGE_SEND_FAILED', 'Não foi possível enviar a mensagem.', response.status, response.status, response.status >= 500)
       const [code,message,retryable] = upstreamFailure(response.status)
       return fail(code, message, response.status, response.status, retryable)
     }
-    if (operation === 'start_template_conversation') {
-      const sent:any = responseBody || {}, conversation = sent.conversation || {}, normalizedPhone = brazilianPhone(payload.phone)
-      const providerMessageId=text(sent.provider_message_id || sent.messages?.[0]?.id,200)
-      if(!providerMessageId){
-        await client.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_unconfirmed',error_code:'META_MESSAGE_ID_MISSING',error_message:'A resposta do provedor não confirmou o envio.'}).eq('id',alertReservationId)
-        return fail('MESSAGE_SEND_UNCONFIRMED','A Meta não confirmou o envio. Verifique o histórico antes de tentar novamente.',502)
-      }
-      const linkResult = await client.from('whatsapp_conversation_links').upsert({organization_id:profile.organization_id,client_id:payload.client_id,wa_id:String(conversation.wa_id||normalizedPhone),phone:normalizedPhone,conversation_id:String(conversation.id||conversation.wa_id||normalizedPhone)},{onConflict:'organization_id,client_id'})
-      const alertResult = await client.from('whatsapp_collection_alerts').update({wa_id:String(conversation.wa_id||normalizedPhone),provider_message_id:providerMessageId,template_status:'APPROVED',collection_stage:'waiting_customer',action:'template_sent',status:'sent',sent_at:new Date().toISOString(),raw_response:{provider_message_id:providerMessageId,conversation_id:text(conversation.id||conversation.wa_id,200)},error_code:null,error_message:null}).eq('id',alertReservationId)
-      await client.from('commercial_events').insert({organization_id:profile.organization_id,client_id:payload.client_id,installment_id:payload.installment_id,event_type:'whatsapp_collection_alert_sent',title:'Alerta de cobrança enviado pelo WhatsApp',new_value:{wa_id:String(conversation.wa_id||normalizedPhone),template_name:'mugo_alerta_pagamento_pendente',provider_message_id:providerMessageId,language:'pt_BR',source:'collection'},created_by:user.id})
-      if (linkResult.error || alertResult.error) return fail('CRM_AUDIT_FAILED', 'O alerta foi enviado, mas o vínculo não pôde ser registrado. Não repita o envio.', 502)
-      try{
-        const canonical=await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,recipient:normalizedPhone,providerMessageId,
-          idempotencyKey:text(payload.idempotency_key,120),messageType:'template',templateName:'mugo_alerta_pagamento_pendente',
-          templateLanguage:'pt_BR',clientId:payload.client_id})
-        return json({ok:true,data:{...sent,provider_message_id:providerMessageId,message_id:providerMessageId,status:'accepted',conversation:canonical.conversation,message:canonical.message}})
-      }catch(error){
-        console.log(JSON.stringify({event:'whatsapp_history_write_failed',request_id:requestId,operation,error_code:text((error as any)?.code||(error as any)?.message,120)}))
-        return fail('CRM_AUDIT_FAILED','O alerta foi enviado, mas o histórico canônico não pôde ser registrado. Não repita o envio.',502)
-      }
-    }
+    // start_template_conversation e send_template_message não chegam aqui: retornam
+    // acima após o envio direto pela Meta Cloud API. O transporte via MugoZap
+    // (endpoint de start-template) foi removido dessas duas operações.
     if(['pause_automation','resume_automation','close_conversation','update_conversation'].includes(operation)&&serviceKey){
       const admin=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
       const waId=identifier(payload.waId)
@@ -835,24 +1022,6 @@ const handleRequest = async (request: Request, requestId: string) => {
         const event=await admin.from('whatsapp_conversation_events').insert({organization_id:profile.organization_id,
           connection_id:found.data.connection_id,conversation_id:found.data.id,event_type:operation,actor_id:user.id,details:{source:'crm'}})
         if(mirrored.error||event.error)return fail('CRM_AUDIT_FAILED','O estado foi alterado no provedor, mas não pôde ser espelhado no CRM.',502)
-      }
-    }
-    if(operation==='send_template_message'){
-      const providerMessageId=text(responseBody?.provider_message_id||responseBody?.message_id||responseBody?.messages?.[0]?.id,200)
-      if(!providerMessageId)return fail('MESSAGE_SEND_UNCONFIRMED','O provedor não confirmou o envio. Verifique o histórico antes de tentar novamente.',502)
-      const conversation=responseBody?.conversation||{},recipient=brazilianPhone(payload.recipient)
-      if(genericTemplateClientId){
-        const linkResult=await client.from('whatsapp_conversation_links').upsert({organization_id:profile.organization_id,client_id:genericTemplateClientId,wa_id:String(conversation.wa_id||recipient),phone:recipient,conversation_id:String(conversation.id||conversation.wa_id||recipient)},{onConflict:'organization_id,wa_id'})
-        if(linkResult.error)return fail('CRM_AUDIT_FAILED','O template foi enviado, mas o vínculo com o contato não pôde ser registrado. Não repita o envio.',502)
-      }
-      try{
-        const canonical=await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,recipient,providerMessageId,
-          idempotencyKey:text(payload.idempotency_key,120),messageType:'template',templateName:text(payload.template_name,100),
-          templateLanguage:text(payload.language,20),templateComponents:payload.components,clientId:genericTemplateClientId})
-        return json({ok:true,data:{message_id:providerMessageId,provider_message_id:providerMessageId,status:'accepted',conversation:canonical.conversation,message:canonical.message,template_name:text(payload.template_name,100),language:text(payload.language,20),recipient}})
-      }catch(error){
-        console.log(JSON.stringify({event:'whatsapp_history_write_failed',request_id:requestId,operation,error_code:text((error as any)?.code||(error as any)?.message,120)}))
-        return fail('CRM_AUDIT_FAILED','O template foi enviado, mas o histórico canônico não pôde ser registrado. Não repita o envio.',502)
       }
     }
     if(operation==='send_manual_message'){

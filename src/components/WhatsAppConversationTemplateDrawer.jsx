@@ -3,30 +3,36 @@ import { ArrowLeft, CheckCircle2, FileText, Search, X } from 'lucide-react'
 import { FeedbackMessage } from './FeedbackMessage'
 import { loadStoredTemplateStatuses } from '../services/whatsapp/templateCatalog'
 import { buildTemplateComponents, describeTemplateFields, formatTemplateFieldOnBlur, maskTemplateRecipient, renderTemplatePreview, suggestTemplateValues, templateCategory, templateSearchText, validateTemplateField } from '../services/whatsapp/templateParameters'
+import { createTemplateSendAttempt, isAmbiguousTemplateSendOutcome, templateSendFingerprint } from '../services/whatsapp/templateSendAttempt'
 
 const categories = [['all','Todos'],['marketing','Marketing'],['utility','Utilidade'],['authentication','Autenticação']]
 const categoryLabel = value => value === 'marketing' ? 'Marketing' : value === 'authentication' ? 'Autenticação' : 'Utilidade'
-
 export function WhatsAppConversationTemplateDrawer({ open, conversation, client, contract, installment, owner, enabled = false, authorized = false, testMode = false, templatesOverride = null, onCheckAccess, onClose, onSend }) {
   const [templates,setTemplates]=useState([]),[loading,setLoading]=useState(false),[loadError,setLoadError]=useState('')
   const [query,setQuery]=useState(''),[category,setCategory]=useState('all'),[selected,setSelected]=useState(null),[values,setValues]=useState({}),[step,setStep]=useState('select')
-  const [confirmed,setConfirmed]=useState(false),[sending,setSending]=useState(false),[sendState,setSendState]=useState(''),[error,setError]=useState(''),[fieldErrors,setFieldErrors]=useState({}),[access,setAccess]=useState({checking:false,allowed:false,reason:''})
+  const [confirmed,setConfirmed]=useState(false),[sending,setSending]=useState(false),[sendState,setSendState]=useState(''),[ambiguousFingerprint,setAmbiguousFingerprint]=useState(''),[error,setError]=useState(''),[fieldErrors,setFieldErrors]=useState({}),[access,setAccess]=useState({checking:false,allowed:false,reason:''})
   const drawerRef=useRef(null),returnFocusRef=useRef(null),sendingRef=useRef(false),onCloseRef=useRef(onClose)
+  const [sendAttempt]=useState(()=>createTemplateSendAttempt())
   const fields=useMemo(()=>describeTemplateFields(selected||{}),[selected])
   const preview=useMemo(()=>renderTemplatePreview(selected||{},fields,values),[selected,fields,values])
+  const outboundComponents=useMemo(()=>buildTemplateComponents(fields,values),[fields,values])
+  const attemptFingerprint=useMemo(()=>templateSendFingerprint({recipient:conversation?.phone||conversation?.waId,templateName:selected?.name,language:selected?.language,components:outboundComponents}),[selected,conversation,outboundComponents])
   const approved=useMemo(()=>templates.filter(item=>item.status==='APPROVED'&&item.is_active!==false),[templates])
   const visible=useMemo(()=>approved.filter(item=>(category==='all'||templateCategory(item)===category)&&(!query||templateSearchText(item).includes(query.toLocaleLowerCase('pt-BR')))),[approved,category,query])
+  const outcomePending=(sendState==='unknown'&&ambiguousFingerprint===attemptFingerprint)||sendAttempt.isAmbiguous(attemptFingerprint)
   useEffect(()=>{onCloseRef.current=onClose},[onClose])
+  useEffect(()=>{sendAttempt.sync(attemptFingerprint)},[attemptFingerprint,sendAttempt])
 
   useEffect(()=>{
     if(!open)return
+    sendAttempt.reset()
     returnFocusRef.current=document.activeElement
     let active=true
-    Promise.resolve().then(()=>{if(active){setLoading(true);setLoadError('');setSelected(null);setStep('select');setConfirmed(false);setError('');setFieldErrors({});setAccess({checking:false,allowed:false,reason:''});setSendState('')}})
+    Promise.resolve().then(()=>{if(active){setLoading(true);setLoadError('');setSelected(null);setStep('select');setConfirmed(false);setError('');setFieldErrors({});setAccess({checking:false,allowed:false,reason:''});setSendState('');setAmbiguousFingerprint('')}})
     const source=templatesOverride?Promise.resolve({templates:templatesOverride}):loadStoredTemplateStatuses({force:true})
     source.then(result=>{if(active)setTemplates(result.templates)}).catch(cause=>{if(active)setLoadError(cause.message||'Não foi possível carregar os modelos sincronizados.')}).finally(()=>{if(active)setLoading(false)})
     return()=>{active=false}
-  },[open,templatesOverride])
+  },[open,templatesOverride,sendAttempt])
   useEffect(()=>{
     if(!open)return
     const node=drawerRef.current
@@ -47,9 +53,11 @@ export function WhatsAppConversationTemplateDrawer({ open, conversation, client,
 
   async function choose(template){
     const nextFields=describeTemplateFields(template)
+    const suggestedValues=suggestTemplateValues(nextFields,{client,contract,installment,owner,contactName:conversation.name})
     setSelected(template)
-    setValues(suggestTemplateValues(nextFields,{client,contract,installment,owner,contactName:conversation.name}))
-    setStep('fill');setConfirmed(false);setError('');setFieldErrors({})
+    setValues(suggestedValues)
+    setStep('fill');setConfirmed(false);setError('');setFieldErrors({});setSendState('')
+    sendAttempt.sync(templateSendFingerprint({recipient:conversation.phone||conversation.waId,templateName:template.name,language:template.language,components:buildTemplateComponents(nextFields,suggestedValues)}));setAmbiguousFingerprint('')
     if(testMode&&typeof onCheckAccess==='function'){
       setAccess({checking:true,allowed:false,reason:''})
       try{const result=await onCheckAccess(template);setAccess({checking:false,allowed:Boolean(result?.allowed),reason:result?.reason||''})}
@@ -68,24 +76,25 @@ export function WhatsAppConversationTemplateDrawer({ open, conversation, client,
   }
   const canSubmit=enabled&&authorized&&(!testMode||access.allowed)
   async function submit(){
-    if(!confirmed||sendingRef.current||!canSubmit)return
+    if(!confirmed||sendingRef.current||!canSubmit||outcomePending)return
+    const idempotencyKey=sendAttempt.begin(attemptFingerprint)
     sendingRef.current=true;setSending(true);setSendState('sending');setError('')
     try{
-      await onSend({recipient:conversation.phone||conversation.waId,template_name:selected.name,language:selected.language||'pt_BR',components:buildTemplateComponents(fields,values),template:selected,preview})
+      await onSend({recipient:conversation.phone||conversation.waId,template_name:selected.name,language:selected.language||'pt_BR',components:outboundComponents,template:selected,preview,idempotency_key:idempotencyKey})
+      sendAttempt.markSuccess();setAmbiguousFingerprint('')
       setSendState('sent')
       onCloseRef.current()
     }catch(cause){
-      const unknown=cause.code==='UPSTREAM_TIMEOUT'||cause.status===504
-      setSendState(unknown?'unknown':'failed')
+      const ambiguous=isAmbiguousTemplateSendOutcome(cause)
+      setSendState(ambiguous?'unknown':'failed')
+      if(ambiguous){sendAttempt.markAmbiguous(attemptFingerprint);setAmbiguousFingerprint(attemptFingerprint);setError('');return}
       const known={
         TEMPLATE_TEST_PHONE_FORBIDDEN:'Este destinatário não está autorizado para homologação.',
         TEMPLATE_TEST_NAME_FORBIDDEN:'Este modelo ainda não está autorizado para teste.',
         TEMPLATE_SEND_TARGET_FORBIDDEN:'Este destinatário ou modelo não está autorizado para homologação.',
         TEMPLATE_NOT_APPROVED:'Este modelo não está aprovado para envio.',
-        MUGOZAP_COMPONENTS_UNSUPPORTED:'O MugoZap não aceitou os parâmetros deste modelo.',
       }
-      const message=unknown?'O resultado do envio é desconhecido. Não tente novamente antes de verificar o histórico.':known[cause.code]||cause.message||'Não foi possível enviar o modelo.'
-      setError(`${message}${cause.requestId?` Protocolo: ${cause.requestId}.`:''}`)
+      setError(`${known[cause.code]||cause.message||'Não foi possível enviar o modelo.'}${cause.requestId?` Protocolo: ${cause.requestId}.`:''}`)
     }finally{sendingRef.current=false;setSending(false)}
   }
 
@@ -95,7 +104,7 @@ export function WhatsAppConversationTemplateDrawer({ open, conversation, client,
       {loading?<div className="template-context-state">Carregando modelos aprovados…</div>:loadError?<FeedbackMessage type="error">{loadError}</FeedbackMessage>:visible.length?<div className="template-context-list">{visible.map(template=>{const templateFields=describeTemplateFields(template);return <button key={`${template.name}:${template.language}`} onClick={()=>choose(template)}><FileText size={17}/><span><strong>{template.display||template.name}</strong><small>{template.name}</small><p>{template.preview||'Sem prévia textual.'}</p><i>{categoryLabel(templateCategory(template))} · {template.language} · {templateFields.length} parâmetro(s)</i></span><CheckCircle2 size={15}/></button>})}</div>:<div className="template-context-state">Nenhum modelo aprovado corresponde à busca.</div>}
     </>:<><button className="template-context-back" onClick={()=>{setStep(step==='review'?'fill':'select');setError('')}}><ArrowLeft size={14}/>{step==='review'?'Revisar campos':'Escolher outro modelo'}</button>
       <div className="template-recipient"><span>Será enviado para</span><strong>{conversation.name} — {maskTemplateRecipient(conversation.phone||conversation.waId)}</strong></div>
-      {step==='fill'?<div className="template-context-fields">{fields.length?<><button className="template-fill-suggestions" onClick={fillSuggestions}>Preencher dados sugeridos</button>{fields.map(field=><TemplateParameterField key={field.id||field.key} field={field} value={values[field.key]||''} error={fieldErrors[field.key]||''} onChange={nextValue=>{setValues(current=>({...current,[field.key]:nextValue}));setFieldErrors(current=>({...current,[field.key]:''}))}} onBlur={nextValue=>{const formatted=formatTemplateFieldOnBlur(field,nextValue);setValues(current=>({...current,[field.key]:formatted}));setFieldErrors(current=>({...current,[field.key]:validateTemplateField(field,formatted)}))}}/>)}</>:<p className="template-context-state">Este modelo não exige parâmetros.</p>}{error&&<FeedbackMessage type="error">{error}</FeedbackMessage>}<button className="button" onClick={continueToReview}>Revisar mensagem</button></div>:<div className="template-context-confirm"><TemplatePreview preview={preview}/><label className="template-confirm-check"><input type="checkbox" checked={confirmed} onChange={event=>setConfirmed(event.target.checked)}/><span>Revisei o destinatário, o modelo e os dados da mensagem.</span></label>{!enabled&&<FeedbackMessage type="warning">Envio de modelos ainda não está liberado para este usuário.</FeedbackMessage>}{enabled&&!authorized&&<FeedbackMessage type="warning">A homologação está disponível somente para administrador autorizado.</FeedbackMessage>}{testMode&&access.checking&&<FeedbackMessage type="info">Validando autorização de homologação…</FeedbackMessage>}{testMode&&!access.checking&&!access.allowed&&<FeedbackMessage type="warning">{access.reason||'Este destinatário ou modelo não está autorizado para homologação.'}</FeedbackMessage>}{sendState==='sending'&&<FeedbackMessage type="info">Enviando uma única tentativa…</FeedbackMessage>}{error&&<FeedbackMessage type="error">{error}</FeedbackMessage>}<button className="button" onClick={submit} disabled={!confirmed||sending||!canSubmit}>{sending?'Enviando…':'Confirmar e enviar'}</button></div>}
+      {step==='fill'?<div className="template-context-fields">{fields.length?<><button className="template-fill-suggestions" onClick={fillSuggestions}>Preencher dados sugeridos</button>{fields.map(field=><TemplateParameterField key={field.id||field.key} field={field} value={values[field.key]||''} error={fieldErrors[field.key]||''} onChange={nextValue=>{setValues(current=>({...current,[field.key]:nextValue}));setFieldErrors(current=>({...current,[field.key]:''}))}} onBlur={nextValue=>{const formatted=formatTemplateFieldOnBlur(field,nextValue);setValues(current=>({...current,[field.key]:formatted}));setFieldErrors(current=>({...current,[field.key]:validateTemplateField(field,formatted)}))}}/>)}</>:<p className="template-context-state">Este modelo não exige parâmetros.</p>}{error&&<FeedbackMessage type="error">{error}</FeedbackMessage>}<button className="button" onClick={continueToReview}>Revisar mensagem</button></div>:<div className="template-context-confirm"><TemplatePreview preview={preview}/><label className="template-confirm-check"><input type="checkbox" checked={confirmed} onChange={event=>setConfirmed(event.target.checked)}/><span>Revisei o destinatário, o modelo e os dados da mensagem.</span></label>{!enabled&&<FeedbackMessage type="warning">Envio de modelos ainda não está liberado para este usuário.</FeedbackMessage>}{enabled&&!authorized&&<FeedbackMessage type="warning">A homologação está disponível somente para administrador autorizado.</FeedbackMessage>}{testMode&&access.checking&&<FeedbackMessage type="info">Validando autorização de homologação…</FeedbackMessage>}{testMode&&!access.checking&&!access.allowed&&<FeedbackMessage type="warning">{access.reason||'Este destinatário ou modelo não está autorizado para homologação.'}</FeedbackMessage>}{sendState==='sending'&&<FeedbackMessage type="info">Enviando uma única tentativa…</FeedbackMessage>}{outcomePending&&<FeedbackMessage type="warning">O resultado do envio ainda não foi confirmado. Verifique o histórico antes de tentar novamente.</FeedbackMessage>}{error&&<FeedbackMessage type="error">{error}</FeedbackMessage>}<button className="button" onClick={submit} disabled={!confirmed||sending||!canSubmit||outcomePending}>{sending?'Enviando…':outcomePending?'Aguardando confirmação':'Confirmar e enviar'}</button></div>}
       {step==='fill'&&<TemplatePreview preview={preview} compact/>}
     </>}
   </aside></>
