@@ -20,21 +20,44 @@ assert.equal(
 
 // meta não configurada -> configuração necessária
 assert.equal(
-  deriveConnectionState({ meta_configured: false, mugozap_backend: 'online', supabase: 'online' }).state,
+  deriveConnectionState({ meta_configured: false, supabase: 'online' }).state,
   CONNECTION_STATES.SETUP_REQUIRED,
 )
 
-// backend fora -> desconectado
+// MugoZap legado fora não derruba a conexão canônica
 {
-  const result = deriveConnectionState({ meta_configured: true, mugozap_backend: 'unavailable', supabase: 'online' }, { now: NOW })
+  const result = deriveConnectionState({
+    meta_configured: true,
+    mugozap_backend: 'unavailable',
+    supabase: 'online',
+    whatsapp_connections_v2_enabled: true,
+    whatsapp_connection_found: true,
+    whatsapp_connection_status: 'active',
+    last_template_sync: fresh,
+  }, { now: NOW })
+
+  assert.equal(result.state, CONNECTION_STATES.CONNECTED)
+  assert.ok(result.reasons.every((r) => !/MugoZap/i.test(r)))
+}
+
+// Supabase fora continua sendo falha real
+{
+  const result = deriveConnectionState({
+    meta_configured: true,
+    supabase: 'unavailable',
+    whatsapp_connections_v2_enabled: true,
+    whatsapp_connection_found: true,
+    whatsapp_connection_status: 'active',
+    last_template_sync: fresh,
+  }, { now: NOW })
+
   assert.equal(result.state, CONNECTION_STATES.DISCONNECTED)
-  assert.ok(result.reasons.some((r) => /MugoZap/i.test(r)))
 }
 
 // tudo ok e sync recente -> conectado
 assert.equal(
   deriveConnectionState(
-    { meta_configured: true, mugozap_backend: 'online', supabase: 'online', whatsapp_connection_status: 'active', pending_projection_events: 0, last_template_sync: fresh },
+    { meta_configured: true, supabase: 'online', whatsapp_connections_v2_enabled: true, whatsapp_connection_found: true, whatsapp_connection_status: 'active', last_template_sync: fresh },
     { now: NOW },
   ).state,
   CONNECTION_STATES.CONNECTED,
@@ -43,7 +66,7 @@ assert.equal(
 // conectado mas com pendências -> degradado
 {
   const result = deriveConnectionState(
-    { meta_configured: true, mugozap_backend: 'online', supabase: 'online', whatsapp_connection_status: 'degraded', pending_projection_events: 4, last_template_sync: stale },
+    { meta_configured: true, supabase: 'online', whatsapp_connections_v2_enabled: true, whatsapp_connection_found: true, whatsapp_connection_status: 'degraded', pending_projection_events: 4, last_template_sync: stale },
     { now: NOW },
   )
   assert.equal(result.state, CONNECTION_STATES.DEGRADED)

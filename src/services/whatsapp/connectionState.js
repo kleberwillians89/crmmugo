@@ -27,7 +27,7 @@ export function deriveConnectionState(health, { templateSyncMaxAgeMs = 86_400_00
 
   if (health.code) {
     const code = String(health.code)
-    if (['WABA_ID_MISSING', 'WABA_ID_INVALID', 'META_ACCESS_TOKEN_MISSING', 'GRAPH_API_VERSION_INVALID', 'PHONE_NUMBER_ID_MISSING', 'MUGOZAP_CONFIGURATION_MISSING', 'SUPABASE_CONFIGURATION_MISSING'].includes(code)) {
+    if (['WABA_ID_MISSING', 'WABA_ID_INVALID', 'META_ACCESS_TOKEN_MISSING', 'GRAPH_API_VERSION_INVALID', 'PHONE_NUMBER_ID_MISSING', 'SUPABASE_CONFIGURATION_MISSING'].includes(code)) {
       return { state: CONNECTION_STATES.SETUP_REQUIRED, reasons: [health.message || 'Configuração do backend incompleta.'] }
     }
     if (['UPSTREAM_UNAUTHORIZED', 'AUTH_SESSION_MISSING', 'AUTH_INVALID_TOKEN'].includes(code)) {
@@ -38,7 +38,6 @@ export function deriveConnectionState(health, { templateSyncMaxAgeMs = 86_400_00
 
   const reasons = []
   const metaConfigured = health.meta_configured === true
-  const mugozapOnline = online(health.mugozap_backend)
   const supabaseOnline = online(health.supabase) || health.supabase === undefined
   const connectionStatus = String(health.whatsapp_connection_status || '').toLowerCase()
 
@@ -50,10 +49,13 @@ export function deriveConnectionState(health, { templateSyncMaxAgeMs = 86_400_00
   if (!metaConfigured) {
     return { state: CONNECTION_STATES.SETUP_REQUIRED, reasons }
   }
-  if (!mugozapOnline || !supabaseOnline) {
-    if (!mugozapOnline) reasons.push('Backend MugoZap indisponível.')
-    if (!supabaseOnline) reasons.push('Banco de dados indisponível.')
+  if (!supabaseOnline) {
+    reasons.push('Banco de dados indisponível.')
     return { state: CONNECTION_STATES.DISCONNECTED, reasons }
+  }
+
+  if (health.whatsapp_connections_v2_enabled && !health.whatsapp_connection_found) {
+    return { state: CONNECTION_STATES.SETUP_REQUIRED, reasons }
   }
 
   if (['degraded', 'error', 'revoked', 'disabled'].includes(connectionStatus)) {

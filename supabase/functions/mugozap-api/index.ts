@@ -385,6 +385,50 @@ const handleRequest = async (request: Request, requestId: string) => {
     if (route.write && !['admin','manager'].includes(profile.role)) return fail('FORBIDDEN', operation==='sync_templates'?'Seu perfil não pode sincronizar templates.':'Seu perfil não pode alterar conversas.', 403)
     if (route.admin && profile.role !== 'admin') return fail('FORBIDDEN', 'Somente administradores podem consultar usuários do WhatsApp.', 403)
     const payload = incoming.payload || {}
+
+    // Health operacional do CRM: Meta + conexão canônica + Supabase.
+    // MugoZap permanece legado/opcional e não decide o estado da Inbox.
+    if(operation==='health_check'){
+      const [lastTemplateSync,connectionResult]=await Promise.all([
+        client.from('whatsapp_message_templates')
+          .select('last_synced_at')
+          .eq('organization_id',profile.organization_id)
+          .order('last_synced_at',{ascending:false})
+          .limit(1)
+          .maybeSingle(),
+        client.from('whatsapp_connections_public')
+          .select('id,status')
+          .limit(1)
+          .maybeSingle(),
+      ])
+
+      if(connectionResult.error){
+        return fail(
+          'CONNECTION_REGISTRY_UNAVAILABLE',
+          'O registro de conexões está indisponível.',
+          503
+        )
+      }
+
+      return json({ok:true,data:{
+        edge_function:'online',
+        supabase:'online',
+        health_source:'canonical',
+        meta_configured:Boolean(
+          Deno.env.get('WABA_ID') &&
+          Deno.env.get('PHONE_NUMBER_ID') &&
+          Deno.env.get('META_ACCESS_TOKEN') &&
+          Deno.env.get('GRAPH_API_VERSION')
+        ),
+        whatsapp_connections_v2_enabled:true,
+        whatsapp_connection_found:Boolean(connectionResult.data),
+        whatsapp_connection_status:connectionResult.data?.status||null,
+        last_template_sync:lastTemplateSync.error
+          ? null
+          : lastTemplateSync.data?.last_synced_at||null,
+        timestamp:new Date().toISOString(),
+      }})
+    }
     if(operation==='list_crm_contacts'){
       const limit=Math.min(Math.max(Number(payload.limit)||100,1),200)
       const result=await client.from('whatsapp_contacts')
@@ -747,24 +791,6 @@ const handleRequest = async (request: Request, requestId: string) => {
       if (operation === 'send_manual_message') return fail('MESSAGE_SEND_FAILED', 'Não foi possível enviar a mensagem.', response.status, response.status, response.status >= 500)
       const [code,message,retryable] = upstreamFailure(response.status)
       return fail(code, message, response.status, response.status, retryable)
-    }
-    if(operation==='health_check'){
-      const [lastTemplateSync,pendingOutbox,connectionResult]=await Promise.all([
-        client.from('whatsapp_message_templates').select('last_synced_at').eq('organization_id',profile.organization_id).order('last_synced_at',{ascending:false}).limit(1).maybeSingle(),
-        client.from('whatsapp_connection_outbox').select('id',{count:'exact',head:true}).eq('organization_id',profile.organization_id).in('status',['pending','failed']),
-        client.from('whatsapp_connections_public').select('id,status').limit(1).maybeSingle(),
-      ])
-      return json({ok:true,data:{
-        edge_function:'online',
-        supabase:'online',
-        mugozap_backend:response.ok?'online':'unavailable',
-        meta_configured:Boolean(Deno.env.get('WABA_ID')&&Deno.env.get('META_ACCESS_TOKEN')&&Deno.env.get('GRAPH_API_VERSION')),
-        whatsapp_connection_found:Boolean(connectionResult.data),
-        whatsapp_connection_status:connectionResult.data?.status||null,
-        last_template_sync:lastTemplateSync.data?.last_synced_at||null,
-        pending_projection_events:Number(pendingOutbox.count||0),
-        timestamp:new Date().toISOString(),
-      }})
     }
     if (operation === 'start_template_conversation') {
       const sent:any = responseBody || {}, conversation = sent.conversation || {}, normalizedPhone = brazilianPhone(payload.phone)
