@@ -99,6 +99,10 @@ disconnected.edges = disconnected.edges.filter((item) => item.target !== 'ordina
 assert.ok(validateGraph(disconnected).errors.some((item) => item.code === 'CONDITION_BRANCHES_REQUIRED'))
 assert.ok(validateGraph(disconnected).errors.some((item) => item.code === 'DISCONNECTED_NODE'))
 
+const missingConditionValue=structuredClone(branched)
+missingConditionValue.nodes.find((item)=>item.id==='is_vip').config.value=''
+assert.ok(validateGraph(missingConditionValue).errors.some((item)=>item.code==='CONDITION_VALUE_MISSING'))
+
 const cyclic = structuredClone(branched)
 cyclic.edges = cyclic.edges.filter((item) => item.source !== 'wait')
 cyclic.edges.push(edge('wait', 'is_vip'))

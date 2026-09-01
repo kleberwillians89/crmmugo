@@ -26,6 +26,7 @@ import {
   legacyDefinitionToGraph,
   normalizeGraph,
 } from '../services/whatsapp/automationGraph'
+import { loadStoredTemplateStatuses } from '../services/whatsapp/templateCatalog'
 
 const OPERATOR_LABELS = {
   eq: 'igual a', neq: 'diferente de', gt: 'maior que', gte: 'maior ou igual',
@@ -67,6 +68,7 @@ export function WhatsAppAutomationPanel({ canWrite = false }) {
   const [runs, setRuns] = useState([])
   const [runsLoading, setRunsLoading] = useState(false)
   const [busy, setBusy] = useState('')
+  const [approvedTemplates, setApprovedTemplates] = useState([])
   const busyRef = useRef(false)
 
   const load = useCallback(async () => {
@@ -83,6 +85,9 @@ export function WhatsAppAutomationPanel({ canWrite = false }) {
 
   useEffect(() => {
     load()
+    loadStoredTemplateStatuses({ force: true })
+      .then((result) => setApprovedTemplates((result.templates || []).filter((item) => item.status === 'APPROVED' && item.is_active !== false)))
+      .catch(() => setApprovedTemplates([]))
   }, [load])
 
   const run = useCallback(async (id, operation, success) => {
@@ -151,6 +156,7 @@ export function WhatsAppAutomationPanel({ canWrite = false }) {
         onCancel={() => { setDraft(null); setError('') }}
         onSave={saveDraft}
         error={error}
+        approvedTemplates={approvedTemplates}
       />
     )
   }

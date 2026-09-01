@@ -33,7 +33,7 @@ const brazilianPhone = (value: unknown) => {
 }
 const metaStatus = (value: unknown) => text(value, 30).toUpperCase()
 const availableTemplate = (value: unknown) => metaStatus(value) === 'APPROVED'
-const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation','get_template_test_access','send_template_message','list_whatsapp_connections','get_whatsapp_connection','get_whatsapp_connection_health','validate_whatsapp_connection','resolve_whatsapp_connection_shadow'])
+const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation','get_template_test_access','send_template_message','create_whatsapp_contact','list_whatsapp_connections','get_whatsapp_connection','get_whatsapp_connection_health','validate_whatsapp_connection','resolve_whatsapp_connection_shadow'])
 const publicOperation = (operation: string) => operation === 'list_messages' ? 'get_conversation_messages' : operation
 let upstreamFailureCount=0
 let upstreamCircuitOpenUntil=0
@@ -339,6 +339,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
   get_dashboard_summary: { method: 'GET', path: () => '/api/dashboard/summary' },
   reconcile_whatsapp_history: { method: 'POST', path: () => '/internal/crm/reconcile', write: true },
   list_crm_contacts: { method: 'GET', path: () => '/internal/crm/contacts' },
+  create_whatsapp_contact: { method: 'POST', path: () => '/internal/crm/contacts', write: true },
   list_crm_message_history: { method: 'GET', path: () => '/internal/crm/messages' },
   start_template_conversation: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
   send_template_message: { method: 'POST', path: () => '/api/conversations/start-template', write: true },
@@ -471,6 +472,41 @@ const handleRequest = async (request: Request, requestId: string) => {
         .eq('organization_id',profile.organization_id).order('last_seen_at',{ascending:false}).limit(limit)
       if(result.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível ler os contatos do WhatsApp.',503)
       return json({ok:true,data:{items:result.data||[],source:'crm'}})
+    }
+    if(operation==='create_whatsapp_contact'){
+      if(!serviceKey)return fail('SUPABASE_SERVICE_ROLE_KEY_MISSING','O cadastro interno de contatos não está configurado.',503)
+      const name=text(payload.name,240),recipient=brazilianPhone(payload.phone),clientId=text(payload.client_id,80)
+      if(!name)return fail('CONTACT_NAME_REQUIRED','Informe o nome do contato.',422)
+      if(!recipient)return fail('INVALID_PHONE','Informe um número de WhatsApp válido com DDI e DDD.',422)
+      const admin=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
+      if(clientId){
+        const linkedClient=await admin.from('clients').select('id').eq('id',clientId).eq('organization_id',profile.organization_id).maybeSingle()
+        if(linkedClient.error||!linkedClient.data)return fail('CLIENT_NOT_FOUND','O cliente selecionado não pertence à organização.',404)
+      }
+      const phoneNumberId=text(Deno.env.get('PHONE_NUMBER_ID'),80)
+      let connectionQuery=admin.from('whatsapp_connections').select('id').eq('organization_id',profile.organization_id).eq('status','active')
+      if(phoneNumberId)connectionQuery=connectionQuery.eq('phone_number_id',phoneNumberId)
+      const connections=await connectionQuery.order('updated_at',{ascending:false}).limit(2)
+      if(connections.error)return fail('CONNECTION_REGISTRY_UNAVAILABLE','Não foi possível localizar a conexão WhatsApp ativa.',503)
+      if((connections.data||[]).length!==1)return fail('CONNECTION_SELECTION_REQUIRED','É necessária uma única conexão WhatsApp ativa para cadastrar o contato.',409)
+      const connectionId=connections.data![0].id
+      const existing=await admin.from('whatsapp_contacts').select('id,organization_id,connection_id,client_id,wa_id,display_name,profile_name,first_seen_at,last_seen_at,updated_at').eq('organization_id',profile.organization_id).eq('connection_id',connectionId).eq('wa_id',recipient).maybeSingle()
+      if(existing.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível verificar o cadastro do contato.',503)
+      if(existing.data){
+        if(existing.data.client_id&&clientId&&existing.data.client_id!==clientId)return fail('CONTACT_CLIENT_CONFLICT','Este contato já está vinculado a outro cliente.',409)
+        if(!text(existing.data.display_name,240)){
+          const updated=await admin.from('whatsapp_contacts').update({display_name:name,last_seen_at:new Date().toISOString()}).eq('id',existing.data.id).eq('organization_id',profile.organization_id).select('id,connection_id,client_id,wa_id,display_name,profile_name,first_seen_at,last_seen_at,updated_at').single()
+          if(updated.error)return fail('CONTACT_CREATE_FAILED','Não foi possível atualizar o nome do contato.',503)
+          return json({ok:true,data:{contact:updated.data,updated_existing:true}})
+        }
+        return fail('CONTACT_ALREADY_EXISTS','Este contato já está cadastrado.',409)
+      }
+      const created=await admin.from('whatsapp_contacts').insert({organization_id:profile.organization_id,connection_id:connectionId,wa_id:recipient,display_name:name,...(clientId?{client_id:clientId}:{}) ,last_seen_at:new Date().toISOString()}).select('id,connection_id,client_id,wa_id,display_name,profile_name,first_seen_at,last_seen_at,updated_at').single()
+      if(created.error){
+        if(created.error.code==='23505')return fail('CONTACT_ALREADY_EXISTS','Este contato já está cadastrado.',409)
+        return fail('CONTACT_CREATE_FAILED','Não foi possível cadastrar o contato.',503,0,false,{code:text(created.error.code,40)})
+      }
+      return json({ok:true,data:{contact:created.data,created:true}})
     }
     if(operation==='list_crm_message_history'){
       const waId=identifier(payload.waId),limit=Math.min(Math.max(Number(payload.limit)||100,1),200)
@@ -820,28 +856,39 @@ const handleRequest = async (request: Request, requestId: string) => {
       if(!/^[a-z0-9_]{1,100}$/.test(templateName)||!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(language))return fail('INVALID_TEMPLATE_REQUEST','Nome ou idioma do template inválido.',422)
       if(!/^[A-Za-z0-9_-]{16,120}$/.test(idempotencyKey))return fail('IDEMPOTENCY_KEY_MISSING','A tentativa de envio precisa de uma chave de idempotência válida.',422)
       const allowedModes=['minimal','body_single','body_multiple','header_text','url','copy_code','media']
-      if(!allowedModes.includes(contractMode))return fail('INVALID_CONTRACT_MODE','Modo de homologação inválido.',422)
-      const authorizedPhone=brazilianPhone(Deno.env.get('WHATSAPP_TEMPLATE_TEST_PHONE'))
-      const authorizedTemplate=text(Deno.env.get('WHATSAPP_TEMPLATE_TEST_NAME'),100)
-      if(!authorizedPhone||!authorizedTemplate)return fail('TEMPLATE_SEND_HOMOLOGATION_NOT_CONFIGURED','A homologação de templates ainda não possui alvo autorizado.',503)
-      if(recipient!==authorizedPhone)return fail('TEMPLATE_TEST_PHONE_FORBIDDEN','Este destinatário não está autorizado para homologação.',403)
-      if(templateName!==authorizedTemplate)return fail('TEMPLATE_TEST_NAME_FORBIDDEN','Este modelo ainda não está autorizado para teste.',403)
+      if(!allowedModes.includes(contractMode))return fail('INVALID_CONTRACT_MODE','Modo de envio do template inválido.',422)
       if(!validateTemplateComponents(components)&&Array.isArray(components)&&components.length)return fail('TEMPLATE_PARAMETERS_INVALID','Preencha todas as variáveis obrigatórias do template.',422)
       const wabaId=text(Deno.env.get('WABA_ID'),80)
       const stored=await client.from('whatsapp_message_templates').select('meta_template_id,name,language,status,components,is_active').eq('organization_id',profile.organization_id).eq('waba_id',wabaId).eq('name',templateName).eq('language',language).eq('status','APPROVED').eq('is_active',true).maybeSingle()
       if(stored.error||!stored.data)return fail('TEMPLATE_NOT_APPROVED','Este template não está aprovado e ativo para esta organização.',409)
       if(!templateInputsComplete(stored.data,Array.isArray(components)?components:[]))return fail('TEMPLATE_PARAMETERS_MISSING','Preencha todas as variáveis obrigatórias do template.',422)
+      if(!serviceKey)return fail('SUPABASE_SERVICE_ROLE_KEY_MISSING','O histórico canônico não está configurado; nada foi enviado.',503)
+      const admin=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
+      const phoneNumberId=text(Deno.env.get('PHONE_NUMBER_ID'),80)
+      let tenantConnectionQuery=admin.from('whatsapp_connections').select('id').eq('organization_id',profile.organization_id).in('status',['active','degraded'])
+      if(phoneNumberId)tenantConnectionQuery=tenantConnectionQuery.eq('phone_number_id',phoneNumberId)
+      const tenantConnections=await tenantConnectionQuery.order('updated_at',{ascending:false}).limit(2)
+      if(tenantConnections.error||(tenantConnections.data||[]).length!==1)return fail('CONNECTION_SELECTION_REQUIRED','Não foi possível determinar a conexão WhatsApp desta organização.',409)
+      const tenantConnectionId=tenantConnections.data![0].id
       genericTemplateClientId=text(payload.client_id,80)
+      const registeredContact=await admin.from('whatsapp_contacts').select('id,client_id').eq('organization_id',profile.organization_id).eq('connection_id',tenantConnectionId).eq('wa_id',recipient).maybeSingle()
+      if(registeredContact.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível validar o destinatário no CRM.',503)
       if(genericTemplateClientId){
-        const linkedClient=await client.from('clients').select('id,phone,billing_contact_phone').eq('id',genericTemplateClientId).eq('organization_id',profile.organization_id).maybeSingle()
+        const linkedClient=await admin.from('clients').select('id,phone,billing_contact_phone').eq('id',genericTemplateClientId).eq('organization_id',profile.organization_id).maybeSingle()
         if(linkedClient.error||!linkedClient.data)return fail('CLIENT_NOT_FOUND','O contato selecionado não pertence à organização.',404)
         const phones=[linkedClient.data.phone,linkedClient.data.billing_contact_phone].map(brazilianPhone).filter(Boolean)
-        if(!phones.includes(recipient))return fail('PHONE_MISMATCH','O telefone não pertence ao contato selecionado.',403)
+        const linkedContact=registeredContact.data?.client_id===genericTemplateClientId
+        if(!phones.includes(recipient)&&!linkedContact)return fail('PHONE_MISMATCH','O telefone não pertence ao cliente ou contato selecionado.',403)
+      }else if(!registeredContact.data){
+        const organizationClients=await admin.from('clients').select('id,phone,billing_contact_phone').eq('organization_id',profile.organization_id).limit(2000)
+        if(organizationClients.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível validar o destinatário no CRM.',503)
+        const matchedClient=(organizationClients.data||[]).find((item:any)=>[item.phone,item.billing_contact_phone].map(brazilianPhone).includes(recipient))
+        if(!matchedClient)return fail('TEMPLATE_RECIPIENT_NOT_REGISTERED','O destinatário não está cadastrado nos contatos ou clientes desta organização.',403)
+        genericTemplateClientId=matchedClient.id
       }
       // ===== Transporte direto Meta Cloud API — o MugoZap não participa do envio =====
       // `contract_mode` era negociação com o MugoZap; para a Meta enviamos sempre os
       // componentes que o frontend montou (já validados acima). Fica só para auditoria.
-      if(!serviceKey)return fail('SUPABASE_SERVICE_ROLE_KEY_MISSING','O histórico canônico não está configurado; nada foi enviado.',503)
 
       // Idempotência (mesmo contrato de send_manual_message): uma tentativa lógica por
       // idempotency_key.
@@ -911,7 +958,6 @@ const handleRequest = async (request: Request, requestId: string) => {
       //    idempotency_key. Só essa gravação no banco pode ter retry.
       let canonical:any=null,persistError:any=null
       const acceptedAt=new Date().toISOString()
-      const admin=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
       for(let attempt=0;attempt<3;attempt++){
         try{
           const finalized=await admin.from('whatsapp_messages').update({provider_message_id:homologationMessageId,status:'accepted',sent_at:acceptedAt,error_code:null,error_message:null,failed_at:null})

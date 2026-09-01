@@ -9,7 +9,7 @@ const asArray = value => Array.isArray(value) ? value : []
 const cache = new Map()
 const inFlight = new Map()
 const crmAuthCodes = new Set(['AUTH_SESSION_MISSING','AUTH_INVALID_TOKEN','AUTH_BLOCKED'])
-const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation','send_template_message','get_template_test_access'])
+const auditedOperations = new Set(['list_conversations','list_messages','list_templates','sync_templates','start_template_conversation','send_template_message','get_template_test_access','create_whatsapp_contact'])
 const publicOperation = operation => operation === 'list_messages' ? 'get_conversation_messages' : operation
 const maskTracePhone = value => {
   const digits = String(value ?? '').replace(/\D/g, '')
@@ -249,6 +249,11 @@ export async function listCrmWhatsAppContacts({ limit = 100 } = {}, options) {
     name: clean(item.display_name || item.profile_name) || `Contato • final ${clean(item.wa_id).slice(-4)}`,
   }))
 }
+export const createCrmWhatsAppContact = payload => invoke('create_whatsapp_contact', {
+  name: clean(payload?.name),
+  phone: clean(payload?.phone),
+  ...(clean(payload?.client_id) ? { client_id: clean(payload.client_id) } : {}),
+})
 export async function findConversationByPhone(phone, options) {
   const normalized = normalizePhone(phone)
   if (!/^55[1-9]{2}9?\d{8}$/.test(normalized)) throw new WhatsAppOperationError({ code: 'INVALID_PAYLOAD', message: 'Informe um número de WhatsApp válido com DDD.', status: 400 })

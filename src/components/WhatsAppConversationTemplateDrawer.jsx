@@ -89,9 +89,8 @@ export function WhatsAppConversationTemplateDrawer({ open, conversation, client,
       setSendState(ambiguous?'unknown':'failed')
       if(ambiguous){sendAttempt.markAmbiguous(attemptFingerprint);setAmbiguousFingerprint(attemptFingerprint);setError('');return}
       const known={
-        TEMPLATE_TEST_PHONE_FORBIDDEN:'Este destinatário não está autorizado para homologação.',
-        TEMPLATE_TEST_NAME_FORBIDDEN:'Este modelo ainda não está autorizado para teste.',
-        TEMPLATE_SEND_TARGET_FORBIDDEN:'Este destinatário ou modelo não está autorizado para homologação.',
+        TEMPLATE_RECIPIENT_NOT_REGISTERED:'Este destinatário não está cadastrado nos contatos desta organização.',
+        PHONE_MISMATCH:'O telefone não pertence ao cliente ou contato selecionado.',
         TEMPLATE_NOT_APPROVED:'Este modelo não está aprovado para envio.',
       }
       setError(`${known[cause.code]||cause.message||'Não foi possível enviar o modelo.'}${cause.requestId?` Protocolo: ${cause.requestId}.`:''}`)

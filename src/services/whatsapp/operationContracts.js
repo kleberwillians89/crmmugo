@@ -24,6 +24,7 @@ export const WHATSAPP_OPERATION_CONTRACTS = Object.freeze({
   list_users: { kind: 'read', ttl: 60_000 },
   get_dashboard_summary: { kind: 'read', ttl: 30_000 },
   list_crm_contacts: { kind: 'read', ttl: 30_000 },
+  create_whatsapp_contact: { kind: 'write' },
   list_crm_message_history: { kind: 'read', ttl: 15_000, identifier: true },
   reconcile_whatsapp_history: { kind: 'write' },
 })

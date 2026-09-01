@@ -32,7 +32,7 @@ function fieldControl(field, value, onChange, disabled = false) {
   return <input disabled={disabled} type={field.type === 'number' ? 'number' : 'text'} value={value} placeholder={field.placeholder || ''} onChange={(event) => onChange(event.target.value)} />
 }
 
-export function AutomationFlowBuilder({ draft, canWrite, saving, onChange, onCancel, onSave, error }) {
+export function AutomationFlowBuilder({ draft, canWrite, saving, onChange, onCancel, onSave, error, approvedTemplates = [] }) {
   const [selectedId, setSelectedId] = useState(draft.definition.nodes[0]?.id || '')
   const [connecting, setConnecting] = useState(null)
   const [attempted, setAttempted] = useState(false)
@@ -227,14 +227,14 @@ export function AutomationFlowBuilder({ draft, canWrite, saving, onChange, onCan
         </div>
 
         <aside className="flow-inspector">
-          {!selected ? <p>Selecione um bloco para configurá-lo.</p> : <NodeInspector node={selected} canWrite={canWrite} patchNode={patchNode} removeNode={removeNode} />}
+          {!selected ? <p>Selecione um bloco para configurá-lo.</p> : <NodeInspector node={selected} canWrite={canWrite} patchNode={patchNode} removeNode={removeNode} approvedTemplates={approvedTemplates} />}
         </aside>
       </div>
     </section>
   )
 }
 
-function NodeInspector({ node, canWrite, patchNode, removeNode }) {
+function NodeInspector({ node, canWrite, patchNode, removeNode, approvedTemplates }) {
   if (node.type === 'trigger') {
     const trigger = describeTrigger(node.config.trigger_type)
     return <><strong>Gatilho</strong><label className="automation-field"><span>Evento</span><select disabled={!canWrite} value={node.config.trigger_type || ''} onChange={(event) => patchNode(node.id, (item) => { item.config = { trigger_type: event.target.value } })}>{TRIGGER_CATALOG.map((item) => <option key={item.type} value={item.type} disabled={!item.available}>{item.label}{item.available ? '' : ' — indisponível'}</option>)}</select></label>{trigger?.configFields?.map((field) => <label key={field.key} className="automation-field"><span>{field.label}{field.required ? ' *' : ''}</span>{fieldControl(field, node.config[field.key] ?? field.default ?? '', (value) => patchNode(node.id, (item) => { item.config[field.key] = value }), !canWrite)}</label>)}{trigger && <p>{trigger.description}</p>}</>
@@ -242,6 +242,20 @@ function NodeInspector({ node, canWrite, patchNode, removeNode }) {
   if (node.type === 'condition') {
     return <><strong>Condição</strong><datalist id="automation-graph-fields">{FIELD_HINTS.map((field) => <option key={field} value={field} />)}</datalist><label className="automation-field"><span>Campo</span><input list="automation-graph-fields" disabled={!canWrite} value={node.config.field || ''} onChange={(event) => patchNode(node.id, (item) => { item.config.field = event.target.value })} /></label><label className="automation-field"><span>Operador</span><select disabled={!canWrite} value={node.config.operator || 'eq'} onChange={(event) => patchNode(node.id, (item) => { item.config.operator = event.target.value })}>{CONDITION_OPERATORS.map((operator) => <option key={operator} value={operator}>{OPERATOR_LABELS[operator]}</option>)}</select></label>{!['exists', 'not_exists'].includes(node.config.operator) && <label className="automation-field"><span>Valor</span><input disabled={!canWrite} value={node.config.value ?? ''} onChange={(event) => patchNode(node.id, (item) => { item.config.value = event.target.value })} /></label>}<button type="button" className="flow-remove" disabled={!canWrite} onClick={() => removeNode(node.id)}>Remover bloco</button></>
   }
+  if (node.type === 'send_template') {
+    const selectedValue = node.config.template_name ? `${node.config.template_name}:${node.config.language || 'pt_BR'}` : ''
+    return <><strong>Enviar template</strong><p>Escolha um template aprovado e ativo já sincronizado com a Meta.</p><label className="automation-field"><span>Template *</span><select disabled={!canWrite} value={selectedValue} onChange={(event) => { const template=approvedTemplates.find((item)=>`${item.name}:${item.language||'pt_BR'}`===event.target.value);patchNode(node.id,(item)=>{item.config.template_name=template?.name||'';item.config.language=template?.language||'pt_BR'}) }}><option value="">Selecione um template aprovado</option>{approvedTemplates.map((template)=><option key={`${template.name}:${template.language}`} value={`${template.name}:${template.language||'pt_BR'}`}>{template.display||template.name} / {template.name} · {template.language||'pt_BR'}</option>)}</select></label><label className="automation-field"><span>Idioma</span><input disabled value={node.config.language||'pt_BR'}/></label><label className="automation-field"><span>Parâmetros do corpo (um por linha)</span><textarea rows={4} disabled={!canWrite} value={node.config.body_parameters||''} onChange={(event)=>patchNode(node.id,(item)=>{item.config.body_parameters=event.target.value})}/></label>{!approvedTemplates.length&&<small className="automation-error">Nenhum template APPROVED e ativo foi encontrado. Sincronize os templates na aba Modelos.</small>}<button type="button" className="flow-remove" disabled={!canWrite} onClick={() => removeNode(node.id)}>Remover bloco</button></>
+  }
+  if (node.type === 'wait') return <WaitInspector key={node.id} node={node} canWrite={canWrite} patchNode={patchNode} removeNode={removeNode}/>
   const action = describeAction(node.type)
   return <><strong>{action?.label || node.type}</strong><p>{action?.description}</p>{action?.configFields?.map((field) => <label key={field.key} className="automation-field"><span>{field.label}{field.required ? ' *' : ''}</span>{fieldControl(field, node.config[field.key] ?? field.default ?? '', (value) => patchNode(node.id, (item) => { item.config[field.key] = value }), !canWrite)}</label>)}<button type="button" className="flow-remove" disabled={!canWrite} onClick={() => removeNode(node.id)}>Remover bloco</button></>
+}
+
+function WaitInspector({node,canWrite,patchNode,removeNode}){
+  const initialMinutes=Math.max(1,Number(node.config.minutes)||1)
+  const initialUnit=initialMinutes%1440===0?'days':initialMinutes%60===0?'hours':'minutes'
+  const [unit,setUnit]=useState(initialUnit)
+  const [amount,setAmount]=useState(initialMinutes/(initialUnit==='days'?1440:initialUnit==='hours'?60:1))
+  const persist=(nextAmount,nextUnit=unit)=>{const nextMultiplier=nextUnit==='days'?1440:nextUnit==='hours'?60:1;patchNode(node.id,(item)=>{item.config.minutes=Math.max(1,Math.trunc(Number(nextAmount)||0)*nextMultiplier)})}
+  return <><strong>Aguardar</strong><p>Pausa o fluxo pelo período definido. O executor continuará recebendo o total normalizado em minutos.</p><label className="automation-field"><span>Período *</span><input type="number" min="1" step="1" disabled={!canWrite} value={amount} onChange={(event)=>{const next=event.target.value;setAmount(next);persist(next)}}/></label><label className="automation-field"><span>Unidade</span><select disabled={!canWrite} value={unit} onChange={(event)=>{const nextUnit=event.target.value;setUnit(nextUnit);persist(amount,nextUnit)}}><option value="minutes">Minutos</option><option value="hours">Horas</option><option value="days">Dias</option></select></label><small>{initialMinutes} minuto(s) serão persistidos.</small><button type="button" className="flow-remove" disabled={!canWrite} onClick={()=>removeNode(node.id)}>Remover bloco</button></>
 }

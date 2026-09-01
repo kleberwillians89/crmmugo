@@ -174,7 +174,7 @@ const opts = (client) => ({ client, organizationId: 'org-1' })
 // ---- saveAutomationFlowDefinition cria uma nova versão incremental ------------
 {
   const client = makeClient({
-    automation_flows: [{ id: 'flow-1', organization_id: 'org-1', name: 'Antigo', trigger_type: 'manual_event', status: 'draft', active_version_id: 'v-1' }],
+    automation_flows: [{ id: 'flow-1', organization_id: 'org-1', name: 'Antigo', trigger_type: 'manual_event', status: 'active', active_version_id: 'v-1' }],
     automation_versions: [{ id: 'v-1', organization_id: 'org-1', flow_id: 'flow-1', version: 1, definition: { trigger: { type: 'manual_event' }, actions: [{ type: 'end_flow' }] } }],
   })
   const saved = await saveAutomationFlowDefinition(
@@ -186,6 +186,9 @@ const opts = (client) => ({ client, organizationId: 'org-1' })
     opts(client),
   )
   assert.equal(client.__store.automation_versions.length, 2)
+  assert.equal(client.__store.automation_flows[0].id, 'flow-1')
+  assert.equal(client.__store.automation_flows[0].status, 'active')
+  assert.equal(client.__store.automation_versions[0].id, 'v-1')
   assert.equal(client.__store.automation_versions[1].version, 2)
   assert.equal(client.__store.automation_flows[0].name, 'Novo nome')
   assert.equal(client.__store.automation_flows[0].active_version_id, client.__store.automation_versions[1].id)

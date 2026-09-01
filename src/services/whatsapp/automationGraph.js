@@ -105,6 +105,7 @@ export function validateGraph(input = {}) {
     if (node.type === 'condition') {
       if (!text(node.config.field)) errors.push({ nodeId: node.id, code: 'CONDITION_FIELD_MISSING', message: 'Informe o campo da condição.' })
       if (!CONDITION_OPERATORS.includes(text(node.config.operator) || 'eq')) errors.push({ nodeId: node.id, code: 'CONDITION_OPERATOR_INVALID', message: 'Operador de condição inválido.' })
+      if (!['exists','not_exists'].includes(text(node.config.operator) || 'eq') && !text(node.config.value)) errors.push({ nodeId: node.id, code: 'CONDITION_VALUE_MISSING', message: 'Informe o valor da condição.' })
     }
   }
   const starts = graph.nodes.filter(node => node.type === 'trigger')
@@ -112,6 +113,7 @@ export function validateGraph(input = {}) {
   if (starts[0] && !TRIGGER_TYPES.includes(text(starts[0].config.trigger_type))) errors.push({ nodeId: starts[0].id, code: 'TRIGGER_INVALID', message: 'Gatilho inválido.' })
   if (starts[0]) {
     const trigger = describeTrigger(text(starts[0].config.trigger_type))
+    if(trigger&&!trigger.available)errors.push({nodeId:starts[0].id,code:'TRIGGER_UNAVAILABLE',message:trigger.unavailableReason||'Este gatilho ainda não está disponível.'})
     for (const field of trigger?.configFields || []) if (field.required && !text(starts[0].config[field.key])) errors.push({ nodeId: starts[0].id, code: 'TRIGGER_CONFIG_MISSING', message: `Informe: ${field.label}.` })
   }
 
