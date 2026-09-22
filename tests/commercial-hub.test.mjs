@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
-import {classifyCommercialInterests,defaultCommercialDecision,detectCommercialHandoff,inferLeadSource,qualificationClassification,validateCommercialDecision} from '../supabase/functions/_shared/commercialAgentCore.js'
+import {COMMERCIAL_SYSTEM_PROMPT,assessCommercialTemperature,buildCommercialSummary,classifyCommercialInterests,classifyConversationKind,defaultCommercialDecision,detectCommercialHandoff,enforceCommercialHandoffPolicy,enforceCommercialResponsePolicy,extractLeadAttribution,inferLeadSource,isCommercialPriceQuestion,qualificationClassification,validateCommercialDecision} from '../supabase/functions/_shared/commercialAgentCore.js'
 
 test('classifica múltiplos interesses sem inventar dados',()=>{
   assert.deepEqual(classifyCommercialInterests('Preciso de um site integrado ao CRM e WhatsApp'),['SITE','CRM','WHATSAPP','INTEGRATION'])
@@ -13,8 +13,42 @@ test('classifica múltiplos interesses sem inventar dados',()=>{
 test('handoff comercial ocorre nos sinais reais e não no lead frio',()=>{
   assert.equal(detectCommercialHandoff('Queria conhecer o trabalho de vocês').handoff,false)
   assert.equal(detectCommercialHandoff('Quero uma proposta e falar com alguém').reason,'human_requested')
-  assert.equal(detectCommercialHandoff('Qual o valor? Podemos negociar?').reason,'price_negotiation')
+  assert.equal(detectCommercialHandoff('Qual o valor de um site?').handoff,false)
+  assert.equal(detectCommercialHandoff('Podemos negociar esse valor?').reason,'commercial_negotiation')
+  assert.equal(detectCommercialHandoff('Pode preparar uma proposta para mim?').reason,'commercial_next_step_requested')
+  assert.equal(detectCommercialHandoff('Quero marcar uma reunião').reason,'commercial_next_step_requested')
   assert.equal(detectCommercialHandoff('Já estou qualificado',{qualified:true}).reason,'qualified_commercial_lead')
+})
+test('cenários básicos iniciam descoberta sem handoff',()=>{
+  assert.equal(defaultCommercialDecision('Oi').handoff,false)
+  const site=defaultCommercialDecision('Vocês fazem site?')
+  assert.deepEqual(site.intents,['SITE']);assert.equal(site.handoff,false);assert.match(site.response,/site/i)
+  assert.deepEqual(classifyCommercialInterests('Preciso de site, CRM e automação do WhatsApp'),['SITE','AUTOMATION','CRM','WHATSAPP'])
+})
+test('pergunta isolada de preço recebe descoberta curta e não faz handoff',()=>{
+  assert.equal(isCommercialPriceQuestion('Quanto custa um site?'),true)
+  const fallback=defaultCommercialDecision('Quanto custa um site?',{qualification:{company_name:'Acme'}})
+  assert.equal(fallback.handoff,false)
+  assert.match(fallback.response,/depende principalmente do tipo de site e do escopo/i)
+  assert.equal((fallback.response.match(/\?/g)||[]).length,1)
+  const guarded=enforceCommercialHandoffPolicy({handoff:true,handoff_reason:'price_negotiation',create_task:true,qualification_updates:{needs_human:true}},'Qual o valor de um site?',{qualification:{}})
+  assert.equal(guarded.handoff,false);assert.equal(guarded.create_task,false);assert.equal(guarded.qualification_updates.needs_human,false)
+  const withKnownType=defaultCommercialDecision('E quanto custa esse site?',{qualification:{company_name:'Acme'},messages:[{text:'Será uma landing page'}]})
+  assert.doesNotMatch(withKnownType.response,/institucional.*landing page.*loja virtual/i)
+})
+test('descoberta usa memória e avança sem repetir dados conhecidos',()=>{
+  const decision=defaultCommercialDecision('É uma landing page.',{qualification:{company_name:'Acme',objective:'Gerar leads',current_situation:'Só usa Instagram'},messages:[{text:'Precisamos de uma landing page'}]})
+  assert.doesNotMatch(decision.response,/nome da empresa|resultado|lidam com isso hoje/i)
+  assert.match(decision.response,/data|período/i)
+  assert.match(COMMERCIAL_SYSTEM_PROMPT,/normalmente faça uma única pergunta principal/)
+  assert.match(COMMERCIAL_SYSTEM_PROMPT,/nunca pergunte novamente/)
+})
+test('pós-processamento bloqueia preço inventado e interrogatório',()=>{
+  const context={qualification:{company_name:'Acme'},authorized_pricing:{}}
+  const invented=enforceCommercialResponsePolicy({response:'O projeto custa R$ 4.000.',handoff:false},'Quanto custa um site?',context)
+  assert.doesNotMatch(invented.response,/4\.000/)
+  const interrogation=enforceCommercialResponsePolicy({response:'Qual a empresa? Qual o prazo? Qual o orçamento?',handoff:false},'Quero um site.',context)
+  assert.ok((interrogation.response.match(/\?/g)||[]).length<=2)
 })
 test('decisão estruturada rejeita execução livre e filtra enums',()=>{
   assert.equal(validateCommercialDecision({response:''}),null)
@@ -23,7 +57,25 @@ test('decisão estruturada rejeita execução livre e filtra enums',()=>{
 })
 test('origem comercial distingue anúncios sem inventar campanha',()=>{
   assert.equal(inferLeadSource({metadata:{source_url:'https://x.test/?fbclid=abc'}}),'META_ADS_WHATSAPP')
+  assert.equal(inferLeadSource({metadata:{utm_source:'google'}}),'GOOGLE_ADS')
+  assert.equal(inferLeadSource({referral:'instagram'}),'INSTAGRAM')
+  assert.equal(inferLeadSource({referral:'website'}),'SITE')
   assert.equal(inferLeadSource({}),'WHATSAPP_ORGANIC')
+  assert.deepEqual(extractLeadAttribution({metadata:{source_url:'https://mugo.test/?utm_source=google&utm_medium=cpc&utm_campaign=lancamento&utm_content=a'}}).utm,{utm_source:'google',utm_medium:'cpc',utm_campaign:'lancamento',utm_content:'a'})
+})
+test('temperatura exige contexto e suporte não vira lead quente',()=>{
+  assert.equal(assessCommercialTemperature({text:'Oi',interests:['OTHER'],qualification:{}}).temperature,'cold')
+  assert.equal(assessCommercialTemperature({text:'Precisamos melhorar captação',interests:['SITE'],qualification:{company_name:'Acme',objective:'Gerar leads'}}).temperature,'warm')
+  assert.equal(assessCommercialTemperature({text:'Quero marcar uma reunião',interests:['SITE'],qualification:{}}).temperature,'hot')
+  assert.equal(classifyConversationKind('Meu sistema de vocês parou',{hasExistingClient:true}).kind,'support')
+  assert.equal(classifyConversationKind('Quero automação financeira').kind,'new_business')
+  assert.equal(classifyConversationKind('Sim',{previousKind:'new_business'}).kind,'new_business')
+  assert.equal(assessCommercialTemperature({text:'Meu sistema parou',interests:['SUPPORT'],qualification:{},leadKind:'support'}).temperature,'cold')
+})
+test('resumo comercial é curto, estruturado e omite vazios',()=>{
+  const summary=buildCommercialSummary({client:{company_name:'Acme',contact_name:'Ana'},qualification:{objective:'Gerar leads',timeline:'Outubro',decision_maker:true,next_action:'Agendar diagnóstico'},interests:['SITE','CRM']})
+  assert.match(summary,/Empresa: Acme/);assert.match(summary,/Contato: Ana/);assert.match(summary,/Objetivo: Gerar leads/);assert.match(summary,/Serviços de interesse: SITE, CRM/);assert.match(summary,/Decisor: Sim/)
+  assert.doesNotMatch(summary,/Orçamento:/)
 })
 test('qualificação explica descoberta, suporte e lead qualificado',()=>{
   assert.equal(qualificationClassification({}),'new')
@@ -37,14 +89,28 @@ test('webhook cria contato/conversa e roteia IA comercial sem competir com autom
   assert.match(webhook,/whatsapp_conversations'\)\.upsert/)
   assert.match(webhook,/commercial_ai_events/)
   assert.match(webhook,/ai_mode === 'controlled_auto'[\s\S]+return true[\s\S]+automation_events/)
+  assert.match(webhook,/classifyConversationKind/)
+  assert.match(webhook,/\['support','finance','existing_client'\]/)
+  assert.match(webhook,/commercial_classification/)
+  assert.match(webhook,/priorContact\.data\?\.source \|\| attribution\.source/)
 })
 test('worker deduplica cliente, cria oportunidade, qualificação, resumo e tarefa',()=>{
   const worker=fs.readFileSync('supabase/functions/commercial-ai-worker/index.ts','utf8')
   for(const contract of [".in('phone',phones)",".eq('email',contactPatch.email.toLowerCase())","commercial_opportunities","commercial_qualifications","conversation_summaries","crm_tasks","sync_external:true"])assert.ok(worker.includes(contract),contract)
+  assert.match(worker,/commercial_ai_disabled/)
+  assert.match(worker,/enforceCommercialHandoffPolicy/)
+  assert.match(worker,/enforceCommercialResponsePolicy/)
+  assert.match(worker,/mergeInterests\(qualification\.service_interest,opportunity\.service_interests/)
+  assert.match(worker,/opportunity\.main_problem\|\|null/)
+  assert.match(worker,/temperature_reason/)
+  assert.match(worker,/buildCommercialSummary/)
+  assert.match(worker,/followupChanged/)
+  assert.match(worker,/temperatureRank/)
+  assert.match(worker,/source_ref:handoffRef/)
 })
 test('handoff pausa IA, atribui ID real e notifica por outbox',()=>{
   const worker=fs.readFileSync('supabase/functions/commercial-ai-worker/index.ts','utf8')
-  assert.match(worker,/status:'pending',attendance_mode:'human',automation_paused:true,assigned_to:commercialOwnerProfileId,assigned_team_member_id:settingsResult\.data\.commercial_owner_id/)
+  assert.match(worker,/status:'pending',attendance_mode:'human',automation_paused:true,assigned_to:commercialOwnerProfileId\|\|null,assigned_team_member_id:settingsResult\.data\.commercial_owner_id/)
   assert.match(worker,/commercial_notification_outbox/)
   assert.doesNotMatch(worker,/5511973510549|5511972769605/)
 })
@@ -61,6 +127,17 @@ test('Trello é relevante por opt-in e Notion gera briefing sob demanda',()=>{
   assert.match(notion,/createNotionCommercialBriefing/)
   const action=fs.readFileSync('supabase/functions/commercial-actions/index.ts','utf8')
   assert.match(action,/commercial_briefing_outbox/)
+})
+test('V2 adiciona temperatura sem ativar IA e o comercial expõe drawer e métricas',()=>{
+  const migration=fs.readFileSync('supabase/migrations/202609220001_commercial_hub_v2.sql','utf8')
+  assert.match(migration,/temperature in \('cold','warm','hot'\)/)
+  assert.match(migration,/lead_kind in \('new_business','existing_client','support','finance','partnership','other'\)/)
+  assert.match(migration,/cancel_closed_opportunity_followups/)
+  assert.doesNotMatch(migration,/update\s+public\.commercial_settings[\s\S]+controlled_auto/i)
+  const original=fs.readFileSync('supabase/migrations/202609210002_commercial_hub.sql','utf8')
+  assert.match(original,/ai_mode text not null default 'disabled'/)
+  const page=fs.readFileSync('src/components/CommercialPage.jsx','utf8')
+  for(const contract of ['em qualificação','follow-ups hoje','pipeline potencial','commercial-drawer','Resumo operacional','Abrir conversa'])assert.ok(page.includes(contract),contract)
 })
 test('RLS, tenant e webhook inválido permanecem protegidos',()=>{
   const migration=fs.readFileSync('supabase/migrations/202609210002_commercial_hub.sql','utf8')

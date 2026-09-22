@@ -13,7 +13,7 @@ import {
   webhookTimestamp as timestamp,
 } from '../_shared/whatsappWebhookCore.js'
 import { phonesMatch } from '../_shared/internalCommandCore.js'
-import { inferLeadSource } from '../_shared/commercialAgentCore.js'
+import { classifyConversationKind, extractLeadAttribution } from '../_shared/commercialAgentCore.js'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: jsonHeaders })
@@ -81,6 +81,11 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
   const internalMember = (members.data || []).find((member: any) => phonesMatch(member.phone, waId)) || null
   const senderType = internalMember ? 'internal' : 'customer'
 
+  const content = messageContent(message)
+  const attribution = extractLeadAttribution({ referral: message?.referral?.source_type, metadata: message?.referral || {} })
+  const priorContact = await admin.from('whatsapp_contacts').select('source,campaign,ad_name,utm').eq('organization_id',connection.organization_id).eq('connection_id',connection.id).eq('wa_id',waId).maybeSingle()
+  if(priorContact.error)throw priorContact.error
+  const preservedUtm = { ...(priorContact.data?.utm || {}), ...Object.fromEntries(Object.entries(attribution.utm).filter(([,item])=>item)) }
   const profileName = text((value?.contacts || []).find((item: any) => digits(item?.wa_id) === waId)?.profile?.name, 240)
   const contactResult = await admin.from('whatsapp_contacts').upsert({
     organization_id: connection.organization_id,
@@ -90,7 +95,7 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
     profile_name: profileName || null,
     contact_type: senderType,
     team_member_id: internalMember?.id || null,
-    ...(!internalMember ? { source: inferLeadSource({ referral: message?.referral?.source_type, metadata: message?.referral || {} }), campaign: text(message?.referral?.headline, 240) || null, ad_name: text(message?.referral?.body, 240) || null } : {}),
+    ...(!internalMember ? { source: priorContact.data?.source || attribution.source, campaign: priorContact.data?.campaign || attribution.campaign, ad_name: priorContact.data?.ad_name || attribution.ad_name, utm: preservedUtm } : {}),
     last_seen_at: new Date().toISOString(),
   }, { onConflict: 'connection_id,wa_id' }).select('id,client_id').single()
   if (contactResult.error) throw contactResult.error
@@ -108,7 +113,6 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
   }, { onConflict: 'connection_id,wa_id' }).select('id,attendance_mode,automation_paused').single()
   if (conversationResult.error) throw conversationResult.error
 
-  const content = messageContent(message)
   const saved = await admin.from('whatsapp_messages').insert({
     organization_id: connection.organization_id,
     connection_id: connection.id,
@@ -158,9 +162,10 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
     return true
   }
 
+  const conversationKind = classifyConversationKind(content.body || '', { hasExistingClient: Boolean(contactResult.data.client_id) })
   const commercial = await admin.from('commercial_settings').select('ai_mode').eq('organization_id', connection.organization_id).maybeSingle()
   if (commercial.error && !['42P01','PGRST205'].includes(commercial.error.code)) throw commercial.error
-  if (commercial.data?.ai_mode === 'controlled_auto') {
+  if (commercial.data?.ai_mode === 'controlled_auto' && !['support','finance','existing_client'].includes(conversationKind.kind)) {
     const queuedCommercial = await admin.from('commercial_ai_events').insert({ organization_id: connection.organization_id, connection_id: connection.id, conversation_id: conversationResult.data.id, message_id: saved.data?.id || null, provider_message_id: providerMessageId })
     if (queuedCommercial.error && queuedCommercial.error.code !== '23505') throw queuedCommercial.error
     return true
@@ -180,6 +185,7 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
       wa_id: waId,
       message_type: content.type,
       text: content.body,
+      commercial_classification: conversationKind,
     },
     dedupe_key: dedupeKey,
     status: 'pending',

@@ -11,6 +11,17 @@ O webhook identifica primeiro um remetente interno. Só mensagens externas de um
 
 O fluxo comercial cria ou reutiliza o cliente por telefone e, quando aprendido, por e-mail; mantém uma única oportunidade aberta por conversa; registra qualificação, resumo e origem; responde pelo mesmo número; cria follow-up; e pausa a IA no handoff humano.
 
+### Regras de conversa V2
+
+- normalmente uma pergunta principal por mensagem, nunca mais de duas perguntas relacionadas;
+- memória cumulativa: campos conhecidos, interesses e resumo não são apagados por respostas parciais do modelo;
+- pergunta isolada sobre preço ou valor inicia descoberta de escopo, sem handoff automático;
+- desconto, negociação real, condição comercial, pedido explícito de pessoa, proposta, reunião ou contratação continuam sendo sinais de handoff;
+- respostas com mais de duas perguntas, texto excessivo ou valor monetário sem `authorized_pricing` são substituídas por um fallback determinístico seguro;
+- eventos antigos encontrados pelo worker enquanto `ai_mode` não for `controlled_auto` são marcados como `skipped`, sem resposta ao lead.
+
+Esta evolução não altera nem ativa a configuração: o padrão e o estado esperado para homologação continuam sendo `commercial_settings.ai_mode = 'disabled'`.
+
 ## Modelo de dados
 
 A migration `202609210002_commercial_hub.sql` adiciona, sem substituir tabelas existentes:
@@ -24,6 +35,31 @@ A migration `202609210002_commercial_hub.sql` adiciona, sem substituir tabelas e
 - `commercial_briefing_outbox`: criação do briefing no Notion somente sob demanda.
 
 `clients` continua sendo a fonte do contato/empresa. `proposals` continua sendo proposta real. `crm_tasks` recebe `opportunity_id` e `task_type`. Todas as tabelas novas têm RLS, filtro por `organization_id` e validação de referências entre tenants.
+
+A migration aditiva `202609220001_commercial_hub_v2.sql` acrescenta à oportunidade:
+
+- `temperature` (`cold`, `warm`, `hot`) e seu motivo;
+- `lead_kind` (`new_business`, `existing_client`, `support`, `finance`, `partnership`, `other`) e seu motivo;
+- índice por tenant/temperatura/etapa;
+- cancelamento automático de follow-up pendente quando a oportunidade vira `won` ou `lost`.
+
+Nenhuma das migrations muda `ai_mode` para `controlled_auto`.
+
+## Qualificação, temperatura e roteamento
+
+A qualificação é progressiva. Dados `null` ou respostas parciais não apagam empresa, contato, situação, problema, objetivo, prazo, urgência, orçamento, decisão, interesses ou próximo passo já conhecidos.
+
+- `cold`: contato exploratório ou necessidade ainda pouco definida;
+- `warm`: interesse comercial e necessidade real identificados, mas faltam elementos;
+- `hot`: pedido concreto de avanço ou contexto mínimo acompanhado de urgência.
+
+A temperatura possui motivo legível e não depende de uma palavra isolada. Respostas curtas preservam a classificação e a maior temperatura já alcançada. Suporte, financeiro, cliente existente e mensagens internas não são tratados como lead quente. O webhook mantém esses casos no fluxo operacional existente, em vez de enfileirá-los no agente comercial.
+
+O resumo salvo é operacional e omite campos vazios: empresa, contato, necessidade, situação atual, problema, objetivo, interesses, prazo, urgência, orçamento, decisor e próximo passo.
+
+## Follow-up
+
+Existe no máximo um follow-up automático por oportunidade, identificado por `commercial-followup:<opportunity_id>`. Ele só é criado para novo negócio com próximo passo definido. Se ação ou prazo mudarem, a mesma tarefa é atualizada; respostas sem mudança não a reagendam. Handoff, `won` e `lost` cancelam o follow-up pendente. A tarefa imediata do handoff também usa uma única chave por oportunidade.
 
 ## Handoff para Julia
 
@@ -80,14 +116,14 @@ where active is true and name ilike '%julia%';
 insert into public.commercial_settings(
   organization_id, ai_mode, commercial_owner_id, fallback_enabled
 )
-values ('ORGANIZATION_UUID', 'controlled_auto', 'JULIA_TEAM_MEMBER_UUID', true)
+values ('ORGANIZATION_UUID', 'disabled', 'JULIA_TEAM_MEMBER_UUID', true)
 on conflict (organization_id) do update set
   ai_mode = excluded.ai_mode,
   commercial_owner_id = excluded.commercial_owner_id,
   fallback_enabled = excluded.fallback_enabled;
 ```
 
-Comece com `ai_mode = 'disabled'`, valide a interface e os workers, e só então altere para `controlled_auto`. Sem `commercial_owner_id`, o sistema não deve ser ativado em produção.
+Mantenha `ai_mode = 'disabled'` durante toda a homologação desta entrega. Uma futura ativação exige decisão operacional separada. Sem `commercial_owner_id`, o sistema não deve ser ativado.
 
 Agende POSTs curtos, idealmente a cada minuto, para:
 
@@ -104,17 +140,18 @@ Tarefas só saem do CRM quando `metadata.sync_external = true`, quando já exist
 
 O briefing do Notion não é criado para todo lead. O botão só fica disponível em oportunidade qualificada, e o backend repete essa validação. Na configuração da integração Notion, use `briefing_database_id` e, se os nomes forem diferentes, `briefing_properties`.
 
-## Cenário de homologação
+## Checklist de homologação com IA desligada
 
-1. Envie “Oi, queria conhecer o trabalho de vocês”. Confirme contato, cliente e oportunidade em atendimento, sem handoff precoce.
-2. Envie “Preciso de um site integrado ao CRM e WhatsApp”. Confirme os quatro interesses, resumo e qualificação progressiva.
-3. Informe empresa, problema, objetivo e prazo. Confirme atualização da mesma oportunidade, sem duplicar cliente.
-4. Envie “Quero uma proposta e falar com alguém”. Confirme pausa da IA, atribuição à Julia, tarefa e uma única notificação.
-5. Simule falha confirmada no primário. Confirme retries e uso do fallback somente após a terceira falha.
-6. Abra a conversa pelo link da notificação. Confirme o contexto lateral e o botão de handoff.
-7. Gere o briefing. Confirme uma página no Notion e idempotência em cliques repetidos.
-8. Conclua a tarefa no CRM e valide a projeção no Trello. Depois valide retorno assinado do webhook.
-9. Repita com usuário de outro tenant e confirme ausência de leitura/escrita cruzada.
+1. Confirme no banco que toda organização permanece com `ai_mode = 'disabled'`.
+2. Aplique as migrations e valide as quatro novas colunas sem alterar registros comerciais existentes.
+3. Abra `/comercial` com dados de homologação e valide cards, métricas, temperatura, resumo e drawer.
+4. Valide que pipeline potencial só soma oportunidades com `estimated_value` real.
+5. Execute os testes A–K em ambiente local; eles não enviam WhatsApp.
+6. Insira ou simule registros de oportunidade/follow-up e confirme uma única tarefa por `source_ref`.
+7. Mova uma oportunidade de homologação para `won`/`lost` e confirme cancelamento do follow-up pendente.
+8. Valide manualmente RLS com usuários de dois tenants.
+9. Publique funções apenas quando desejado, mantendo secrets inalterados e o modo `disabled`.
+10. Não invoque os workers comerciais contra filas reais durante esta homologação.
 
 ## Verificações locais
 
