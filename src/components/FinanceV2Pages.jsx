@@ -49,6 +49,11 @@ const initial = {
   financial_account_id: "",
   status: "pending",
   validated: false,
+  area: "business",
+  financial_scope: "business",
+  launch_type: "actual",
+  essential: false,
+  impacts_monthly_cap: true,
 };
 const suggestions = [
   ["Supabase", "Danilo", null],
@@ -196,7 +201,7 @@ export function FinanceSummaryPage({ onNavigate }) {
 }
 
 export function AccountsPayablePage() {
-  const { canWrite } = useAuth(),
+  const { canManageFinance } = useAuth(),
     data = useFinanceData(),
     [lookups, setLookups] = useState({
       categories: [],
@@ -250,7 +255,7 @@ export function AccountsPayablePage() {
         title="Contas a pagar"
         description="Entrada única para softwares, prestadores, infraestrutura e despesas recorrentes ou variáveis."
         actions={
-          canWrite && (
+          canManageFinance && (
             <button className="button" onClick={() => setOpen(!open)}>
               <Plus size={16} />
               Nova conta
@@ -296,14 +301,13 @@ export function AccountsPayablePage() {
               />
             </label>
             <label>
-              Escopo
+              Área
               <select
-                value={form.scope}
-                onChange={(e) => setForm({ ...form, scope: e.target.value })}
+                value={form.area}
+                onChange={(e) => {const area=e.target.value;setForm({ ...form, area,scope:area==='business'?'business':area==='shared'?'shared':'personal',financial_scope:area==='business'?'business':'household' })}}
               >
-                <option value="pending_review">Pendente de revisão</option>
-                <option value="business">Empresarial</option>
-                <option value="personal">Pessoal</option>
+                <option value="business">Mugô</option>
+                <option value="household">Casa</option>
                 <option value="shared">Compartilhada</option>
               </select>
             </label>
@@ -322,6 +326,12 @@ export function AccountsPayablePage() {
                 />
               </label>
             )}
+            <label>
+              Lançamento
+              <select value={form.launch_type} onChange={(e)=>setForm({...form,launch_type:e.target.value})}><option value="actual">Realizado/confirmado</option><option value="planned">Planejado</option></select>
+            </label>
+            <label className="checkbox-label"><input type="checkbox" checked={form.essential} onChange={(e)=>setForm({...form,essential:e.target.checked})}/> Essencial</label>
+            <label className="checkbox-label"><input type="checkbox" checked={form.impacts_monthly_cap} onChange={(e)=>setForm({...form,impacts_monthly_cap:e.target.checked})}/> Impacta teto mensal</label>
             <label>
               Recorrência
               <select
@@ -418,7 +428,7 @@ export function AccountsPayablePage() {
       )}
       <PayablesTable
         rows={data.payables}
-        canWrite={canWrite}
+        canWrite={canManageFinance}
         onCreate={() => setOpen(true)}
         onPaid={async (row) => {
           await markExpensePaid(row.id, { paid_amount: row.amount });

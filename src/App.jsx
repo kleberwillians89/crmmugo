@@ -57,7 +57,8 @@ import { IntegrationsPage } from "./components/IntegrationsPage";
 import { ProductBreadcrumbs } from "./components/ProductBreadcrumbs";
 import { VersionBadge } from "./components/VersionBadge";
 import { GlobalSearch } from "./components/GlobalSearch";
-import { TodayPage } from "./components/TodayPage";
+import { OperationsHubPage } from "./components/OperationsHubPage";
+import { FinancialCalendarPage } from "./components/FinancialCalendarPage";
 import { CommercialPage } from "./components/CommercialPage";
 import { pageFromPath, pathForPage } from "./config/appRoutes";
 import {
@@ -74,9 +75,9 @@ import { ClientDuplicatesPage } from "./components/ClientDuplicatesPage";
 import { FinancialSanitationPage } from "./components/FinancialSanitationPage";
 import {
   AccountingExportPage,
-  FinanceProductionDashboard,
   FinancialMasterDataPage,
 } from "./components/FinancialProductionPages";
+import {FinancialClosingPage,FinancialDebtsPage,FinancialGoalsPage,FinancialOverviewPage,FreelanceCashPage} from "./components/FinancialHubPages";
 
 const initialFormState = {
   client_id: "",
@@ -117,7 +118,7 @@ function buildDateValue(value) {
 }
 
 export default function App() {
-  const { profile, canWrite, isAdmin } = useAuth();
+  const { profile, canWrite, canOperate, canAccessFinance, isAdmin } = useAuth();
   const [activePage, setActivePage] = useState(pageFromLocation);
   const [proposals, setProposals] = useState([]);
   const [supabaseContracts, setSupabaseContracts] = useState([]);
@@ -186,7 +187,7 @@ export default function App() {
             const [clientRows, installmentRows, intelligenceRecords, members] =
               await Promise.all([
                 listClients(),
-                listInstallments(),
+                canAccessFinance ? listInstallments() : Promise.resolve([]),
                 listIntelligenceRecords(),
                 listTeamMembers({ activeOnly: true }),
               ]);
@@ -259,7 +260,7 @@ export default function App() {
       resetForm();
       setFormDirty(false);
     }
-    if (page === "intelligence") page = "intelligence-today";
+    if (page === "intelligence") page = "operations-today";
     setActivePage(page);
     const path = pathForPage(page);
     if (path && window.location.pathname !== path)
@@ -664,7 +665,7 @@ export default function App() {
               {activePage === "services" && <ServicesCatalogPage />}
               {activePage === "clients" && <ClientsPage />}
               {activePage === "commercial" && <CommercialPage onNavigate={handleNavigate} />}
-              {activePage === "team" && <TeamPage />}
+              {activePage === "team" && (isAdmin?<TeamPage />:<FeedbackMessage type="error">A gestão de usuários é restrita a administradores.</FeedbackMessage>)}
               {activePage === "finance" && (
                 <FinancialPageLayout
                   active={activePage}
@@ -678,7 +679,7 @@ export default function App() {
                   active={activePage}
                   onNavigate={handleNavigate}
                 >
-                  <FinanceProductionDashboard onNavigate={handleNavigate} />
+                  <FinancialOverviewPage onNavigate={handleNavigate} />
                 </FinancialPageLayout>
               )}
               {activePage === "accounts-payable" && (
@@ -689,6 +690,15 @@ export default function App() {
                   <AccountsPayablePage />
                 </FinancialPageLayout>
               )}
+              {["finance-today","finance-week","finance-month"].includes(activePage) && (
+                <FinancialPageLayout active={activePage} onNavigate={handleNavigate}>
+                  <FinancialCalendarPage view={activePage.replace('finance-','')} />
+                </FinancialPageLayout>
+              )}
+              {activePage === "financial-debts" && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><FinancialDebtsPage/></FinancialPageLayout>}
+              {activePage === "freelance-cash" && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><FreelanceCashPage/></FinancialPageLayout>}
+              {activePage === "financial-goals" && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><FinancialGoalsPage/></FinancialPageLayout>}
+              {activePage === "monthly-closing" && <FinancialPageLayout active={activePage} onNavigate={handleNavigate}><FinancialClosingPage/></FinancialPageLayout>}
               {activePage === "recurring-accounts" && (
                 <FinancialPageLayout
                   active={activePage}
@@ -750,12 +760,8 @@ export default function App() {
                 <ImportDocumentPage onImported={handleDocumentImported} />
               )}
               {activePage === "diagnostic" && <SupabaseDiagnosticPage />}
-              {activePage === "organization-settings" && (
-                <OrganizationSettingsPage onNavigate={handleNavigate} />
-              )}
-              {activePage === "integrations" && (
-                <IntegrationsPage onNavigate={handleNavigate} />
-              )}
+              {activePage === "organization-settings" && (isAdmin?<OrganizationSettingsPage onNavigate={handleNavigate} />:<FeedbackMessage type="error">As configurações são restritas a administradores.</FeedbackMessage>)}
+              {activePage === "integrations" && (isAdmin?<IntegrationsPage onNavigate={handleNavigate} />:<FeedbackMessage type="error">As integrações são restritas a administradores.</FeedbackMessage>)}
               {[
                 "expense-categories",
                 "cost-centers",
@@ -773,9 +779,7 @@ export default function App() {
                 />
               )}
               {activePage === "client-duplicates" && <ClientDuplicatesPage />}
-              {["financial-sanitation", "monthly-closing"].includes(
-                activePage,
-              ) && <FinancialSanitationPage />}
+              {activePage === "financial-sanitation" && <FinancialSanitationPage />}
               {activePage === "commercial-trash" && <CommercialTrashPage />}
               {activePage === "commercial-integrity" && (
                 <CommercialIntegrityPage />
@@ -801,16 +805,11 @@ export default function App() {
                   onNavigate={handleNavigate}
                 />
               )}
-              {activePage === "intelligence-today" && (
-                <TodayPage
-                  teamMembers={teamMembers}
-                  onNavigate={handleNavigate}
-                />
-              )}
+              {["operations-today","operations-week","operations-calendar","operations-backlog","operations-history"].includes(activePage) && (canOperate?<OperationsHubPage view={({"operations-today":"today","operations-week":"week","operations-calendar":"month","operations-backlog":"backlog","operations-history":"history"})[activePage]} teamMembers={teamMembers} onNavigate={handleNavigate}/>:<FeedbackMessage type="error">Seu perfil não possui acesso à operação.</FeedbackMessage>)}
               {activePage === "performance" && <CommercialPerformancePage />}
               {activePage === "responsibilities" && <TeamPage />}
               {activePage.startsWith("intelligence-") &&
-                !["intelligence-attention", "intelligence-today"].includes(
+                !["intelligence-attention"].includes(
                   activePage,
                 ) && (
                   <MugoIntelligencePage

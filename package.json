@@ -38,7 +38,9 @@
     "test:crm-v3": "node tests/crm-v3-production-polish.test.mjs && node tests/crm-v3-simplified-navigation.test.mjs",
     "test:crm": "npm run test:crm-v2 && npm run test:crm-v3",
     "test:operational-hub": "node --test tests/mugo-operational-hub.test.mjs",
-    "test:commercial": "node --test tests/commercial-hub.test.mjs"
+    "test:commercial": "node --test tests/commercial-hub.test.mjs",
+    "test:native-operations": "node --test tests/native-operations-hub.test.mjs",
+    "test:financial-hub": "node --test tests/financial-hub-2026.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.3",

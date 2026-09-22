@@ -1,9 +1,12 @@
 export function FinancialPageLayout({ children, active, onNavigate }) {
   const tabs = [
-    ["finance-summary", "Resumo"],
-    ["finance", "Contas a receber"],
-    ["accounts-payable", "Contas a pagar"],
-    ["cash-flow", "Fluxo de caixa"],
+    ["finance-summary", "Visão Geral"],
+    ["finance-month", "Calendário"],
+    ["finance", "Receitas"],
+    ["accounts-payable", "Despesas"],
+    ["financial-debts", "Dívidas"],
+    ["freelance-cash", "Caixa Freela"],
+    ["financial-goals", "Metas & Reservas"],
     ["monthly-closing", "Fechamento mensal"],
     ["accounting-export", "Exportar para contador"],
   ];

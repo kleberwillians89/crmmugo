@@ -31,12 +31,12 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
         </button>
       </div>
       <nav className="sidebar-nav">
-        {NAVIGATION_GROUPS.filter((group)=>!group.adminOnly||profileLoading||profile?.role==='admin').map((group) => (
+        {NAVIGATION_GROUPS.filter((group)=>(!group.adminOnly||profileLoading||profile?.role==='admin')&&(!group.roles||profileLoading||group.roles.includes(profile?.role))).map((group) => (
           <div className="nav-group" key={group.label}>
             <button type="button" className="nav-group-label" onClick={()=>setClosedGroups((current)=>({...current,[group.id]:!current[group.id]}))} aria-expanded={!closedGroups[group.id]}>
               <span>{group.label}</span><ChevronDown size={13}/>
             </button>
-            {!closedGroups[group.id]&&group.links.filter((link)=>!link.supabaseOnly||!isLegacy).filter((link)=>!link.adminOnly||profileLoading||profile?.role==='admin').map((link) => {
+            {!closedGroups[group.id]&&group.links.filter((link)=>!link.supabaseOnly||!isLegacy).filter((link)=>!link.adminOnly||profileLoading||profile?.role==='admin').filter((link)=>!link.roles||profileLoading||link.roles.includes(profile?.role)).map((link) => {
               const Icon = link.icon
               return (
                 <button

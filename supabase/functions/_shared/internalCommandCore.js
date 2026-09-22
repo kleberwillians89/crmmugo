@@ -61,6 +61,7 @@ const priority = (text) => /prioridade (critica|urgente)/.test(text) ? 'critical
     : /prioridade baixa/.test(text) ? 'low'
       : /prioridade media/.test(text) ? 'medium' : null
 const after = (raw, expression) => clean(raw.match(expression)?.[1]) || null
+const moneyAmount = (text) => { const value=text.match(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?)/)?.[1];return value?Number(value.replace(/\./g,'').replace(',','.')):null }
 
 export function parseInternalCommand(rawText, { now = new Date() } = {}) {
   const raw = clean(rawText)
@@ -68,6 +69,17 @@ export function parseInternalCommand(rawText, { now = new Date() } = {}) {
   const base = { raw_text: raw, due_date: resolveRelativeDate(raw, now) }
   if (!text) return { intent: 'UNKNOWN', confidence: 0 }
   if (/^(menu|ajuda|help|comandos)$/.test(text)) return { intent: 'HELP', confidence: 1 }
+  if (/^(sim|confirmo|pode registrar|confirmar)$/.test(text)) return { intent: 'CONFIRM_FINANCIAL', confidence: 1 }
+  if (/^(nao|cancelar|cancela|nao registrar)$/.test(text)) return { intent: 'CANCEL_FINANCIAL', confidence: 1 }
+  if (/^(recebi|entrou)\b/.test(text) && /\bfreela(?:nce)?\b/.test(text)) { const amount=moneyAmount(text),project=after(raw, /(?:freela(?:nce)?\s+(?:da|do|de)|freela(?:nce)?\s+)(.+)$/iu);return{...base,intent:'FREELANCE_INCOME_REQUEST',amount,project_source:project||'Freela',confidence:amount?.toString()?0.98:0.55} }
+  if (/^(recebi|entrou)\b/.test(text)) { const amount=moneyAmount(text),subject=after(raw, /(?:da|do|de)\s+(.+)$/iu);return{...base,intent:'FINANCIAL_RECEIPT_REQUEST',amount,subject_query:subject,confidence:amount?.toString()&&subject?0.96:0.6} }
+  if (/^(gastei|paguei|despesa de)\b/.test(text)) { const amount=moneyAmount(text),category=after(raw, /(?:em|com)\s+(.+)$/iu);return { ...base,intent:'FINANCIAL_EXPENSE_REQUEST',amount,category_name:category,description:category||'Despesa informada pelo WhatsApp',confidence:amount?.toString()?0.98:0.55 } }
+  const hours=text.match(/(?:trabalhei|foram)\s+(\d+(?:[.,]\d+)?)\s*horas?/)?.[1]
+  if(hours)return{...base,intent:'RECORD_TIME',hours:Number(hours.replace(',','.')),summary:raw,confidence:.98}
+  if(/^(comecei|iniciei|estou comecando)\b/.test(text))return{...base,intent:'ACTIVITY_START',summary:after(raw,/^(?:comecei|iniciei|estou começando)\s+(.+)$/iu),confidence:.95}
+  if(/^(terminei|finalizei|conclui os?|conclui as?)\b/.test(text))return{...base,intent:'ACTIVITY_COMPLETE',summary:after(raw,/^(?:terminei|finalizei|concluí|conclui)\s+(.+)$/iu),confidence:.95}
+  if(/\b(aprovou|reprovou|decidiu|autorizou)\b/.test(text))return{...base,intent:'RECORD_DECISION',summary:raw,confidence:.93}
+  if(/^(anota|anote|observacao|obs:)\b/.test(text))return{...base,intent:'RECORD_OBSERVATION',summary:after(raw,/^(?:anota|anote|observação|observacao|obs:)\s*(.+)$/iu),confidence:.9}
   if (/(o que|oq|que).*tenho hoje|meu dia|minhas tarefas( hoje)?/.test(text)) return { ...base, intent: 'LIST_MINE', confidence: 1 }
   const memberToday = raw.match(/(?:o que|oq|que)\s+(?:a|o)?\s*([\p{L}'-]+)\s+tem\s+hoje/iu)
   if (memberToday) return { ...base, intent: 'LIST_TEAM', assignee_name: memberToday[1], confidence: 1 }
@@ -96,4 +108,4 @@ export function parseInternalCommand(rawText, { now = new Date() } = {}) {
 
 export const taskShortId = (id) => `#${clean(id).replace(/-/g, '').slice(0, 6).toUpperCase()}`
 
-export const HELP_TEXT = `MUGÔ — CENTRAL OPERACIONAL\n\n• meu dia\n• tarefas atrasadas\n• equipe hoje\n• atendimentos esperando\n• cobranças pendentes\n• cria tarefa para Julia ... amanhã\n• conclui #A1B2C3`
+export const HELP_TEXT = `MUGÔ — CENTRAL OPERACIONAL\n\n• meu dia\n• tarefas atrasadas\n• equipe hoje\n• comecei [atividade]\n• terminei [atividade]\n• trabalhei 2 horas hoje\n• [cliente] aprovou [decisão]\n• cria tarefa para [pessoa] ... amanhã\n• conclui #A1B2C3\n• gastei R$ 100 em [categoria] (exige confirmação)`

@@ -35,7 +35,17 @@ export const APP_ROUTES = {
   "bank-accounts": "/administracao/contas-bancarias",
   cards: "/administracao/cartoes",
   "financial-import": "/administracao/importacao-financeira",
-  "intelligence-today": "/hoje",
+  "operations-today": "/hoje",
+  "operations-week": "/semana",
+  "operations-calendar": "/calendario",
+  "operations-backlog": "/backlog",
+  "operations-history": "/historico",
+  "finance-today": "/financeiro/hoje",
+  "finance-week": "/financeiro/semana",
+  "finance-month": "/financeiro/mes",
+  "financial-debts": "/financeiro/dividas",
+  "freelance-cash": "/financeiro/caixa-freela",
+  "financial-goals": "/financeiro/metas-reservas",
   "intelligence-attention": "/intelligence/atencao",
   "intelligence-insights": "/intelligence/insights",
   "intelligence-recommendations": "/intelligence/recomendacoes",
@@ -54,7 +64,7 @@ export const APP_ROUTES = {
 };
 
 export const ROUTE_ALIASES = {
-  "/intelligence/hoje": "intelligence-today",
+  "/intelligence/hoje": "operations-today",
   "/financeiro/receber": "finance",
   "/financeiro/contas-a-receber": "finance",
   "/contas-a-receber": "finance",
