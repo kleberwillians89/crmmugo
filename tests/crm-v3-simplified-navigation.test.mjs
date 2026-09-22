@@ -5,15 +5,28 @@ import { NAVIGATION_GROUPS } from "../src/config/navigationGroups.js";
 const visible = NAVIGATION_GROUPS.flatMap((group) =>
   group.links.map((link) => link.id),
 );
-assert.deepEqual(visible, [
+// Navegação por domínios (Attio/Linear-like): grupos nomeados, não uma lista plana.
+assert.deepEqual(
+  NAVIGATION_GROUPS.map((group) => group.id),
+  ["overview", "crm", "communication", "finance", "administration"],
+);
+for (const required of [
   "dashboard",
   "clients",
+  "contacts",
   "contracts",
+  "inbox",
+  "automations",
+  "templates",
   "whatsapp",
   "finance-summary",
+  "collections",
   "organization-settings",
-]);
-assert.equal(visible.length, 6);
+])
+  assert.ok(visible.includes(required), `item de navegação ausente: ${required}`);
+// nenhuma rota técnica/administrativa profunda vazou para o menu principal
+for (const hidden of ["softwares", "system-audit", "financial-sanitation", "monthly-closing"])
+  assert.equal(visible.includes(hidden), false, `rota técnica não deve estar no menu: ${hidden}`);
 
 const routes = fs.readFileSync(
   new URL("../src/config/appRoutes.js", import.meta.url),

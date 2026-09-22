@@ -1046,19 +1046,21 @@ const handleRequest = async (request: Request, requestId: string) => {
     // start_template_conversation e send_template_message não chegam aqui: retornam
     // acima após o envio direto pela Meta Cloud API. O transporte via MugoZap
     // (endpoint de start-template) foi removido dessas duas operações.
-    if(['pause_automation','resume_automation','close_conversation','update_conversation'].includes(operation)&&serviceKey){
+    if(['assign_conversation','pause_automation','resume_automation','close_conversation','update_conversation'].includes(operation)&&serviceKey){
       const admin=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
       const waId=identifier(payload.waId)
       const found=await admin.from('whatsapp_conversations').select('id,connection_id')
         .eq('organization_id',profile.organization_id).eq('wa_id',waId).maybeSingle()
       if(found.data){
         const requested=payload.changes||{}
-        const patch=operation==='pause_automation'
+        const patch=operation==='assign_conversation'
+          ?{assigned_to:text(payload.assignedTo,80)||user.id,assigned_at:new Date().toISOString(),status:'open',attendance_mode:'human',automation_paused:true}
+          :operation==='pause_automation'
           ?{attendance_mode:'human',automation_paused:true,handoff_reason:'manual_handoff'}
           :operation==='resume_automation'
-            ?{attendance_mode:'bot',automation_paused:false,handoff_reason:null}
+            ?{status:'open',attendance_mode:'bot',automation_paused:false,handoff_reason:null}
             :operation==='close_conversation'
-              ?{status:'closed'}
+              ?{status:'closed',closed_at:new Date().toISOString()}
               :{
                 ...(['open','pending','resolved','closed'].includes(text(requested.status,30))?{status:text(requested.status,30)}:{}),
                 ...(['bot','human','paused'].includes(text(requested.attendance_mode,30))?{attendance_mode:text(requested.attendance_mode,30)}:{}),

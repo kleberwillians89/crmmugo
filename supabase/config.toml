@@ -368,6 +368,29 @@ verify_jwt = false
 [functions.whatsapp-automation-worker]
 verify_jwt = false
 
+# Workers e webhooks assinam/autenticam a própria requisição. Ações do CRM
+# continuam com JWT Supabase obrigatório pelo padrão da plataforma.
+[functions.task-command-worker]
+verify_jwt = false
+
+[functions.task-sync-worker]
+verify_jwt = false
+
+[functions.trello-task-webhook]
+verify_jwt = false
+
+[functions.notion-task-webhook]
+verify_jwt = false
+
+[functions.commercial-ai-worker]
+verify_jwt = false
+
+[functions.commercial-notification-worker]
+verify_jwt = false
+
+[functions.commercial-integration-worker]
+verify_jwt = false
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 

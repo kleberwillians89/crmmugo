@@ -260,7 +260,12 @@ export function FinancialMasterDataPage({ section, onNavigate }) {
       .catch((cause) =>
         setError(cause.message || "Não foi possível carregar o módulo."),
       );
-  useEffect(load, [accountModule, config, section]);
+  // `load` devolve uma Promise; o React chamaria a Promise como cleanup ao
+  // desmontar/mudar de módulo ("destroy is not a function") e derrubaria a página.
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountModule, config, section]);
   async function submit(event) {
     event.preventDefault();
     try {

@@ -166,3 +166,8 @@
 .flow-node>footer{display:flex;gap:4px;margin-top:8px}.flow-node>footer button{padding:4px 6px;border:1px solid var(--border-subtle);border-radius:6px;background:#f8fafb;color:var(--brand);font-size:7px}
 .flow-node>em{display:block;margin-top:6px;color:var(--danger,#b83543);font-size:7px;font-style:normal}
 @media(max-width:960px){.flow-builder-shell{grid-template-columns:150px minmax(420px,1fr)}.flow-inspector{position:absolute;z-index:8;right:16px;bottom:16px;width:240px;max-height:55%;border:1px solid var(--border-subtle);border-radius:10px;box-shadow:var(--shadow-float)}}
+.whatsapp-header-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.whatsapp-compact-header dl+.whatsapp-header-actions{margin-left:0}
+.whatsapp-header-actions .button{min-height:36px}
+.whatsapp-page .whatsapp-domain-nav button.active{cursor:default}
+@media(max-width:720px){.whatsapp-header-actions{width:100%;order:4}.whatsapp-header-actions .button{flex:1;justify-content:center}.whatsapp-header-actions .button span{display:inline}}

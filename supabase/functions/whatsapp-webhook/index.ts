@@ -12,6 +12,8 @@ import {
   webhookText as text,
   webhookTimestamp as timestamp,
 } from '../_shared/whatsappWebhookCore.js'
+import { phonesMatch } from '../_shared/internalCommandCore.js'
+import { inferLeadSource } from '../_shared/commercialAgentCore.js'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: jsonHeaders })
@@ -71,6 +73,14 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
   if (ledger.error?.code === '23505') return false
   if (ledger.error) throw ledger.error
 
+  // A classificação acontece antes de qualquer automação. O escopo da organização
+  // é obrigatório e variações brasileiras com/sem nono dígito são equivalentes.
+  const members = await admin.from('team_members').select('id,name,phone,auth_profile_id')
+    .eq('organization_id', connection.organization_id).eq('active', true).not('phone', 'is', null)
+  if (members.error) throw members.error
+  const internalMember = (members.data || []).find((member: any) => phonesMatch(member.phone, waId)) || null
+  const senderType = internalMember ? 'internal' : 'customer'
+
   const profileName = text((value?.contacts || []).find((item: any) => digits(item?.wa_id) === waId)?.profile?.name, 240)
   const contactResult = await admin.from('whatsapp_contacts').upsert({
     organization_id: connection.organization_id,
@@ -78,6 +88,9 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
     wa_id: waId,
     display_name: profileName || null,
     profile_name: profileName || null,
+    contact_type: senderType,
+    team_member_id: internalMember?.id || null,
+    ...(!internalMember ? { source: inferLeadSource({ referral: message?.referral?.source_type, metadata: message?.referral || {} }), campaign: text(message?.referral?.headline, 240) || null, ad_name: text(message?.referral?.body, 240) || null } : {}),
     last_seen_at: new Date().toISOString(),
   }, { onConflict: 'connection_id,wa_id' }).select('id,client_id').single()
   if (contactResult.error) throw contactResult.error
@@ -104,10 +117,12 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
     direction: 'in',
     message_type: content.type,
     status: 'received',
+    sender_type: senderType,
+    team_member_id: internalMember?.id || null,
     text_content: content.body || null,
     media: content.media,
     provider_timestamp: occurredAt,
-  })
+  }).select('id').single()
   if (saved.error && saved.error.code !== '23505') throw saved.error
   if (!saved.error) {
     const unread = await admin.rpc('increment_whatsapp_unread', { p_conversation_id: conversationResult.data.id })
@@ -127,6 +142,29 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
       .eq('event_type', 'automation_resume').in('subject_id', runIds)
   }
   await admin.from('whatsapp_conversations').update({ follow_up_at: null }).eq('id', conversationResult.data.id)
+
+  if (internalMember) {
+    const queuedCommand = await admin.from('task_command_events').insert({
+      organization_id: connection.organization_id,
+      connection_id: connection.id,
+      provider_message_id: providerMessageId,
+      conversation_id: conversationResult.data.id,
+      wa_id: waId,
+      team_member_id: internalMember.id,
+      raw_text: content.body || '',
+      status: 'pending',
+    })
+    if (queuedCommand.error && queuedCommand.error.code !== '23505') throw queuedCommand.error
+    return true
+  }
+
+  const commercial = await admin.from('commercial_settings').select('ai_mode').eq('organization_id', connection.organization_id).maybeSingle()
+  if (commercial.error && !['42P01','PGRST205'].includes(commercial.error.code)) throw commercial.error
+  if (commercial.data?.ai_mode === 'controlled_auto') {
+    const queuedCommercial = await admin.from('commercial_ai_events').insert({ organization_id: connection.organization_id, connection_id: connection.id, conversation_id: conversationResult.data.id, message_id: saved.data?.id || null, provider_message_id: providerMessageId })
+    if (queuedCommercial.error && queuedCommercial.error.code !== '23505') throw queuedCommercial.error
+    return true
+  }
 
   const dedupeKey = `whatsapp_message_received:${providerMessageId}`
   const queued = await admin.from('automation_events').insert({

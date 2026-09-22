@@ -4,6 +4,7 @@ export const APP_ROUTES = {
   nova: "/propostas/nova",
   contracts: "/contratos",
   clients: "/clientes",
+  commercial: "/comercial",
   contacts: "/contatos",
   services: "/servicos",
   inbox: "/comunicacao/caixa-de-entrada",
@@ -34,7 +35,7 @@ export const APP_ROUTES = {
   "bank-accounts": "/administracao/contas-bancarias",
   cards: "/administracao/cartoes",
   "financial-import": "/administracao/importacao-financeira",
-  "intelligence-today": "/intelligence/hoje",
+  "intelligence-today": "/hoje",
   "intelligence-attention": "/intelligence/atencao",
   "intelligence-insights": "/intelligence/insights",
   "intelligence-recommendations": "/intelligence/recomendacoes",
@@ -53,6 +54,7 @@ export const APP_ROUTES = {
 };
 
 export const ROUTE_ALIASES = {
+  "/intelligence/hoje": "intelligence-today",
   "/financeiro/receber": "finance",
   "/financeiro/contas-a-receber": "finance",
   "/contas-a-receber": "finance",

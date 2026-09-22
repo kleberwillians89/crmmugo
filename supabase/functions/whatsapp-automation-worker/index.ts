@@ -295,8 +295,9 @@ const buildHandlers = (admin: any, organizationId: string, mugoZap: MugoZap | nu
     const conversationId = ctx.context?.conversation_id
     if (!conversationId || !ctx.context?.connection_id) throw Object.assign(new Error('Handoff exige uma conversa canônica.'), { code: 'CANONICAL_CONVERSATION_REQUIRED', retryable: false })
     const changed = await admin.from('whatsapp_conversations').update({
-      attendance_mode: 'human', automation_paused: true,
+      status: 'pending', attendance_mode: 'human', automation_paused: true,
       handoff_reason: text(_action.note, 500) || 'automation_handoff',
+      handoff_at: new Date().toISOString(),
     }).eq('id', conversationId).eq('organization_id', organizationId)
     if (changed.error) throw Object.assign(new Error(changed.error.message), { code: 'HANDOFF_WRITE_FAILED', retryable: true })
     const recorded = await admin.from('whatsapp_conversation_events').insert({

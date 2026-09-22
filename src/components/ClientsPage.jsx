@@ -615,7 +615,11 @@ export function ClientsPage() {
     listClientsForReview()
       .then(setItems)
       .catch((cause) => setError(userError(cause)));
-  useEffect(load, []);
+  // Não passar `load` direto: ele devolve uma Promise e o React tentaria chamá-la
+  // como cleanup ao desmontar (crash no AppErrorBoundary).
+  useEffect(() => {
+    load();
+  }, []);
   useEffect(() => {
     sessionStorage.setItem(
       "mugo:client-filters",

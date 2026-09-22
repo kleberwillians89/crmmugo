@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import "./operations.css";
+import "./operations-hub.css";
+import "./commercial.css";
+import "./today-commercial.css";
 import {
   listProposals as getProposals,
   createProposal,
@@ -55,6 +58,7 @@ import { ProductBreadcrumbs } from "./components/ProductBreadcrumbs";
 import { VersionBadge } from "./components/VersionBadge";
 import { GlobalSearch } from "./components/GlobalSearch";
 import { TodayPage } from "./components/TodayPage";
+import { CommercialPage } from "./components/CommercialPage";
 import { pageFromPath, pathForPage } from "./config/appRoutes";
 import {
   AccountsPayablePage,
@@ -659,6 +663,7 @@ export default function App() {
               )}
               {activePage === "services" && <ServicesCatalogPage />}
               {activePage === "clients" && <ClientsPage />}
+              {activePage === "commercial" && <CommercialPage onNavigate={handleNavigate} />}
               {activePage === "team" && <TeamPage />}
               {activePage === "finance" && (
                 <FinancialPageLayout

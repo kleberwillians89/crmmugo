@@ -92,7 +92,12 @@ function useFinanceData() {
             "A estrutura de contas a pagar ainda não está disponível. Aplique a migration V2 no Supabase.",
         })),
       );
-  useEffect(load, []);
+  // `load` devolve uma Promise: passar direto para useEffect faz o React chamar a
+  // Promise como função de cleanup ("destroy is not a function") ao desmontar,
+  // derrubando a página inteira no AppErrorBoundary.
+  useEffect(() => {
+    load();
+  }, []);
   return { ...state, reload: load };
 }
 function Metric({ label, value, muted }) {
