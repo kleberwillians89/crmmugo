@@ -1,5 +1,10 @@
 # Central Operacional Mugô
 
+> Documento histórico. A decisão de produto vigente está em
+> `CRMUGO_NATIVE_GO_LIVE.md`: CRMugo/Supabase é a única fonte da verdade e as
+> integrações com Trello e Notion permanecem desabilitadas. Não publique os
+> workers/webhooks externos nem siga as instruções externas abaixo.
+
 ## Arquitetura e fonte da verdade
 
 O CRM/Supabase é canônico. WhatsApp, Trello e Notion são superfícies conectadas:

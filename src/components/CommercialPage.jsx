@@ -1,9 +1,11 @@
 import {useEffect,useMemo,useState} from 'react'
-import {CalendarClock,ExternalLink,Flame,MessageCircle,RefreshCw,Target,X} from 'lucide-react'
+import {CalendarClock,Flame,MessageCircle,RefreshCw,Target,X} from 'lucide-react'
 import {PageHeader} from './PageHeader'
 import {FeedbackMessage} from './FeedbackMessage'
-import {COMMERCIAL_STAGES,listCommercialOpportunities,requestNotionBriefing,updateOpportunityStage} from '../services/data/commercialRepository'
+import {COMMERCIAL_STAGES,listCommercialOpportunities,updateOpportunityStage} from '../services/data/commercialRepository'
 import {useAuth} from '../contexts/AuthContext'
+import {createSignedUrl} from '../services/data/documentsRepository'
+import {updateStatus as updateProposalStatus} from '../services/data/proposalsRepository'
 
 const labels={new_lead:'Novo lead',in_service:'Em atendimento',qualifying:'Qualificando',qualified:'Qualificado',meeting:'Reunião',proposal:'Proposta',negotiation:'Negociação',won:'Fechado',lost:'Perdido'}
 const temperatureLabels={cold:'Frio',warm:'Morno',hot:'Quente'}
@@ -31,7 +33,8 @@ export function CommercialPage({onNavigate}){
     }
   },[items,today])
   async function move(item,stage){try{await updateOpportunityStage(item.id,stage);await load()}catch(cause){setError(cause.message)}}
-  async function briefing(item){try{await requestNotionBriefing(item.id);setFeedback('Briefing enfileirado para o Notion.');await load()}catch(cause){setError(cause.message)}}
+  async function changeProposal(proposal,status){try{await updateProposalStatus(proposal.id,status);setFeedback('Status da proposta atualizado.');await load()}catch(cause){setError(cause.message)}}
+  async function openDocument(document,download=false){try{const result=await createSignedUrl(document.storage_path,300,document.storage_bucket,download);window.open(result.signedUrl,'_blank','noopener,noreferrer')}catch(cause){setError(cause.message)}}
   function openConversation(item){window.history.replaceState({},'',`/comunicacao/caixa-de-entrada?conversation=${item.conversation_id}`);onNavigate('inbox')}
   const selectedQualification=selected?.commercial_qualifications?.[0]||{}
 
@@ -50,7 +53,7 @@ export function CommercialPage({onNavigate}){
       {COMMERCIAL_STAGES.map(stage=><div className="commercial-column" key={stage}>
         <header><strong>{labels[stage]}</strong><span>{items.filter(item=>item.stage===stage).length}</span></header>
         <div>{items.filter(item=>item.stage===stage).map(item=>{
-          const q=item.commercial_qualifications?.[0]||{},brief=item.commercial_briefing_outbox?.[0]
+          const q=item.commercial_qualifications?.[0]||{}
           return <article className="commercial-card" key={item.id} role="button" tabIndex="0" onClick={()=>setSelected(item)} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();setSelected(item)}}}>
             <div className="commercial-card-heading"><small>{item.source||'Origem não informada'}</small><span className={`temperature ${item.temperature||'cold'}`}>{temperatureLabels[item.temperature]||'Frio'}</span></div>
             <h3>{item.clients?.company_name||item.name}</h3>
@@ -58,7 +61,7 @@ export function CommercialPage({onNavigate}){
             <p className="commercial-card-summary">{item.conversation_summary||item.main_problem||'Aguardando resumo da conversa.'}</p>
             <dl className="commercial-card-facts"><DetailRow label="Urgência" value={item.urgency||q.urgency}/><DetailRow label="Estimativa" value={item.estimated_value!=null?money(item.estimated_value):null}/><DetailRow label="Última interação" value={item.last_interaction_at?dateTime(item.last_interaction_at):null}/><DetailRow label="Próximo passo" value={item.next_action}/><DetailRow label="Prazo" value={item.next_action_at?dateTime(item.next_action_at):null}/><DetailRow label="Responsável" value={item.team_members?.name}/></dl>
             <label onClick={event=>event.stopPropagation()}>Etapa<select value={item.stage} disabled={!canWrite} onChange={event=>move(item,event.target.value)}>{COMMERCIAL_STAGES.map(option=><option value={option} key={option}>{labels[option]}</option>)}</select></label>
-            <footer onClick={event=>event.stopPropagation()}>{item.conversation_id&&<button onClick={()=>openConversation(item)}>Abrir conversa</button>}{canWrite&&['qualified','meeting','proposal','negotiation'].includes(item.stage)&&!brief?.external_url&&<button onClick={()=>briefing(item)}>Gerar briefing</button>}{brief?.external_url&&<a href={brief.external_url} target="_blank" rel="noreferrer">Notion <ExternalLink size={12}/></a>}</footer>
+            <footer onClick={event=>event.stopPropagation()}>{item.conversation_id&&<button onClick={()=>openConversation(item)}>Abrir conversa</button>}</footer>
           </article>
         })}</div>
       </div>)}
@@ -69,6 +72,8 @@ export function CommercialPage({onNavigate}){
         <section><h3>Resumo operacional</h3><p className="structured-summary">{selected.conversation_summary||'Resumo ainda não disponível.'}</p></section>
         <section><h3>Qualificação</h3><dl><DetailRow label="Temperatura" value={`${temperatureLabels[selected.temperature]||'Frio'}${selected.temperature_reason?` — ${selected.temperature_reason}`:''}`}/><DetailRow label="Classificação" value={selected.lead_kind}/><DetailRow label="Situação atual" value={selectedQualification.current_situation}/><DetailRow label="Problema" value={selectedQualification.main_problem||selected.main_problem}/><DetailRow label="Objetivo" value={selectedQualification.objective}/><DetailRow label="Orçamento" value={selectedQualification.budget!=null?money(selectedQualification.budget):selected.budget!=null?money(selected.budget):null}/><DetailRow label="Prazo" value={selectedQualification.timeline||selected.timeline}/><DetailRow label="Urgência" value={selectedQualification.urgency||selected.urgency}/><DetailRow label="Participa da decisão" value={yesNo(selectedQualification.decision_maker)}/><DetailRow label="Próximo passo" value={selected.next_action}/><DetailRow label="Prazo do próximo passo" value={selected.next_action_at?dateTime(selected.next_action_at):null}/><DetailRow label="Tags" value={(selected.tags||[]).join(', ')}/></dl></section>
         <section><h3>Origem</h3><dl><DetailRow label="Origem" value={selected.source}/><DetailRow label="Campanha" value={selected.campaign}/><DetailRow label="Anúncio" value={selected.ad_name}/><DetailRow label="UTM source" value={selected.utm_source}/><DetailRow label="UTM medium" value={selected.utm_medium}/><DetailRow label="UTM campaign" value={selected.utm_campaign}/><DetailRow label="UTM content" value={selected.utm_content}/></dl></section>
+        <section><h3>Propostas</h3>{selected.proposals?.length?<ul>{selected.proposals.map(proposal=><li key={proposal.id}><strong>{proposal.title}</strong><span>{money(proposal.total_value)} · {proposal.status} · {proposal.proposal_date||'sem data'}</span><div className="table-actions">{proposal.documents?.[0]&&<button onClick={()=>openDocument(proposal.documents[0])}>Ver proposta</button>}{proposal.documents?.[0]&&<button onClick={()=>openDocument(proposal.documents[0],true)}>Baixar</button>}{canWrite&&<select aria-label={`Alterar status de ${proposal.title}`} value={proposal.status} onChange={event=>changeProposal(proposal,event.target.value)}>{['draft','sent','viewed','negotiating','accepted','rejected','expired'].map(status=><option value={status} key={status}>{status}</option>)}</select>}</div></li>)}</ul>:<p>Nenhuma proposta vinculada.</p>}</section>
+        <section><h3>Documentos</h3>{selected.proposals?.some(proposal=>proposal.documents?.length)?<ul>{selected.proposals.flatMap(proposal=>(proposal.documents||[]).map(document=><li key={document.id}><strong>{document.original_filename||document.file_name}</strong><span>{document.mime_type}</span><div className="table-actions"><button onClick={()=>openDocument(document)}>Ver</button><button onClick={()=>openDocument(document,true)}>Baixar</button></div></li>))}</ul>:<p>Nenhum documento vinculado.</p>}</section>
         <section><h3>Tarefas</h3>{selected.crm_tasks?.length?<ul>{selected.crm_tasks.map(task=><li key={task.id}><strong>{task.title}</strong><span>{task.status} · {task.due_date||'sem prazo'} · {task.priority}</span></li>)}</ul>:<p>Nenhuma tarefa vinculada.</p>}</section>
       </div>
       <footer>{selected.conversation_id&&<button className="button" onClick={()=>openConversation(selected)}>Abrir conversa</button>}<button className="button secondary" onClick={()=>setSelected(null)}>Fechar</button></footer>

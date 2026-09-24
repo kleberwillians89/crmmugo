@@ -2,7 +2,7 @@ import { ContractBadge } from './ProposalStatusBadge'
 import { ProposalActions } from './ProposalActions'
 import { ProposalEmptyState } from './ProposalEmptyState'
 
-const columns=[['draft','Rascunho'],['sent','Enviada'],['viewed','Visualizada'],['negotiating','Em negociação'],['won','Ganha'],['lost','Perdida']]
+const columns=[['draft','Rascunho'],['sent','Enviada'],['viewed','Visualizada'],['negotiating','Em negociação'],['accepted','Aceita'],['rejected','Rejeitada'],['won','Ganha (legado)'],['lost','Perdida (legado)']]
 const currency=(value)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(value)||0)
 const date=(value)=>value?new Date(`${String(value).slice(0,10)}T12:00:00`).toLocaleDateString('pt-BR'):'Não informada'
 const value=(item)=>Number(item.totalValue)||(Number(item.setupValue)||0)+(Number(item.monthlyValue)||0)

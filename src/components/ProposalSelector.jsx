@@ -1,7 +1,7 @@
 import {useMemo,useState} from 'react'
 
 const money=(value)=>Number(value||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})
-const label={draft:'Rascunho',sent:'Enviada',viewed:'Visualizada',negotiating:'Em negociação',won:'Ganha',lost:'Perdida',expired:'Expirada',cancelled:'Cancelada'}
+const label={draft:'Rascunho',sent:'Enviada',viewed:'Visualizada',negotiating:'Em negociação',accepted:'Aceita',rejected:'Rejeitada',won:'Ganha',lost:'Perdida',expired:'Expirada',cancelled:'Cancelada'}
 const normalize=(value='')=>String(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()
 
 export function ProposalSelector({proposals,value,clientId,onChange}){

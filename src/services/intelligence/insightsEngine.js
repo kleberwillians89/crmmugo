@@ -2,7 +2,7 @@ const DAY = 86400000
 const normalize = (value) => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
 const parseDate = (value) => { if (!value) return null; const date = new Date(`${String(value).slice(0, 10)}T12:00:00`); return Number.isNaN(date.getTime()) ? null : date }
 const moneyValue = (record) => Number(record?.monthly_value || record?.total_value || record?.setup_value || 0)
-const openProposal = (proposal) => !['won', 'lost', 'cancelled', 'fechada', 'perdida'].includes(normalize(proposal.status || proposal.proposal_status))
+const openProposal = (proposal) => !['won', 'accepted', 'lost', 'rejected', 'cancelled', 'expired', 'fechada', 'aceita', 'perdida', 'rejeitada'].includes(normalize(proposal.status || proposal.proposal_status))
 const validPhone = (phone) => String(phone || '').replace(/\D/g, '').length >= 10
 const validEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || ''))
 

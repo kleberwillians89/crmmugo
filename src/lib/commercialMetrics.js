@@ -2,8 +2,8 @@ import { toNumber } from './businessMetrics.js'
 const norm=(v)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim()
 const parse=(v)=>{if(!v)return null;const d=new Date(`${String(v).slice(0,10)}T12:00:00`);return Number.isNaN(d.getTime())?null:d}
 const status=(p)=>norm(p.status||p.proposal_status)
-const won=(p)=>['won','fechada','aprovado','contrato assinado','projeto iniciado'].includes(status(p))
-const lost=(p)=>['lost','perdida'].includes(status(p))
+const won=(p)=>['won','accepted','fechada','aceita','aprovado','contrato assinado','projeto iniciado'].includes(status(p))
+const lost=(p)=>['lost','rejected','perdida','rejeitada'].includes(status(p))
 const draft=(p)=>['draft','rascunho'].includes(status(p))
 const value=(p)=>toNumber(p.totalValue??p.total_value)||(toNumber(p.setupValue??p.setup_value)+toNumber(p.monthlyValue??p.monthly_value))
 export function periodRange(period,now=new Date(),custom={}){const end=new Date(now.getFullYear(),now.getMonth(),now.getDate(),23,59,59);if(period==='all')return {start:null,end:null};if(period==='custom')return {start:parse(custom.start),end:parse(custom.end)};let start;if(period==='month')start=new Date(now.getFullYear(),now.getMonth(),1);if(period==='30')start=new Date(end.getTime()-29*86400000);if(period==='quarter')start=new Date(now.getFullYear(),Math.floor(now.getMonth()/3)*3,1);if(period==='year')start=new Date(now.getFullYear(),0,1);if(period==='12months')start=new Date(now.getFullYear(),now.getMonth()-11,1);return {start,end}}

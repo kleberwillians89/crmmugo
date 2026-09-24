@@ -62,6 +62,21 @@ const priority = (text) => /prioridade (critica|urgente)/.test(text) ? 'critical
       : /prioridade media/.test(text) ? 'medium' : null
 const after = (raw, expression) => clean(raw.match(expression)?.[1]) || null
 const moneyAmount = (text) => { const value=text.match(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?)/)?.[1];return value?Number(value.replace(/\./g,'').replace(',','.')):null }
+const proposalParts = (raw) => {
+  const amount = moneyAmount(foldText(raw))
+  const currency = /(?:€|\beur\b)/iu.test(raw) ? 'EUR' : 'BRL'
+  const withoutLead = raw.replace(/^(?:anota(?:r)?\s+|fizemos\s+|mandamos\s+|enviamos\s+)?/iu, '')
+  const clientThenService = withoutLead.match(/(?:proposta|orçamento|orcamento)\s+para\s+(.+?)\s+de\s+(?:r\$|€|eur)?\s*[\d.]+(?:,\d+)?\s+para\s+(?:o|a)?\s*(.+)$/iu)
+  if(clientThenService)return{amount,currency,service:clean(clientThenService[2]),subject_query:clean(clientThenService[1])}
+  const detailed = withoutLead.match(/(?:proposta|orçamento|orcamento)\s+de\s+(.+?)\s+(?:da|do|para)\s+(.+?)\s+(?:por|de)\s+(?:r\$|€|eur)?\s*[\d.]+(?:,\d+)?/iu)
+  if (detailed) return { amount, currency, service: clean(detailed[1]), subject_query: clean(detailed[2]) }
+  const priced = withoutLead.match(/(?:proposta|orçamento|orcamento)\s+de\s+(?:r\$|€|eur)?\s*[\d.]+(?:,\d+)?\s+para\s+(.+)$/iu)
+  if (priced) return { amount, currency, service: null, subject_query: clean(priced[1]) }
+  const simple = withoutLead.match(/(?:proposta|orçamento|orcamento)(?:\s+de\s+(.+?))?\s+para\s+(.+?)(?:\s+(?:por|de)\s+(?:r\$|€|eur)?\s*[\d.]+(?:,\d+)?)?$/iu)
+  if(simple)return { amount, currency, service: clean(simple[1]) || null, subject_query: clean(simple[2]) || null }
+  const unpriced=withoutLead.match(/(?:proposta|orçamento|orcamento)\s+para\s+(.+)$/iu)
+  return { amount, currency, service: null, subject_query: clean(unpriced?.[1]) || null }
+}
 
 export function parseInternalCommand(rawText, { now = new Date() } = {}) {
   const raw = clean(rawText)
@@ -74,6 +89,9 @@ export function parseInternalCommand(rawText, { now = new Date() } = {}) {
   if (/^(recebi|entrou)\b/.test(text) && /\bfreela(?:nce)?\b/.test(text)) { const amount=moneyAmount(text),project=after(raw, /(?:freela(?:nce)?\s+(?:da|do|de)|freela(?:nce)?\s+)(.+)$/iu);return{...base,intent:'FREELANCE_INCOME_REQUEST',amount,project_source:project||'Freela',confidence:amount?.toString()?0.98:0.55} }
   if (/^(recebi|entrou)\b/.test(text)) { const amount=moneyAmount(text),subject=after(raw, /(?:da|do|de)\s+(.+)$/iu);return{...base,intent:'FINANCIAL_RECEIPT_REQUEST',amount,subject_query:subject,confidence:amount?.toString()&&subject?0.96:0.6} }
   if (/^(gastei|paguei|despesa de)\b/.test(text)) { const amount=moneyAmount(text),category=after(raw, /(?:em|com)\s+(.+)$/iu);return { ...base,intent:'FINANCIAL_EXPENSE_REQUEST',amount,category_name:category,description:category||'Despesa informada pelo WhatsApp',confidence:amount?.toString()?0.98:0.55 } }
+  const proposalUpdate=raw.match(/^(.+?)\s+(aceitou|aprovou|recusou|rejeitou|visualizou)\s+(?:o\s+|a\s+)?(?:orçamento|orcamento|proposta)\b/iu)
+  if(proposalUpdate){const action=foldText(proposalUpdate[2]),status=/aceitou|aprovou/.test(action)?'accepted':/recusou|rejeitou/.test(action)?'rejected':'viewed';return{...base,intent:'UPDATE_PROPOSAL',subject_query:clean(proposalUpdate[1]),proposal_status:status,confidence:.98}}
+  if(/\b(proposta|orçamento|orcamento)\b/.test(text)){const parts=proposalParts(raw),proposal_status=/\b(mandamos|enviamos)\b/.test(text)?'sent':'draft';return{...base,intent:'RECORD_PROPOSAL',...parts,proposal_status,confidence:parts.subject_query&&parts.amount?0.98:.62}}
   const hours=text.match(/(?:trabalhei|foram)\s+(\d+(?:[.,]\d+)?)\s*horas?/)?.[1]
   if(hours)return{...base,intent:'RECORD_TIME',hours:Number(hours.replace(',','.')),summary:raw,confidence:.98}
   if(/^(comecei|iniciei|estou comecando)\b/.test(text))return{...base,intent:'ACTIVITY_START',summary:after(raw,/^(?:comecei|iniciei|estou começando)\s+(.+)$/iu),confidence:.95}
@@ -97,9 +115,13 @@ export function parseInternalCommand(rawText, { now = new Date() } = {}) {
   if (/^pausa(?:r)? (?:o )?bot/.test(text)) return { intent: 'PAUSE_AUTOMATION', subject_query: after(raw, /^pausa(?:r)? (?:o )?bot (?:do|da|de) (.+)$/i), confidence: .9 }
   if (/^retoma(?:r)? (?:o )?bot/.test(text)) return { intent: 'RESUME_AUTOMATION', subject_query: after(raw, /^retoma(?:r)? (?:o )?bot (?:do|da|de) (.+)$/i), confidence: .9 }
   if (/prioridade (baixa|media|alta|critica|urgente)/.test(text)) return { intent: 'SET_PRIORITY', task_short_id: shortId(text), task_query: shortId(text) ? null : after(raw, /^(?:coloca|defina|define)?\s*(.+?)\s+(?:como|com) prioridade/i), priority: priority(text), confidence: .9 }
-  if (/^(criar|cria|nova) tarefa\b/.test(text)) {
+  const taskByDate=raw.match(/^(?:criar|cria|nova)(?:\s+uma)?\s+tarefa\s+para\s+(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)\s+(.+)$/iu)
+  if(taskByDate)return{...base,intent:'CREATE_TASK',title:clean(taskByDate[2]),assignee_name:null,priority:priority(text)||'medium',confidence:.98}
+  const delegated=raw.match(/^([\p{L}'-]+)\s+precisa\s+(.+)$/iu)
+  if(delegated){const title=delegated[2].replace(/\s+(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)$/iu,'');return{...base,intent:'CREATE_TASK',title:clean(title),assignee_name:delegated[1],priority:priority(text)||'medium',confidence:base.due_date?.length?0.98:0.9}}
+  if (/^(criar|cria|nova)(?: uma)? tarefa\b/.test(text)) {
     const assignee = raw.match(/\bpara\s+([\p{L}'-]+)(?:\s+.+)?$/iu)?.[1] || null
-    let title = raw.replace(/^(criar|cria|nova) tarefa\s*/i, '').replace(/\s+(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)(?=\s|$).*$/iu, '')
+    let title = raw.replace(/^(criar|cria|nova)(?:\s+uma)?\s+tarefa\s*/i, '').replace(/\s+(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)(?=\s|$).*$/iu, '')
     if (assignee) title = title.replace(new RegExp(`^para\\s+${assignee}\\s+`, 'iu'), '').replace(new RegExp(`\\s+para\\s+${assignee}$`, 'iu'), '')
     return { ...base, intent: 'CREATE_TASK', title: clean(title), assignee_name: assignee, priority: priority(text) || 'medium', confidence: title ? .95 : .6 }
   }

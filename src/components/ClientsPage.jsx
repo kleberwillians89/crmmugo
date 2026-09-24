@@ -29,6 +29,7 @@ import { normalizeService } from "../lib/normalizeService";
 import { Plus, Search, X } from "lucide-react";
 import { compareClients } from "../lib/clientDeduplication";
 import { listClientMergeHistory } from "../services/data/clientMergeRepository";
+import { updateStatus as updateProposalStatus } from "../services/data/proposalsRepository";
 
 const empty = {
   company_name: "",
@@ -150,7 +151,7 @@ function ClientCenter({ id, onBack }) {
     contracts = client.contracts || [],
     docs = client.documents || [],
     installments = client.invoice_installments || [],
-    won = proposals.filter((proposal) => proposal.status === "won"),
+    won = proposals.filter((proposal) => ["won", "accepted"].includes(proposal.status)),
     active = contracts.filter((contract) => contract.status === "active"),
     financial = calculateFinancialSummary(contracts, installments);
   const monthlyPlanned = financial.monthlyExpected + financial.monthlyEstimated,
@@ -172,12 +173,25 @@ function ClientCenter({ id, onBack }) {
       ];
     }),
   );
-  async function openDoc(doc) {
+  async function openDoc(doc, download = false) {
     try {
-      const data = await createSignedUrl(doc.storage_path);
+      const data = await createSignedUrl(doc.storage_path, 300, doc.storage_bucket, download);
       window.open(data.signedUrl, "_blank", "noopener,noreferrer");
     } catch (cause) {
       setError(userError(cause, "O link temporário não pôde ser criado."));
+    }
+  }
+  async function changeProposalStatus(proposal, status) {
+    try {
+      await updateProposalStatus(proposal.id, status);
+      setClient((current) => ({
+        ...current,
+        proposals: current.proposals.map((item) =>
+          item.id === proposal.id ? { ...item, status } : item,
+        ),
+      }));
+    } catch (cause) {
+      setError(userError(cause, "O status da proposta não pôde ser alterado."));
     }
   }
   function contact() {
@@ -402,13 +416,13 @@ function ClientCenter({ id, onBack }) {
             "Abertas",
             proposals.filter(
               (proposal) =>
-                !["won", "lost", "cancelled"].includes(proposal.status),
+                !["won", "accepted", "lost", "rejected", "cancelled", "expired"].includes(proposal.status),
             ).length,
           ],
           ["Ganhas", won.length],
           [
             "Perdidas",
-            proposals.filter((proposal) => proposal.status === "lost").length,
+            proposals.filter((proposal) => ["lost", "rejected"].includes(proposal.status)).length,
           ],
           ["Contratos ativos", active.length],
           [
@@ -439,22 +453,27 @@ function ClientCenter({ id, onBack }) {
           "Mensal",
           "Total",
           "Responsável",
+          "Ações",
         ]}
-        rows={proposals.map((proposal) => [
-          proposal.title,
-          proposal.status,
-          proposal.sent_at || "Não informado",
-          proposal.setup_value == null
-            ? "Não informado"
-            : money(proposal.setup_value),
-          proposal.monthly_value == null
-            ? "Não informado"
-            : money(proposal.monthly_value),
-          proposal.total_value == null
-            ? "Não informado"
-            : money(proposal.total_value),
-          proposal.responsible || "Sem responsável",
-        ])}
+        rows={proposals.map((proposal) => {
+          const proposalDoc = docs.find((doc) => doc.proposal_id === proposal.id);
+          return [
+            proposal.title,
+            proposal.status,
+            proposal.proposal_date || proposal.sent_at || "Não informado",
+            proposal.setup_value == null ? "Não informado" : money(proposal.setup_value),
+            proposal.monthly_value == null ? "Não informado" : money(proposal.monthly_value),
+            proposal.total_value == null ? "Não informado" : money(proposal.total_value),
+            proposal.team_members?.name || proposal.responsible || "Sem responsável",
+            <div className="table-actions" key={proposal.id}>
+              {proposalDoc && <button className="button secondary small" onClick={() => openDoc(proposalDoc)}>Ver proposta</button>}
+              {proposalDoc && <button className="button secondary small" onClick={() => openDoc(proposalDoc, true)}>Baixar</button>}
+              {canWrite && <select aria-label={`Alterar status de ${proposal.title}`} value={proposal.status} onChange={(event) => changeProposalStatus(proposal, event.target.value)}>
+                {['draft','sent','viewed','negotiating','accepted','rejected','won','lost','expired','cancelled'].map((status) => <option value={status} key={status}>{status}</option>)}
+              </select>}
+            </div>,
+          ];
+        })}
       />
       <CenterTable
         title="Contratos"
@@ -513,8 +532,9 @@ function ClientCenter({ id, onBack }) {
               className="button secondary small"
               onClick={() => openDoc(doc)}
             >
-              Abrir temporariamente
+              Ver
             </button>
+            <button className="button secondary small" onClick={() => openDoc(doc, true)}>Baixar</button>
           </div>
         ))}
         {!docs.length && <p className="data-note">Nenhum documento.</p>}

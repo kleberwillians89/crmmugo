@@ -24,7 +24,7 @@ import { WhatsAppSystemStatusPanel } from './WhatsAppSystemStatusPanel'
 import { isAmbiguousTemplateSendOutcome } from '../services/whatsapp/templateSendAttempt'
 import { WhatsAppNewContactModal } from './WhatsAppNewContactModal'
 import { ProductBreadcrumbs } from './ProductBreadcrumbs'
-import {getConversationCommercialContext,handoffCommercialConversation,requestNotionBriefing} from '../services/data/commercialRepository'
+import {getConversationCommercialContext,handoffCommercialConversation} from '../services/data/commercialRepository'
 import './WhatsAppPage.css'
 
 const SECTION_PRESENTATION = {
@@ -202,7 +202,7 @@ export function WhatsAppPage({ section = 'inbox', page = 'inbox', clients = [], 
   async function signInAgain(){await getSupabaseClient()?.auth.signOut();window.location.reload()}
   async function mutate(action,success='Ação concluída.'){if(demoMode){setActionFeedback('Modo demonstração: esta ação não foi executada.');return}if(!selected||!canWrite||actionRef.current||typeof action!=='function')return;actionRef.current=true;try{setError('');setActionFeedback('');await action();setActionFeedback(success);await refresh(true,true)}catch(cause){handleOperationError(cause)}finally{actionRef.current=false}}
   async function commercialHandoff(){await mutate(async()=>{await handoffCommercialConversation(selected.id);setCommercialContext(await getConversationCommercialContext(selected.id))},`Conversa encaminhada para ${commercialContext.owner?.name||'o responsável comercial'}.`)}
-  async function generateBriefing(){const opportunity=commercialContext.opportunity;if(!opportunity)return;await mutate(async()=>{await requestNotionBriefing(opportunity.id);setCommercialContext(await getConversationCommercialContext(selected.id))},'Briefing enfileirado para o Notion.')}
+  function generateBriefing(){setActionFeedback('O contexto comercial já está registrado no CRMugo.');onNavigate('commercial')}
   async function linkClient(clientId,options){const link=await linkConversationToClient(selected,clientId,options);setConversationLinks(current=>[...current.filter(item=>item.wa_id!==link.wa_id),link]);setActionFeedback('Conversa vinculada ao cliente.')}
   async function unlinkClient(){if(!selectedLink||!window.confirm('Desvincular esta conversa do cliente?'))return;await unlinkConversation(selected);setConversationLinks(current=>current.filter(item=>item.wa_id!==selectedIdentifier));setActionFeedback('Vínculo removido.')}
   function handleTabKey(event,index){if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;setTab(tabs[next][0]);event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[next]?.focus()}

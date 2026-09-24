@@ -40,7 +40,9 @@
     "test:operational-hub": "node --test tests/mugo-operational-hub.test.mjs",
     "test:commercial": "node --test tests/commercial-hub.test.mjs",
     "test:native-operations": "node --test tests/native-operations-hub.test.mjs",
-    "test:financial-hub": "node --test tests/financial-hub-2026.test.mjs"
+    "test:financial-hub": "node --test tests/financial-hub-2026.test.mjs",
+    "test:proposal-documents": "node --test tests/native-go-live.test.mjs",
+    "test:cutover": "node --test tests/operational-financial-cutover.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.3",

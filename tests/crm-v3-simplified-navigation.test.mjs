@@ -25,7 +25,7 @@ for (const required of [
 ])
   assert.ok(visible.includes(required), `item de navegação ausente: ${required}`);
 // nenhuma rota técnica/administrativa profunda vazou para o menu principal
-for (const hidden of ["softwares", "system-audit", "financial-sanitation", "monthly-closing"])
+for (const hidden of ["softwares", "system-audit", "financial-sanitation"])
   assert.equal(visible.includes(hidden), false, `rota técnica não deve estar no menu: ${hidden}`);
 
 const routes = fs.readFileSync(
@@ -49,10 +49,13 @@ const finance = fs.readFileSync(
   "utf8",
 );
 for (const tab of [
-  "Resumo",
-  "Contas a receber",
-  "Contas a pagar",
-  "Fluxo de caixa",
+  "Visão Geral",
+  "Calendário",
+  "Receitas",
+  "Despesas",
+  "Dívidas",
+  "Caixa Freela",
+  "Metas & Reservas",
   "Fechamento mensal",
   "Exportar para contador",
 ])

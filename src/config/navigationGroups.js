@@ -28,7 +28,7 @@ export const NAVIGATION_GROUPS = [
       { id: "operations-week", label: "Semana", icon: CalendarRange, supabaseOnly: true, roles: ['admin','manager','operations','commercial'] },
       { id: "operations-calendar", label: "Calendário", icon: CalendarDays, supabaseOnly: true, roles: ['admin','manager','operations','commercial'] },
       { id: "operations-backlog", label: "Backlog", icon: ListTodo, supabaseOnly: true, roles: ['admin','manager','operations','commercial'] },
-      { id: "operations-history", label: "Histórico", icon: History, supabaseOnly: true, roles: ['admin','manager','operations','commercial'] },
+      { id: "operations-history", label: "Concluídos", icon: History, supabaseOnly: true, roles: ['admin','manager','operations','commercial'] },
       { id: "inbox", label: "Caixa de entrada", icon: Inbox, supabaseOnly: true },
       { id: "collections", label: "Cobranças", icon: ReceiptText, supabaseOnly: true, roles: ['admin','manager','finance'] },
       { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },

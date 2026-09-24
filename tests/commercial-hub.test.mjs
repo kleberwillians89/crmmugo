@@ -120,13 +120,11 @@ test('notificação usa primário, retry e fallback sem envio duplo confirmado',
   assert.match(worker,/prior\.data\?\.provider_message_id/);assert.match(worker,/SEND_OUTCOME_UNKNOWN/)
   assert.match(worker,/attempts>=3[\s\S]+destination_kind:'fallback'/)
 })
-test('Trello é relevante por opt-in e Notion gera briefing sob demanda',()=>{
-  const migration=fs.readFileSync('supabase/migrations/202609210002_commercial_hub.sql','utf8')
-  assert.match(migration,/sync_external/);assert.match(migration,/sync_all/)
-  const notion=fs.readFileSync('supabase/functions/_shared/taskIntegrations/notion.ts','utf8')
-  assert.match(notion,/createNotionCommercialBriefing/)
-  const action=fs.readFileSync('supabase/functions/commercial-actions/index.ts','utf8')
-  assert.match(action,/commercial_briefing_outbox/)
+test('fluxo principal é nativo e desativa integrações operacionais legadas',()=>{
+  const migration=fs.readFileSync('supabase/migrations/202609220005_native_go_live_preparation.sql','utf8')
+  assert.match(migration,/task_integration_settings[\s\S]+enabled=false/)
+  assert.match(migration,/drop trigger if exists enqueue_task_sync/)
+  for(const file of ['src/components/CommercialPage.jsx','src/components/WhatsAppPage.jsx'])assert.doesNotMatch(fs.readFileSync(file,'utf8'),/Trello|Notion|trello|notion/)
 })
 test('V2 adiciona temperatura sem ativar IA e o comercial expõe drawer e métricas',()=>{
   const migration=fs.readFileSync('supabase/migrations/202609220001_commercial_hub_v2.sql','utf8')
@@ -139,7 +137,7 @@ test('V2 adiciona temperatura sem ativar IA e o comercial expõe drawer e métri
   const page=fs.readFileSync('src/components/CommercialPage.jsx','utf8')
   for(const contract of ['em qualificação','follow-ups hoje','pipeline potencial','commercial-drawer','Resumo operacional','Abrir conversa'])assert.ok(page.includes(contract),contract)
 })
-test('RLS, tenant e webhook inválido permanecem protegidos',()=>{
+test('RLS, tenant e webhooks históricos permanecem protegidos',()=>{
   const migration=fs.readFileSync('supabase/migrations/202609210002_commercial_hub.sql','utf8')
   assert.match(migration,/force row level security/);assert.match(migration,/protect_commercial_tenant/);assert.match(migration,/current_organization_id\(\)/)
   for(const file of ['trello-task-webhook','notion-task-webhook'])assert.match(fs.readFileSync(`supabase/functions/${file}/index.ts`,'utf8'),/INVALID_SIGNATURE/)

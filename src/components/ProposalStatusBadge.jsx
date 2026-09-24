@@ -5,6 +5,8 @@ const statusConfig = {
   sent: { tone: 'sent', icon: CircleDashed, label: 'Enviada' },
   viewed: { tone: 'sent', icon: CircleDashed, label: 'Visualizada' },
   negotiating: { tone: 'negotiation', icon: Clock3, label: 'Em negociação' },
+  accepted: { tone: 'closed', icon: CheckCircle2, label: 'Aceita' },
+  rejected: { tone: 'lost', icon: XCircle, label: 'Rejeitada' },
   won: { tone: 'closed', icon: CheckCircle2, label: 'Ganha' },
   lost: { tone: 'lost', icon: XCircle, label: 'Perdida' },
   expired: { tone: 'lost', icon: Clock3, label: 'Expirada' },

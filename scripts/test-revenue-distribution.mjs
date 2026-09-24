@@ -31,10 +31,10 @@ const rounded=calculateCategorizedRevenue([{amount:.05,status:'pending',referenc
 assert.equal(rounded.total.reserveCents,Object.values(rounded.categories).reduce((sum,item)=>sum+item.distribution.reserveCents,0))
 
 const form=readFileSync(new URL('../src/components/InstallmentFormModal.jsx',import.meta.url),'utf8'),css=readFileSync(new URL('../src/App.css',import.meta.url),'utf8')
-assert.match(form,/Tipo de receita/)
+assert.match(form,/Natureza/)
 assert.match(form,/required=\{form\.installment_type==='monthly'\}/)
 assert.match(form,/onSubmit=\{submit\}/)
 assert.match(form,/Projeto pontual/)
-assert.match(css,/@media\(max-width:720px\).*installment-list-row/s)
+assert.match(css,/@media\s*\(\s*max-width:\s*720px\s*\).*installment-list-row/s)
 
 console.log('Revenue distribution passed: categorized monthly/setup/project/other totals, 10% reserve, period separation, form validation, responsiveness and immutable installments.')

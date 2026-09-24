@@ -62,6 +62,6 @@ test('log, confirmação financeira, idempotência, RLS e tenant estão no backe
 
 test('interfaces nativas não dependem de Trello ou Notion',()=>{
   const page=fs.readFileSync('src/components/OperationsHubPage.jsx','utf8')
-  for(const contract of ['week-board','month-grid','backlog-list','operational-history','listTasks()'])assert.ok(page.includes(contract),contract)
+  for(const contract of ['week-board','month-grid','backlog-list','Meta semanal','Filtrar calendário','listTasks()'])assert.ok(page.includes(contract),contract)
   assert.doesNotMatch(page,/Trello|Notion/)
 })

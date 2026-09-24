@@ -1,5 +1,11 @@
 # CRMugo — núcleo comercial no WhatsApp
 
+> Documento histórico. A decisão de produto vigente está em
+> `CRMUGO_NATIVE_GO_LIVE.md`: CRMugo/Supabase é a única fonte da verdade,
+> `commercial_settings.ai_mode` permanece `disabled` e Trello/Notion não fazem
+> parte do fluxo de produção. Não publique ou agende os workers externos citados
+> abaixo.
+
 ## O que foi implementado
 
 O número central da Mugô passa a aceitar dois fluxos sem criar outro CRM:

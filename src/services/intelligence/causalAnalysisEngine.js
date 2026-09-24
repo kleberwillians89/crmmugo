@@ -3,7 +3,7 @@ const norm=(value)=>String(value??'').normalize('NFD').replace(/[\u0300-\u036f]/
 const amount=(value)=>Number(value||0)
 const label=(contract,clients=[])=>contract.clients?.company_name||contract.client_name||clients.find((client)=>client.id===contract.client_id)?.company_name||contract.contract_number||'Cliente não identificado'
 const date=(value)=>{if(!value)return null;const parsed=new Date(`${String(value).slice(0,10)}T12:00:00`);return Number.isNaN(parsed.getTime())?null:parsed}
-const openProposal=(proposal)=>!['won','lost','cancelled','expired','fechada','perdida'].includes(norm(proposal.status||proposal.proposal_status))
+const openProposal=(proposal)=>!['won','accepted','lost','rejected','cancelled','expired','fechada','aceita','perdida','rejeitada'].includes(norm(proposal.status||proposal.proposal_status))
 const activeContract=(contract)=>norm(contract.status||contract.proposal_status)==='active'&&(contract.signed??contract.contract_signed??true)
 const serviceRows=(contract)=>contract.contract_services||contract.services||[]
 const responsibleName=(service,kind)=>service?.[`${kind}Responsible`]?.name||service?.[`${kind}_responsible`]?.name||service?.team_members?.name||''
@@ -38,6 +38,6 @@ export function buildCausalAnalysis(data={},now=new Date()){
 
   const automation=proposals.filter((proposal)=>norm(proposal.mainService||proposal.main_service||proposal.title||proposal.proposal_services?.map((service)=>service.service_name).join(' ')).includes('automacao'))
   const stalled=automation.filter((proposal)=>{const sent=date(proposal.sentAt||proposal.sent_at||proposal.proposal_sent_date||proposal.created_at);return openProposal(proposal)&&sent&&(now-sent)/DAY>20})
-  if(stalled.length){const concluded=automation.filter((proposal)=>['won','lost','fechada','perdida'].includes(norm(proposal.status||proposal.proposal_status))),won=concluded.filter((proposal)=>['won','fechada'].includes(norm(proposal.status||proposal.proposal_status))).length;findings.push({id:'automation-conversion',type:'Conversão',severity:'Média',statement:`A conversão de Automação está sob pressão porque ${stalled.length} proposta(s) permanecem abertas há mais de 20 dias.`,evidence:[`Conversão concluída: ${concluded.length?(won/concluded.length*100).toFixed(1):'0.0'}%`,...stalled.slice(0,5).map((proposal)=>proposal.title||proposal.companyName||'Proposta sem título')],metric:stalled.length,sources:['Propostas','Dashboard']})}
+  if(stalled.length){const concluded=automation.filter((proposal)=>['won','accepted','lost','rejected','fechada','aceita','perdida','rejeitada'].includes(norm(proposal.status||proposal.proposal_status))),won=concluded.filter((proposal)=>['won','accepted','fechada','aceita'].includes(norm(proposal.status||proposal.proposal_status))).length;findings.push({id:'automation-conversion',type:'Conversão',severity:'Média',statement:`A conversão de Automação está sob pressão porque ${stalled.length} proposta(s) permanecem abertas há mais de 20 dias.`,evidence:[`Conversão concluída: ${concluded.length?(won/concluded.length*100).toFixed(1):'0.0'}%`,...stalled.slice(0,5).map((proposal)=>proposal.title||proposal.companyName||'Proposta sem título')],metric:stalled.length,sources:['Propostas','Dashboard']})}
   return findings
 }

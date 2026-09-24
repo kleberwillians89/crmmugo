@@ -8,7 +8,7 @@ const headers = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers })
 const clean = (value: unknown, max = 500) => String(value ?? '').trim().slice(0, max)
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
-const ALLOWED_INTENTS = new Set(['CREATE_TASK','LIST_TODAY','LIST_MINE','LIST_TEAM','LIST_OVERDUE','COMPLETE_TASK','START_TASK','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK','LIST_WAITING_ATTENDANCE','ASSIGN_CONVERSATION','TAKE_CONVERSATION','PAUSE_AUTOMATION','RESUME_AUTOMATION','LIST_PENDING_CHARGES','ACTIVITY_START','ACTIVITY_COMPLETE','RECORD_DECISION','RECORD_OBSERVATION','RECORD_TIME','FINANCIAL_EXPENSE_REQUEST','FINANCIAL_RECEIPT_REQUEST','FREELANCE_INCOME_REQUEST','CONFIRM_FINANCIAL','CANCEL_FINANCIAL','HELP'])
+const ALLOWED_INTENTS = new Set(['CREATE_TASK','LIST_TODAY','LIST_MINE','LIST_TEAM','LIST_OVERDUE','COMPLETE_TASK','START_TASK','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK','LIST_WAITING_ATTENDANCE','ASSIGN_CONVERSATION','TAKE_CONVERSATION','PAUSE_AUTOMATION','RESUME_AUTOMATION','LIST_PENDING_CHARGES','ACTIVITY_START','ACTIVITY_COMPLETE','RECORD_DECISION','RECORD_OBSERVATION','RECORD_TIME','RECORD_PROPOSAL','UPDATE_PROPOSAL','ATTACH_PROPOSAL_FILE','FINANCIAL_EXPENSE_REQUEST','FINANCIAL_RECEIPT_REQUEST','FREELANCE_INCOME_REQUEST','CONFIRM_FINANCIAL','CANCEL_FINANCIAL','HELP'])
 
 async function aiFallback(rawText: string) {
   const key = Deno.env.get('OPENAI_API_KEY') || ''
@@ -18,7 +18,7 @@ async function aiFallback(rawText: string) {
     body: JSON.stringify({
       model: Deno.env.get('TASK_COMMAND_MODEL') || 'gpt-5-mini',
       input: [{ role: 'system', content: 'Classifique um comando operacional interno em português. Não invente IDs. Retorne somente JSON.' }, { role: 'user', content: rawText }],
-      text: { format: { type: 'json_schema', name: 'task_command', strict: true, schema: { type: 'object', additionalProperties: false, properties: { intent: { type: 'string', enum: [...ALLOWED_INTENTS] }, title: { type: ['string','null'] }, assignee_name: { type: ['string','null'] }, task_short_id: { type: ['string','null'] }, subject_query: { type: ['string','null'] }, priority: { type: ['string','null'], enum: ['low','medium','high','critical',null] }, due_date: { type: ['string','null'] }, summary:{type:['string','null']},amount:{type:['number','null']},hours:{type:['number','null']},category_name:{type:['string','null']},description:{type:['string','null']},project_source:{type:['string','null']} }, required: ['intent','title','assignee_name','task_short_id','subject_query','priority','due_date','summary','amount','hours','category_name','description','project_source'] } } },
+      text: { format: { type: 'json_schema', name: 'task_command', strict: true, schema: { type: 'object', additionalProperties: false, properties: { intent: { type: 'string', enum: [...ALLOWED_INTENTS] }, title: { type: ['string','null'] }, assignee_name: { type: ['string','null'] }, task_short_id: { type: ['string','null'] }, subject_query: { type: ['string','null'] }, priority: { type: ['string','null'], enum: ['low','medium','high','critical',null] }, due_date: { type: ['string','null'] }, summary:{type:['string','null']},amount:{type:['number','null']},hours:{type:['number','null']},category_name:{type:['string','null']},description:{type:['string','null']},project_source:{type:['string','null']},service:{type:['string','null']},currency:{type:['string','null']},proposal_status:{type:['string','null']} }, required: ['intent','title','assignee_name','task_short_id','subject_query','priority','due_date','summary','amount','hours','category_name','description','project_source','service','currency','proposal_status'] } } },
     }), signal: AbortSignal.timeout(15_000),
   })
   if (!response.ok) return null
@@ -75,9 +75,154 @@ async function recordEvent(admin:any,event:any,type:string,title:string,descript
   if(result.error&&result.error.code!=='42P01')throw result.error
 }
 
+const formatMoney=(value:number,currency='BRL')=>new Intl.NumberFormat('pt-BR',{style:'currency',currency}).format(value)
+const safeFilename=(value:unknown)=>clean(value||'arquivo',180).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]/g,'-').replace(/-+/g,'-')||'arquivo'
+const hex=(buffer:ArrayBuffer)=>[...new Uint8Array(buffer)].map(value=>value.toString(16).padStart(2,'0')).join('')
+
+async function findClient(admin:any,organizationId:string,query:unknown){
+  const result=await admin.from('clients').select('id,company_name,trade_name,phone,status').eq('organization_id',organizationId).neq('status','archived').limit(1000)
+  if(result.error)throw result.error
+  const raw=clean(query,240),needle=foldText(raw),digits=raw.replace(/\D/g,'')
+  if(!needle)return{kind:'none',items:[]}
+  const rows=result.data||[]
+  const phoneMatches=digits.length>=8?rows.filter((item:any)=>String(item.phone||'').replace(/\D/g,'').endsWith(digits)||digits.endsWith(String(item.phone||'').replace(/\D/g,''))):[]
+  if(phoneMatches.length===1)return{kind:'one',item:phoneMatches[0]}
+  if(phoneMatches.length>1)return{kind:'ambiguous',items:phoneMatches}
+  const exact=rows.filter((item:any)=>[item.company_name,item.trade_name].some(value=>foldText(value)===needle))
+  if(exact.length===1)return{kind:'one',item:exact[0]}
+  if(exact.length>1)return{kind:'ambiguous',items:exact}
+  const compact=needle.replace(/[^a-z0-9]/g,'')
+  const approximate=compact.length>=4?rows.filter((item:any)=>[item.company_name,item.trade_name].some(value=>{const candidate=foldText(value).replace(/[^a-z0-9]/g,'');return candidate.includes(compact)||compact.includes(candidate)})):[]
+  return approximate.length===1?{kind:'one',item:approximate[0]}:approximate.length>1?{kind:'ambiguous',items:approximate}:{kind:'none',items:[]}
+}
+
+const ambiguity=(label:string,items:any[])=>`Encontrei mais de um cliente ${label}: ${items.slice(0,5).map(item=>item.trade_name||item.company_name).join(', ')}. Qual deles?`
+
+async function latestProposal(admin:any,org:string,clientId:string){
+  const result=await admin.from('proposals').select('id,title,status,total_value,currency,opportunity_id,client_id').eq('organization_id',org).eq('client_id',clientId).is('deleted_at',null).order('created_at',{ascending:false}).limit(5)
+  if(result.error)throw result.error
+  const open=(result.data||[]).filter((item:any)=>!['rejected','lost','expired','cancelled'].includes(item.status))
+  return open.length===1?{kind:'one',item:open[0]}:open.length>1?{kind:'ambiguous',items:open}:result.data?.length===1?{kind:'one',item:result.data[0]}:{kind:'none',items:[]}
+}
+
+async function pendingCommercial(admin:any,event:any){
+  const result=await admin.from('commercial_command_confirmations').select('*').eq('organization_id',event.organization_id).eq('team_member_id',event.team_member_id).in('status',['pending','awaiting_context']).gt('expires_at',new Date().toISOString()).order('created_at',{ascending:false}).limit(1).maybeSingle()
+  if(result.error)throw result.error
+  return result.data
+}
+
+async function downloadCommercialMedia(admin:any,event:any,pending:any){
+  const token=Deno.env.get('META_ACCESS_TOKEN')||'',media=pending.payload?.media||{},mediaId=clean(media.id,200)
+  if(!token||!mediaId)throw Object.assign(new Error('Mídia Meta indisponível.'),{code:'MEDIA_CONFIGURATION_MISSING'})
+  const version=Deno.env.get('GRAPH_API_VERSION')||'v23.0'
+  const metadataResponse=await fetch(`https://graph.facebook.com/${version}/${mediaId}`,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(20_000)})
+  const metadata=await metadataResponse.json().catch(()=>({}))
+  if(!metadataResponse.ok||!metadata?.url)throw Object.assign(new Error(clean(metadata?.error?.message)||'Não foi possível obter a mídia do WhatsApp.'),{code:'META_MEDIA_LOOKUP_FAILED'})
+  const mime=clean(metadata.mime_type||media.mime_type,120).toLowerCase(),allowed=new Set(['application/pdf','image/jpeg','image/png','image/webp']),limit=10*1024*1024
+  if(!allowed.has(mime))throw Object.assign(new Error('Formato não permitido. Envie PDF, JPEG, PNG ou WebP.'),{code:'MEDIA_TYPE_NOT_ALLOWED'})
+  if(Number(metadata.file_size||0)>limit)throw Object.assign(new Error('Arquivo acima do limite de 10 MB.'),{code:'MEDIA_TOO_LARGE'})
+  const fileResponse=await fetch(metadata.url,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(30_000)})
+  if(!fileResponse.ok)throw Object.assign(new Error('Não foi possível baixar a mídia do WhatsApp.'),{code:'META_MEDIA_DOWNLOAD_FAILED'})
+  const bytes=await fileResponse.arrayBuffer()
+  if(bytes.byteLength>limit)throw Object.assign(new Error('Arquivo acima do limite de 10 MB.'),{code:'MEDIA_TOO_LARGE'})
+  const digest=hex(await crypto.subtle.digest('SHA-256',bytes))
+  const duplicate=await admin.from('documents').select('id,file_name,storage_bucket,storage_path').eq('organization_id',event.organization_id).eq('content_sha256',digest).maybeSingle()
+  if(duplicate.error)throw duplicate.error
+  if(duplicate.data)return duplicate.data
+  const original=clean(media.filename||metadata.filename||`whatsapp-${mediaId}`,240),filename=safeFilename(original)
+  const proposalSegment=pending.proposal_id||'sem-proposta',path=`${event.organization_id}/clients/${pending.client_id}/proposals/${proposalSegment}/${crypto.randomUUID()}-${filename}`
+  const uploaded=await admin.storage.from('crm-documents').upload(path,new Uint8Array(bytes),{contentType:mime,upsert:false})
+  if(uploaded.error)throw uploaded.error
+  const inserted=await admin.from('documents').insert({organization_id:event.organization_id,client_id:pending.client_id,proposal_id:pending.proposal_id||null,opportunity_id:pending.opportunity_id||null,conversation_id:pending.conversation_id||event.conversation_id,document_type:pending.proposal_id?'proposal':'other',file_name:filename,original_filename:original,storage_bucket:'crm-documents',storage_path:path,mime_type:mime,file_size:bytes.byteLength,content_sha256:digest,uploaded_by:event.team_member?.auth_profile_id||null,source:'whatsapp',source_ref:event.provider_message_id||mediaId,notes:'Recebido pelo WhatsApp interno após confirmação explícita.'}).select('id,file_name,storage_bucket,storage_path').single()
+  if(inserted.error){await admin.storage.from('crm-documents').remove([path]);throw inserted.error}
+  return inserted.data
+}
+
+async function confirmCommercial(admin:any,event:any,pending:any,cancel=false){
+  if(cancel){const result=await admin.from('commercial_command_confirmations').update({status:'cancelled',resolution_command_event_id:event.id}).eq('id',pending.id).in('status',['pending','awaiting_context']);if(result.error)throw result.error;return 'Operação comercial cancelada. Nada foi registrado.'}
+  if(pending.status==='awaiting_context')return 'Ainda preciso saber a qual cliente ou proposta o arquivo deve ser vinculado.'
+  const payload=pending.payload||{}
+  if(pending.action_type==='proposal_create'){
+    let proposal=await admin.from('proposals').select('id,title,status,total_value,currency').eq('organization_id',event.organization_id).eq('source','whatsapp').eq('source_ref',pending.command_event_id).maybeSingle()
+    if(proposal.error)throw proposal.error
+    if(!proposal.data){
+      proposal=await admin.from('proposals').insert({organization_id:event.organization_id,client_id:pending.client_id,opportunity_id:pending.opportunity_id||null,conversation_id:pending.conversation_id||event.conversation_id,title:payload.title,status:payload.status||'draft',sent_at:payload.status==='sent'?payload.proposal_date:null,proposal_date:payload.proposal_date,total_value:payload.amount,currency:payload.currency||'BRL',responsible_id:event.team_member_id,source:'whatsapp',source_ref:pending.command_event_id,lead_source:'whatsapp_internal',notes:payload.notes||null}).select('id,title,status,total_value,currency').single()
+      if(proposal.error)throw proposal.error
+      if(payload.service){const service=await admin.from('proposal_services').insert({organization_id:event.organization_id,proposal_id:proposal.data.id,service_name:payload.service,quantity:1,one_time_value:payload.amount,commercial_responsible_id:event.team_member_id});if(service.error)throw service.error}
+    }
+    if(pending.opportunity_id){const moved=await admin.from('commercial_opportunities').update({stage:'proposal',estimated_value:payload.amount,last_interaction_at:new Date().toISOString()}).eq('organization_id',event.organization_id).eq('id',pending.opportunity_id);if(moved.error)throw moved.error}
+    await recordEvent(admin,event,'proposal_created','Proposta registrada',payload.title,{proposal_id:proposal.data.id,client_id:pending.client_id,amount:payload.amount,currency:payload.currency})
+    if(payload.status==='sent'){const commercial=await admin.from('commercial_events').insert({organization_id:event.organization_id,client_id:pending.client_id,proposal_id:proposal.data.id,event_type:'proposal_sent',title:'Proposta enviada',description:payload.title,new_value:{amount:payload.amount,currency:payload.currency},created_by:event.team_member?.auth_profile_id||null});if(commercial.error)throw commercial.error}
+    const confirmed=await admin.from('commercial_command_confirmations').update({status:'confirmed',proposal_id:proposal.data.id,confirmed_at:new Date().toISOString(),resolution_command_event_id:event.id,payload:{...payload,proposal_id:proposal.data.id}}).eq('id',pending.id).eq('status','pending');if(confirmed.error)throw confirmed.error
+    return `Proposta registrada ✓\n${payload.title} — ${formatMoney(Number(payload.amount),payload.currency||'BRL')}\nPode me enviar o arquivo se quiser anexar.`
+  }
+  if(pending.action_type==='proposal_update'){
+    const status=payload.status,dates=status==='accepted'?{closed_at:new Date().toISOString()}:status==='rejected'?{lost_at:new Date().toISOString(),closed_at:new Date().toISOString()}:status==='sent'?{sent_at:today()}:{}
+    const changed=await admin.from('proposals').update({status,...dates}).eq('organization_id',event.organization_id).eq('id',pending.proposal_id).select('id,title,total_value,currency').single();if(changed.error)throw changed.error
+    if(pending.opportunity_id&&['accepted','rejected'].includes(status)){const opportunity=await admin.from('commercial_opportunities').update({stage:status==='accepted'?'won':'lost',closed_at:new Date().toISOString()}).eq('organization_id',event.organization_id).eq('id',pending.opportunity_id);if(opportunity.error)throw opportunity.error}
+    const commercial=await admin.from('commercial_events').insert({organization_id:event.organization_id,client_id:pending.client_id,proposal_id:pending.proposal_id,event_type:`proposal_${status}`,title:status==='accepted'?'Proposta aceita':status==='rejected'?'Proposta recusada':'Status da proposta alterado',new_value:{status},created_by:event.team_member?.auth_profile_id||null});if(commercial.error)throw commercial.error
+    const confirmed=await admin.from('commercial_command_confirmations').update({status:'confirmed',confirmed_at:new Date().toISOString(),resolution_command_event_id:event.id}).eq('id',pending.id).eq('status','pending');if(confirmed.error)throw confirmed.error
+    return `Proposta ${status==='accepted'?'aceita':status==='rejected'?'recusada':'atualizada'} ✓`
+  }
+  const document=await downloadCommercialMedia(admin,event,pending)
+  const confirmed=await admin.from('commercial_command_confirmations').update({status:'confirmed',confirmed_at:new Date().toISOString(),resolution_command_event_id:event.id,payload:{...payload,document_id:document.id}}).eq('id',pending.id).eq('status','pending');if(confirmed.error)throw confirmed.error
+  await recordEvent(admin,event,'proposal_document_attached','Arquivo comercial vinculado',document.file_name,{document_id:document.id,proposal_id:pending.proposal_id,client_id:pending.client_id})
+  return 'Arquivo salvo e vinculado ✓'
+}
+
 async function execute(admin: any, event: any, command: any) {
   const org = event.organization_id
   if (command.intent === 'HELP') return HELP_TEXT
+  if(command.intent==='RECORD_PROPOSAL'){
+    if(!Number.isFinite(command.amount)||command.amount<=0||!clean(command.subject_query))return 'Preciso do cliente e de um valor válido. Ex.: “anota proposta de site para CAFIFA por R$ 4.500”.'
+    const client=await findClient(admin,org,command.subject_query)
+    if(client.kind==='ambiguous')return ambiguity(clean(command.subject_query),client.items)
+    if(client.kind!=='one')return `Não encontrei o cliente “${clean(command.subject_query)}”. Não criei cadastro nem proposta automaticamente.`
+    const prior=await pendingCommercial(admin,event)
+    if(prior)return{status:'confirmation_required',reply:'Já existe uma operação comercial aguardando confirmação. Responda “sim” ou “não”.'}
+    const opportunities=await admin.from('commercial_opportunities').select('id,stage').eq('organization_id',org).eq('client_id',client.item.id).not('stage','in','(won,lost)').order('updated_at',{ascending:false}).limit(2);if(opportunities.error)throw opportunities.error
+    const opportunity=opportunities.data?.length===1?opportunities.data[0]:null
+    const service=clean(command.service)||null,title=service?service.replace(/^./,letter=>letter.toUpperCase()):'Proposta comercial',currency=command.currency||'BRL'
+    const inserted=await admin.from('commercial_command_confirmations').insert({organization_id:org,command_event_id:event.id,team_member_id:event.team_member_id,action_type:'proposal_create',client_id:client.item.id,opportunity_id:opportunity?.id||null,conversation_id:event.conversation_id,status:'pending',payload:{title,service,amount:command.amount,currency,status:command.proposal_status||'draft',proposal_date:today(),client_name:client.item.trade_name||client.item.company_name}}).select('id').single();if(inserted.error)throw inserted.error
+    return{status:'confirmation_required',reply:`Registrar proposta de ${formatMoney(command.amount,currency)} para ${client.item.trade_name||client.item.company_name}${service?` — ${service}`:''}? Responda “sim” ou “não”.`}
+  }
+  if(command.intent==='UPDATE_PROPOSAL'){
+    const client=await findClient(admin,org,command.subject_query)
+    if(client.kind==='ambiguous')return ambiguity(clean(command.subject_query),client.items)
+    if(client.kind!=='one')return `Não encontrei o cliente “${clean(command.subject_query)}”. Nenhuma proposta foi alterada.`
+    const proposal=await latestProposal(admin,org,client.item.id)
+    if(proposal.kind==='ambiguous')return `Encontrei mais de uma proposta aberta para ${client.item.trade_name||client.item.company_name}. Informe o título da proposta.`
+    if(proposal.kind!=='one')return `Não encontrei proposta para ${client.item.trade_name||client.item.company_name}.`
+    const prior=await pendingCommercial(admin,event)
+    if(prior)return{status:'confirmation_required',reply:'Já existe uma operação comercial aguardando confirmação. Responda “sim” ou “não”.'}
+    const status=command.proposal_status
+    const inserted=await admin.from('commercial_command_confirmations').insert({organization_id:org,command_event_id:event.id,team_member_id:event.team_member_id,action_type:'proposal_update',client_id:client.item.id,opportunity_id:proposal.item.opportunity_id||null,proposal_id:proposal.item.id,conversation_id:event.conversation_id,status:'pending',payload:{status,title:proposal.item.title,client_name:client.item.trade_name||client.item.company_name}}).select('id').single();if(inserted.error)throw inserted.error
+    return{status:'confirmation_required',reply:`Alterar “${proposal.item.title}” de ${client.item.trade_name||client.item.company_name} para ${status==='accepted'?'aceita':status==='rejected'?'recusada':'visualizada'}? Responda “sim” ou “não”.`}
+  }
+  if(command.intent==='ATTACH_PROPOSAL_FILE'){
+    if(command.context_query){
+      const awaiting=await pendingCommercial(admin,event)
+      if(!awaiting||awaiting.action_type!=='proposal_attachment'||awaiting.status!=='awaiting_context')return 'Não há arquivo aguardando contexto.'
+      const client=await findClient(admin,org,command.context_query)
+      if(client.kind==='ambiguous')return ambiguity(clean(command.context_query),client.items)
+      if(client.kind!=='one')return `Não encontrei o cliente “${clean(command.context_query)}”. Informe o nome como aparece no CRM.`
+      const proposal=await latestProposal(admin,org,client.item.id)
+      if(proposal.kind==='ambiguous')return `Encontrei mais de uma proposta aberta para ${client.item.trade_name||client.item.company_name}. Informe o título da proposta.`
+      const updated=await admin.from('commercial_command_confirmations').update({status:'pending',client_id:client.item.id,proposal_id:proposal.kind==='one'?proposal.item.id:null,opportunity_id:proposal.kind==='one'?proposal.item.opportunity_id:null,payload:{...awaiting.payload,client_name:client.item.trade_name||client.item.company_name,proposal_title:proposal.kind==='one'?proposal.item.title:null}}).eq('id',awaiting.id).eq('status','awaiting_context');if(updated.error)throw updated.error
+      return{status:'confirmation_required',reply:`Vincular ${awaiting.payload?.filename||'o arquivo'} a ${proposal.kind==='one'?`“${proposal.item.title}” de `:''}${client.item.trade_name||client.item.company_name}? Responda “sim” ou “não”.`}
+    }
+    const filename=clean(event.media?.filename||`imagem-${event.provider_message_id}`,240)
+    const recent=await admin.from('commercial_command_confirmations').select('client_id,opportunity_id,proposal_id,payload').eq('organization_id',org).eq('team_member_id',event.team_member_id).eq('status','confirmed').not('proposal_id','is',null).gte('confirmed_at',new Date(Date.now()-2*60*60*1000).toISOString()).order('confirmed_at',{ascending:false}).limit(1).maybeSingle();if(recent.error)throw recent.error
+    const inserted=await admin.from('commercial_command_confirmations').insert({organization_id:org,command_event_id:event.id,team_member_id:event.team_member_id,action_type:'proposal_attachment',client_id:recent.data?.client_id||null,opportunity_id:recent.data?.opportunity_id||null,proposal_id:recent.data?.proposal_id||null,conversation_id:event.conversation_id,status:recent.data?.client_id?'pending':'awaiting_context',payload:{media:event.media,filename,provider_message_id:event.provider_message_id,proposal_title:recent.data?.payload?.title||null,client_name:recent.data?.payload?.client_name||null}}).select('id').single();if(inserted.error)throw inserted.error
+    if(!recent.data?.client_id)return{status:'confirmation_required',reply:`Recebi ${filename}. A qual cliente ou proposta devo vincular?`}
+    return{status:'confirmation_required',reply:`Vincular ${filename} à proposta ${recent.data.payload?.title||''} — ${recent.data.payload?.client_name||'cliente identificado'}? Responda “sim” ou “não”.`}
+  }
+  if(['CONFIRM_FINANCIAL','CANCEL_FINANCIAL'].includes(command.intent)){
+    const resolved=await admin.from('commercial_command_confirmations').select('*').eq('organization_id',org).eq('resolution_command_event_id',event.id).maybeSingle();if(resolved.error)throw resolved.error
+    if(resolved.data)return resolved.data.status==='confirmed'?'Operação comercial já confirmada ✓':'Operação comercial cancelada. Nada foi registrado.'
+    const pending=await pendingCommercial(admin,event)
+    if(pending)return confirmCommercial(admin,event,pending,command.intent==='CANCEL_FINANCIAL')
+  }
   if(['ACTIVITY_START','ACTIVITY_COMPLETE','RECORD_DECISION','RECORD_OBSERVATION','RECORD_TIME'].includes(command.intent)){
     const types:any={ACTIVITY_START:'activity_started',ACTIVITY_COMPLETE:'activity_completed',RECORD_DECISION:'client_decision',RECORD_OBSERVATION:'observation_added',RECORD_TIME:'time_recorded'}
     const titles:any={ACTIVITY_START:'Atividade iniciada',ACTIVITY_COMPLETE:'Atividade concluída',RECORD_DECISION:'Decisão registrada',RECORD_OBSERVATION:'Observação registrada',RECORD_TIME:'Horas registradas'}
@@ -219,12 +364,19 @@ async function processEvent(admin: any, event: any) {
   const claimed = await admin.from('task_command_events').update({ status: 'processing', attempts: Number(event.attempts || 0) + 1 }).eq('id', event.id).in('status', ['pending','failed']).select('id').maybeSingle()
   if (claimed.error || !claimed.data) return false
   try {
-    let command: any = parseInternalCommand(event.raw_text)
-    if (command.intent === 'UNKNOWN') command = await aiFallback(event.raw_text) || command
+    let command: any = ['document','image'].includes(event.message_type)&&event.media?.id
+      ? {intent:'ATTACH_PROPOSAL_FILE',confidence:1}
+      : parseInternalCommand(event.raw_text)
+    if(command.intent==='UNKNOWN'){
+      const awaiting=await pendingCommercial(admin,event)
+      command=awaiting?.action_type==='proposal_attachment'&&awaiting.status==='awaiting_context'
+        ? {intent:'ATTACH_PROPOSAL_FILE',context_query:event.raw_text,confidence:1}
+        : await aiFallback(event.raw_text)||command
+    }
     const member = await admin.from('team_members').select('id,name,auth_profile_id').eq('id', event.team_member_id).eq('organization_id', event.organization_id).eq('active', true).single()
     if (member.error) throw Object.assign(new Error('Membro interno não está mais ativo.'), { code: 'TEAM_MEMBER_INACTIVE' })
     event.team_member = member.data
-    await recordEvent(admin,event,'whatsapp_command','Comando interno recebido',event.raw_text,{intent:command.intent})
+    await recordEvent(admin,event,'whatsapp_command','Comando interno recebido',event.raw_text||event.media?.filename||event.message_type,{intent:command.intent,message_type:event.message_type})
     const outcome:any = command.intent === 'UNKNOWN' ? HELP_TEXT : await execute(admin, event, command)
     const reply=typeof outcome==='string'?outcome:outcome.reply
     const providerMessageId = await sendReply(admin, event, reply)
