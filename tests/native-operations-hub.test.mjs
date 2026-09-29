@@ -56,7 +56,7 @@ test('log, confirmação financeira, idempotência, RLS e tenant estão no backe
   const worker=fs.readFileSync('supabase/functions/task-command-worker/index.ts','utf8')
   assert.match(worker,/status:'confirmation_required'/)
   assert.match(worker,/whatsapp-expense-/)
-  assert.match(worker,/idempotency_key:`command:/)
+  assert.match(worker,/idempotencyKey=itemIndex===null\?`command:\$\{event\.id\}:\$\{type\}`:/)
   assert.match(worker,/expense_installments'\)\.upsert/)
 })
 

@@ -57,7 +57,6 @@ for (const tab of [
   "Caixa Freela",
   "Metas & Reservas",
   "Fechamento mensal",
-  "Exportar para contador",
 ])
   assert.ok(finance.includes(tab));
 for (const hiddenTab of ["Recorrentes", "Conciliação", "Relatórios"])

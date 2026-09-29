@@ -20,8 +20,10 @@ for (const [pageId, path] of [
   ['whatsapp', '/whatsapp'],
 ]) assert.match(routes, new RegExp(`${JSON.stringify(pageId).replace(/"/g, '"?')}\\s*:\\s*"${path.replace(/\//g, '\\/')}"`), `rota ${pageId} → ${path}`)
 
-// App renderiza essas seções pelo mesmo componente (nada duplicado).
-assert.match(app, /const WHATSAPP_DOMAIN_SECTIONS = \{[\s\S]*?contacts: "contacts"[\s\S]*?inbox: "inbox"[\s\S]*?automations: "automations"[\s\S]*?templates: "templates"[\s\S]*?whatsapp: "channel"[\s\S]*?collections: "collections"[\s\S]*?\}/)
+// Comunicação permanece no WhatsApp; Cobranças é uma área própria do Financeiro.
+assert.match(app, /const WHATSAPP_DOMAIN_SECTIONS = \{[\s\S]*?contacts: "contacts"[\s\S]*?inbox: "inbox"[\s\S]*?automations: "automations"[\s\S]*?templates: "templates"[\s\S]*?whatsapp: "channel"[\s\S]*?\}/)
+assert.doesNotMatch(app.slice(app.indexOf('const WHATSAPP_DOMAIN_SECTIONS'),app.indexOf('function buildDateValue')),/collections:/)
+assert.match(app, /activePage === "collections"[\s\S]*?<FinancialCollectionsPage/)
 assert.match(app, /whatsappDomainSection && \(\s*<WhatsAppPage\s+section=\{whatsappDomainSection\}/)
 assert.equal((app.match(/<WhatsAppPage\b/g) || []).length, 1, 'WhatsAppPage é montado uma única vez no App')
 
@@ -70,8 +72,8 @@ assert.doesNotMatch(usage, /Contadores reais do MugoZap/)
 // 8) /financeiro/cobrancas e /financeiro/fluxo-de-caixa têm destino no App.
 // ---------------------------------------------------------------------------
 assert.match(app, /activePage === "cash-flow" &&[\s\S]*?<CashFlowPage \/>/)
-// collections é servido pela seção de comunicação (não há tela órfã).
-assert.match(app, /collections: "collections"/)
+// collections é servido pela área financeira própria (não há tela órfã).
+assert.match(app, /activePage === "collections" &&[\s\S]*?<FinancialCollectionsPage/)
 
 // ---------------------------------------------------------------------------
 // 10) Automação intacta — editor e núcleo não foram tocados por esta entrega.

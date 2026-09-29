@@ -83,16 +83,24 @@ test('qualificação explica descoberta, suporte e lead qualificado',()=>{
   assert.equal(qualificationClassification({service_interest:['SUPPORT']}),'support')
   assert.equal(qualificationClassification({qualified:true,needs_human:true}),'qualified')
 })
-test('webhook cria contato/conversa e roteia IA comercial sem competir com automação',()=>{
+test('webhook cria contato/conversa e roteia TODO contato externo em modo bot para a IA comercial, sem gate por classificação',()=>{
   const webhook=fs.readFileSync('supabase/functions/whatsapp-webhook/index.ts','utf8')
   assert.match(webhook,/whatsapp_contacts'\)\.upsert/)
   assert.match(webhook,/whatsapp_conversations'\)\.upsert/)
   assert.match(webhook,/commercial_ai_events/)
   assert.match(webhook,/ai_mode === 'controlled_auto'[\s\S]+return true[\s\S]+automation_events/)
   assert.match(webhook,/classifyConversationKind/)
-  assert.match(webhook,/\['support','finance','existing_client'\]/)
+  // A classificação NUNCA decide se o evento é criado — support/finance/existing_client/other/partnership
+  // são só contexto (leadKind) recalculado pelo worker; o gate é só ai_mode === 'controlled_auto'.
+  assert.doesNotMatch(webhook,/ai_mode === 'controlled_auto' && !\['support','finance','existing_client'\]/)
+  assert.match(webhook,/if \(commercial\.data\?\.ai_mode === 'controlled_auto'\) \{\s*const queuedCommercial/)
   assert.match(webhook,/commercial_classification/)
   assert.match(webhook,/priorContact\.data\?\.source \|\| attribution\.source/)
+  // Humano assumiu ou automação pausada tem prioridade absoluta — nem IA nem automação genérica agem.
+  assert.match(webhook,/const humanControlled = conversationResult\.data\.attendance_mode === 'human' \|\| conversationResult\.data\.automation_paused === true/)
+  const humanCheckIdx=webhook.indexOf('const humanControlled')
+  const gateIdx=webhook.indexOf("commercial.data?.ai_mode === 'controlled_auto'")
+  assert.ok(humanCheckIdx>-1&&gateIdx>-1&&humanCheckIdx<gateIdx,'checagem de humano deve vir antes do roteamento comercial')
 })
 test('worker deduplica cliente, cria oportunidade, qualificação, resumo e tarefa',()=>{
   const worker=fs.readFileSync('supabase/functions/commercial-ai-worker/index.ts','utf8')
@@ -111,7 +119,9 @@ test('worker deduplica cliente, cria oportunidade, qualificação, resumo e tare
 test('handoff pausa IA, atribui ID real e notifica por outbox',()=>{
   const worker=fs.readFileSync('supabase/functions/commercial-ai-worker/index.ts','utf8')
   assert.match(worker,/status:'pending',attendance_mode:'human',automation_paused:true,assigned_to:commercialOwnerProfileId\|\|null,assigned_team_member_id:settingsResult\.data\.commercial_owner_id/)
-  assert.match(worker,/commercial_notification_outbox/)
+  assert.match(worker,/team_notification_outbox/)
+  assert.match(worker,/notification_type:'qualified_lead_handoff'/)
+  assert.doesNotMatch(worker,/from\('commercial_notification_outbox'\)/)
   assert.doesNotMatch(worker,/5511973510549|5511972769605/)
 })
 test('notificação usa primário, retry e fallback sem envio duplo confirmado',()=>{
