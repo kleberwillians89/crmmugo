@@ -1,7 +1,8 @@
 // Atendimento comercial estruturado. Executa fora do webhook e só em organizações opt-in.
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {brazilianPhoneCandidates} from '../_shared/internalCommandCore.js'
-import {COMMERCIAL_INTENTS,COMMERCIAL_SYSTEM_PROMPT,assessCommercialTemperature,buildCommercialSummary,classifyConversationKind,defaultCommercialDecision,enforceCommercialHandoffPolicy,enforceCommercialResponsePolicy,hasMinimumCommercialContext,qualificationClassification,validateCommercialDecision} from '../_shared/commercialAgentCore.js'
+import {getOperationalWindow} from '../_shared/operationalCalendar.js'
+import {COMMERCIAL_INTENTS,COMMERCIAL_LEAD_KINDS,COMMERCIAL_SYSTEM_PROMPT,assessCommercialTemperature,buildCommercialSummary,classifyConversationKind,defaultCommercialDecision,enforceCommercialHandoffPolicy,enforceCommercialResponsePolicy,hasMinimumCommercialContext,qualificationClassification,validateCommercialDecision} from '../_shared/commercialAgentCore.js'
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}})
 const clean=(value:unknown,max=1000)=>String(value??'').trim().slice(0,max)
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
@@ -15,10 +16,16 @@ const meaningfulPatch=(value:any)=>Object.fromEntries(Object.entries(value||{}).
 const mergeInterests=(...values:any[])=>{const merged=safeArray(values.flat(),new Set(COMMERCIAL_INTENTS));return merged.length>1?merged.filter(item=>item!=='OTHER'):merged}
 const textContent=(body:any)=>body?.output_text||(body?.output||[]).flatMap((item:any)=>item?.content||[]).find((item:any)=>item?.type==='output_text')?.text
 
+async function dispatchTeamWorker(){
+  const url=Deno.env.get('SUPABASE_URL')||'',key=Deno.env.get('TEAM_NOTIFICATION_WORKER_KEY')||'',service=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')||''
+  if(!url||!key||!service)return
+  await fetch(`${url}/functions/v1/team-notification-worker`,{method:'POST',headers:{Authorization:`Bearer ${service}`,'Content-Type':'application/json','X-Team-Notification-Worker-Key':key},body:JSON.stringify({source:'commercial-handoff'}),signal:AbortSignal.timeout(8_000)}).catch(()=>null)
+}
+
 async function askOpenAI(event:any,messages:any[],qualification:any,opportunity:any,client:any,settings:any){
   const key=Deno.env.get('OPENAI_API_KEY')||'',model=Deno.env.get('COMMERCIAL_AI_MODEL')||Deno.env.get('OPENAI_MODEL')||''
   if(!key||!model)return null
-  const schema={type:'object',additionalProperties:false,properties:{intents:{type:'array',items:{type:'string',enum:COMMERCIAL_INTENTS}},response:{type:'string'},contact_updates:{type:'object',additionalProperties:false,properties:{company_name:{type:['string','null']},contact_name:{type:['string','null']},email:{type:['string','null']},contact_role:{type:['string','null']}},required:['company_name','contact_name','email','contact_role']},opportunity_updates:{type:'object',additionalProperties:false,properties:{stage:{type:['string','null']},main_problem:{type:['string','null']},timeline:{type:['string','null']},urgency:{type:['string','null']},budget:{type:['number','null']},estimated_value:{type:['number','null']},next_action:{type:['string','null']},next_action_at:{type:['string','null']},service_interests:{type:'array',items:{type:'string',enum:COMMERCIAL_INTENTS}}},required:['stage','main_problem','timeline','urgency','budget','estimated_value','next_action','next_action_at','service_interests']},qualification_updates:{type:'object',additionalProperties:false,properties:{current_situation:{type:['string','null']},main_problem:{type:['string','null']},objective:{type:['string','null']},urgency:{type:['string','null']},budget:{type:['number','null']},decision_maker:{type:['boolean','null']},timeline:{type:['string','null']},qualified:{type:'boolean'},needs_human:{type:'boolean'},next_action:{type:['string','null']},reasons:{type:'array',items:{type:'string'}},missing_fields:{type:'array',items:{type:'string'}}},required:['current_situation','main_problem','objective','urgency','budget','decision_maker','timeline','qualified','needs_human','next_action','reasons','missing_fields']},summary:{type:'string'},create_task:{type:'boolean'},task:{type:['object','null'],additionalProperties:false,properties:{title:{type:'string'},priority:{type:'string',enum:['low','medium','high','critical']},due_date:{type:['string','null']},notes:{type:['string','null']}},required:['title','priority','due_date','notes']},handoff:{type:'boolean'},handoff_reason:{type:['string','null']},confidence:{type:'number',minimum:0,maximum:1}},required:['intents','response','contact_updates','opportunity_updates','qualification_updates','summary','create_task','task','handoff','handoff_reason','confidence']}
+  const schema={type:'object',additionalProperties:false,properties:{conversation_kind:{type:['string','null'],enum:[...COMMERCIAL_LEAD_KINDS,null]},intents:{type:'array',items:{type:'string',enum:COMMERCIAL_INTENTS}},response:{type:'string'},contact_updates:{type:'object',additionalProperties:false,properties:{company_name:{type:['string','null']},contact_name:{type:['string','null']},email:{type:['string','null']},contact_role:{type:['string','null']}},required:['company_name','contact_name','email','contact_role']},opportunity_updates:{type:'object',additionalProperties:false,properties:{stage:{type:['string','null']},main_problem:{type:['string','null']},timeline:{type:['string','null']},urgency:{type:['string','null']},budget:{type:['number','null']},estimated_value:{type:['number','null']},next_action:{type:['string','null']},next_action_at:{type:['string','null']},service_interests:{type:'array',items:{type:'string',enum:COMMERCIAL_INTENTS}}},required:['stage','main_problem','timeline','urgency','budget','estimated_value','next_action','next_action_at','service_interests']},qualification_updates:{type:'object',additionalProperties:false,properties:{current_situation:{type:['string','null']},main_problem:{type:['string','null']},objective:{type:['string','null']},urgency:{type:['string','null']},budget:{type:['number','null']},decision_maker:{type:['boolean','null']},timeline:{type:['string','null']},qualified:{type:'boolean'},needs_human:{type:'boolean'},next_action:{type:['string','null']},reasons:{type:'array',items:{type:'string'}},missing_fields:{type:'array',items:{type:'string'}}},required:['current_situation','main_problem','objective','urgency','budget','decision_maker','timeline','qualified','needs_human','next_action','reasons','missing_fields']},summary:{type:'string'},create_task:{type:'boolean'},task:{type:['object','null'],additionalProperties:false,properties:{title:{type:'string'},priority:{type:'string',enum:['low','medium','high','critical']},due_date:{type:['string','null']},notes:{type:['string','null']}},required:['title','priority','due_date','notes']},handoff:{type:'boolean'},handoff_reason:{type:['string','null']},confidence:{type:'number',minimum:0,maximum:1}},required:['conversation_kind','intents','response','contact_updates','opportunity_updates','qualification_updates','summary','create_task','task','handoff','handoff_reason','confidence']}
   const context={client:{company_name:client?.company_name||null,contact_name:client?.contact_name||null,contact_role:client?.contact_role||null},qualification:qualification||{},opportunity:opportunity||{},messages:messages.map(row=>({direction:row.direction,text:clean(row.text_content,1000),at:row.created_at})),authorized_pricing:settings.authorized_pricing||{}}
   const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model,input:[{role:'system',content:`${COMMERCIAL_SYSTEM_PROMPT}\n${clean(settings.prompt_override,3000)}`},{role:'user',content:JSON.stringify(context)}],text:{format:{type:'json_schema',name:'commercial_decision',strict:true,schema}}}),signal:AbortSignal.timeout(25_000)})
   if(!response.ok)throw Object.assign(new Error(`OpenAI respondeu ${response.status}.`),{code:response.status===429||response.status>=500?'AI_TEMPORARY_ERROR':'AI_REQUEST_FAILED'})
@@ -40,7 +47,10 @@ async function resolveClient(admin:any,event:any,contact:any){
   if(contact.client_id){const current=await admin.from('clients').select('*').eq('id',contact.client_id).eq('organization_id',event.organization_id).single();if(!current.error)return{client:current.data,created:false}}
   const phones=brazilianPhoneCandidates(contact.wa_id);const existing=await admin.from('clients').select('*').eq('organization_id',event.organization_id).in('phone',phones).neq('status','archived').limit(2);if(existing.error)throw existing.error
   let client=existing.data?.[0],created=false
-  if(!client){const display=clean(contact.display_name||contact.profile_name,240)||`Lead WhatsApp • ${contact.wa_id.slice(-4)}`;const inserted=await admin.from('clients').insert({organization_id:event.organization_id,company_name:display,contact_name:display,phone:contact.wa_id,lead_source:contact.source||'WHATSAPP_ORGANIC',status:'lead'}).select('*').single();if(inserted.error)throw inserted.error;client=inserted.data;created=true}
+  // display_name/profile_name do WhatsApp não é evidência de nome pessoal (pode ser empresa, marca,
+  // apelido ou nome do aparelho) — vira só um rótulo de company_name até a pessoa se identificar de
+  // verdade na conversa. contact_name fica null até então (nunca "Oi, Roove!" a partir do display_name).
+  if(!client){const display=clean(contact.display_name||contact.profile_name,240)||`Lead WhatsApp • ${contact.wa_id.slice(-4)}`;const inserted=await admin.from('clients').insert({organization_id:event.organization_id,company_name:display,contact_name:null,phone:contact.wa_id,lead_source:contact.source||'WHATSAPP_ORGANIC',status:'lead'}).select('*').single();if(inserted.error)throw inserted.error;client=inserted.data;created=true}
   await admin.from('whatsapp_contacts').update({client_id:client.id}).eq('id',contact.id).eq('organization_id',event.organization_id)
   return{client,created}
 }
@@ -57,18 +67,56 @@ async function processEvent(admin:any,event:any){
       await admin.from('commercial_ai_events').update({status:'skipped',decision:{reason:'commercial_ai_disabled'},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id).eq('organization_id',event.organization_id)
       return true
     }
+    // Prioridade absoluta do humano: se alguém já assumiu (ou pausou a automação) entre o insert do
+    // evento e este processamento, a IA nunca responde — evita corrida bot-vs-humano.
+    if(conversationResult.data.attendance_mode==='human'||conversationResult.data.automation_paused===true){
+      await admin.from('commercial_ai_events').update({status:'skipped',decision:{reason:'human_attendance_active'},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id).eq('organization_id',event.organization_id)
+      return true
+    }
 
     const conversation=conversationResult.data,contact=conversation.whatsapp_contacts
     const resolvedClient=await resolveClient(admin,event,contact);let client=resolvedClient.client
-    let commercialOwnerProfileId=null
+    let commercialOwnerProfileId=null,commercialOwnerName=null
     if(settingsResult.data.commercial_owner_id){
-      const owner=await admin.from('team_members').select('auth_profile_id').eq('id',settingsResult.data.commercial_owner_id).eq('organization_id',event.organization_id).maybeSingle()
+      const owner=await admin.from('team_members').select('auth_profile_id,name').eq('id',settingsResult.data.commercial_owner_id).eq('organization_id',event.organization_id).eq('active',true).maybeSingle()
       if(owner.error)throw owner.error
       commercialOwnerProfileId=owner.data?.auth_profile_id||null
+      commercialOwnerName=clean(owner.data?.name,120)||null
     }
+
+    // A mensagem ATUAL decide se uma oportunidade pode nascer — nunca o histórico antigo (que pode ter
+    // SITE/ECOMMERCE de uma demanda já encerrada). Por isso o histórico/inbound é buscado e a
+    // classificação determinística roda ANTES de qualquer decisão de criar commercial_opportunity.
+    const history=await admin.from('whatsapp_messages').select('direction,text_content,created_at').eq('conversation_id',event.conversation_id).order('created_at',{ascending:false}).limit(14)
+    if(history.error)throw history.error
+    const messages=(history.data||[]).reverse(),inbound=messages.filter((row:any)=>row.direction==='in').at(-1)?.text_content||''
 
     let opportunity=(await admin.from('commercial_opportunities').select('*').eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).not('stage','in','(won,lost)').maybeSingle()).data
     if(!opportunity){
+      const currentKind=classifyConversationKind(inbound,{hasExistingClient:!resolvedClient.created,previousKind:null})
+      // Cliente já existente + mensagem atual de suporte/financeiro/rotina sem demanda nova clara NUNCA
+      // vira oportunidade comercial — só "quero um novo site/tráfego/projeto" (new_business) pode criar
+      // uma. Faz handoff humano com a infraestrutura já existente (whatsapp_conversations +
+      // team_notification_outbox + crm_tasks) — nenhuma tabela/fluxo novo.
+      if(!resolvedClient.created&&['support','finance','existing_client'].includes(currentKind.kind)){
+        const now=new Date().toISOString(),handoffRef=`commercial-support-handoff:${event.conversation_id}:${event.id}`
+        const handoffUpdates=await admin.from('whatsapp_conversations').update({status:'pending',attendance_mode:'human',automation_paused:true,assigned_to:commercialOwnerProfileId||null,assigned_team_member_id:settingsResult.data.commercial_owner_id||null,handoff_reason:`existing_client_${currentKind.kind}`,handoff_at:now}).eq('id',event.conversation_id).eq('organization_id',event.organization_id)
+        if(handoffUpdates.error)throw handoffUpdates.error
+        const audit=await admin.from('whatsapp_conversation_events').insert({organization_id:event.organization_id,connection_id:event.connection_id,conversation_id:event.conversation_id,event_type:'commercial_handoff',details:{kind:currentKind.kind,reason:currentKind.reason,client_id:client.id,opportunity_id:null}})
+        if(audit.error)throw audit.error
+        if(settingsResult.data.commercial_owner_id){
+          const leadName=client.contact_name||client.company_name
+          const notify=await admin.from('team_notification_outbox').upsert({organization_id:event.organization_id,team_member_id:settingsResult.data.commercial_owner_id,notification_type:'operational_alert',idempotency_key:handoffRef,payload:{kind:`existing_client_${currentKind.kind}`,conversation_id:event.conversation_id,client_id:client.id,name:leadName,company:client.company_name,message:clean(inbound,500),lead_phone:contact.wa_id,candidate_items:[{index:1,type:'conversation',conversation_id:event.conversation_id,label:leadName}]}},{onConflict:'organization_id,idempotency_key',ignoreDuplicates:true})
+          if(notify.error)throw notify.error
+          await dispatchTeamWorker()
+        }
+        const task=await admin.from('crm_tasks').upsert({organization_id:event.organization_id,title:`${currentKind.kind==='finance'?'Financeiro':'Suporte'} — ${client.contact_name||client.company_name}`,status:'pending',priority:'medium',due_date:today(),assigned_to:settingsResult.data.commercial_owner_id||null,client_id:client.id,task_type:'general',source:'automation',source_ref:handoffRef,notes:`Mensagem: ${clean(inbound,500)}\nTelefone: +${contact.wa_id}\nClassificação: ${currentKind.kind}`,metadata:{origin:'automation',sync_external:true,existing_client_handoff:true,kind:currentKind.kind}},{onConflict:'organization_id,source_ref'})
+        if(task.error)throw task.error
+        const response='Certo. Vou encaminhar o contexto desta conversa para a pessoa responsável continuar com você.'
+        const providerMessageId=await sendMessage(admin,event,conversation,response)
+        await admin.from('commercial_ai_events').update({status:'completed',decision:{reason:'existing_client_non_commercial',kind:currentKind.kind,provider_message_id:providerMessageId},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id)
+        return true
+      }
       const utm=contact.utm||{}
       const created=await admin.from('commercial_opportunities').insert({organization_id:event.organization_id,client_id:client.id,conversation_id:event.conversation_id,assigned_to:settingsResult.data.commercial_owner_id||null,name:client.company_name,source:contact.source||client.lead_source||'WHATSAPP_ORGANIC',campaign:contact.campaign||null,ad_name:contact.ad_name||null,utm_source:utm.utm_source||null,utm_medium:utm.utm_medium||null,utm_campaign:utm.utm_campaign||null,utm_content:utm.utm_content||null,stage:'in_service',last_interaction_at:new Date().toISOString()}).select('*').single()
       if(created.error)throw created.error
@@ -76,17 +124,23 @@ async function processEvent(admin:any,event:any){
       await admin.from('whatsapp_conversations').update({opportunity_id:opportunity.id}).eq('id',event.conversation_id).eq('organization_id',event.organization_id)
     }
 
-    const [qResult,history]=await Promise.all([
-      admin.from('commercial_qualifications').select('*').eq('opportunity_id',opportunity.id).maybeSingle(),
-      admin.from('whatsapp_messages').select('direction,text_content,created_at').eq('conversation_id',event.conversation_id).order('created_at',{ascending:false}).limit(14),
-    ])
-    if(qResult.error||history.error)throw qResult.error||history.error
-    const qualification=qResult.data||{},messages=(history.data||[]).reverse(),inbound=messages.filter((row:any)=>row.direction==='in').at(-1)?.text_content||''
+    const qResult=await admin.from('commercial_qualifications').select('*').eq('opportunity_id',opportunity.id).maybeSingle()
+    if(qResult.error)throw qResult.error
+    const qualification=qResult.data||{}
     const decisionContext={qualification,opportunity,client,messages,authorized_pricing:settingsResult.data.authorized_pricing||{}}
     let decision=await askOpenAI(event,messages,qualification,opportunity,client,settingsResult.data).catch(()=>null)||defaultCommercialDecision(inbound,decisionContext)
     decision=validateCommercialDecision(decision)||defaultCommercialDecision(inbound,decisionContext)
     decision=enforceCommercialHandoffPolicy(decision,inbound,decisionContext)
     decision=enforceCommercialResponsePolicy(decision,inbound,decisionContext)
+    // Segunda checagem, agora que a chamada à OpenAI (que pode levar alguns segundos) já terminou —
+    // fecha a janela de corrida caso um humano assuma DURANTE o processamento, antes de qualquer
+    // persistência ou envio acontecer.
+    const recheck=await admin.from('whatsapp_conversations').select('attendance_mode,automation_paused').eq('id',event.conversation_id).eq('organization_id',event.organization_id).single()
+    if(recheck.error)throw recheck.error
+    if(recheck.data.attendance_mode==='human'||recheck.data.automation_paused===true){
+      await admin.from('commercial_ai_events').update({status:'skipped',decision:{reason:'human_attendance_active'},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id).eq('organization_id',event.organization_id)
+      return true
+    }
 
     const contactPatch:any={}
     for(const key of ['contact_name','email'])if(decision.contact_updates[key])contactPatch[key]=clean(decision.contact_updates[key],240)
@@ -107,7 +161,12 @@ async function processEvent(admin:any,event:any){
 
     const qualificationPatch=meaningfulPatch(decision.qualification_updates)
     const interests=mergeInterests(qualification.service_interest,opportunity.service_interests,decision.intents,decision.opportunity_updates?.service_interests)
-    const leadKind=classifyConversationKind(inbound,{hasExistingClient:!resolvedClient.created,previousKind:opportunity.lead_kind})
+    // A IA pode propor conversation_kind a partir do histórico completo — só é aceito quando vem do
+    // enum conhecido (já validado em validateCommercialDecision); sem isso, cai no classificador
+    // determinístico, que também serve de base quando a OpenAI está indisponível.
+    const leadKind=COMMERCIAL_LEAD_KINDS.includes(decision.conversation_kind)
+      ?{kind:decision.conversation_kind,reason:'Classificado pela IA a partir do histórico da conversa.'}
+      :classifyConversationKind(inbound,{hasExistingClient:!resolvedClient.created,previousKind:opportunity.lead_kind})
     const q:any={...qualification,...qualificationPatch,organization_id:event.organization_id,opportunity_id:opportunity.id,company_name:decision.contact_updates.company_name||qualification.company_name||null,contact_name:decision.contact_updates.contact_name||qualification.contact_name||client.contact_name,service_interest:interests,qualified:Boolean(qualification.qualified||qualificationPatch.qualified),reasons:safeArray(qualificationPatch.reasons||qualification.reasons),missing_fields:safeArray(qualificationPatch.missing_fields||qualification.missing_fields)}
     const assessedTemperature=assessCommercialTemperature({text:inbound,interests,qualification:q,leadKind:leadKind.kind})
     const temperature=(temperatureRank.get(opportunity.temperature)??-1)>(temperatureRank.get(assessedTemperature.temperature)??-1)?{temperature:opportunity.temperature,reason:opportunity.temperature_reason||assessedTemperature.reason}:assessedTemperature
@@ -139,11 +198,18 @@ async function processEvent(admin:any,event:any){
 
     if(decision.handoff){
       const now=new Date().toISOString(),handoffRef=`commercial-handoff:${opportunity.id}`
-      const handoffUpdates=await admin.from('whatsapp_conversations').update({status:'pending',attendance_mode:'human',automation_paused:true,assigned_to:commercialOwnerProfileId||null,assigned_team_member_id:settingsResult.data.commercial_owner_id||null,handoff_reason:decision.handoff_reason||'qualified_commercial_lead',handoff_at:now,assigned_at:settingsResult.data.commercial_owner_id?now:null}).eq('id',event.conversation_id).eq('organization_id',event.organization_id);if(handoffUpdates.error)throw handoffUpdates.error
+      const operationalWindow=await getOperationalWindow(admin,event.organization_id)
+      const handoffUpdates=await admin.from('whatsapp_conversations').update({status:'pending',attendance_mode:'human',automation_paused:true,assigned_to:commercialOwnerProfileId||null,assigned_team_member_id:settingsResult.data.commercial_owner_id||null,handoff_reason:decision.handoff_reason||'qualified_commercial_lead',handoff_at:now,handoff_sla_started_at:operationalWindow.open?now:null,assigned_at:settingsResult.data.commercial_owner_id?now:null}).eq('id',event.conversation_id).eq('organization_id',event.organization_id);if(handoffUpdates.error)throw handoffUpdates.error
       const audit=await admin.from('whatsapp_conversation_events').insert({organization_id:event.organization_id,connection_id:event.connection_id,conversation_id:event.conversation_id,event_type:'commercial_handoff',details:{opportunity_id:opportunity.id,reason:decision.handoff_reason,temperature:temperature.temperature}});if(audit.error)throw audit.error
       const taskTitle=`COMERCIAL — Falar com ${client.contact_name||client.company_name}${client.contact_name&&client.company_name?` — ${client.company_name}`:''}`
       const task=await admin.from('crm_tasks').upsert({organization_id:event.organization_id,title:taskTitle,status:'pending',priority:q.urgency==='high'?'high':'medium',due_date:today(),assigned_to:settingsResult.data.commercial_owner_id||null,client_id:client.id,opportunity_id:opportunity.id,task_type:'commercial',source:'automation',source_ref:handoffRef,notes:[`Interesse: ${interests.join(' + ')}`,`Temperatura: ${temperature.temperature} — ${temperature.reason}`,`Telefone: +${contact.wa_id}`,`Origem: ${opportunity.source}`,`Resumo: ${summary}`,`Próxima ação: ${nextAction||'Realizar diagnóstico comercial'}`].join('\n'),metadata:{origin:'automation',sync_external:true,commercial_handoff:true}},{onConflict:'organization_id,source_ref'}).select('id').maybeSingle();if(task.error)throw task.error
-      const notify=await admin.from('commercial_notification_outbox').insert({organization_id:event.organization_id,opportunity_id:opportunity.id,conversation_id:event.conversation_id,idempotency_key:handoffRef,payload:{name:client.contact_name||client.company_name,company:client.company_name,interests,source:opportunity.source,temperature:temperature.temperature,urgency:q.urgency||'Não informada',need:ou.main_problem||q.main_problem||q.objective,summary,next_action:nextAction||'Entender escopo e preparar próximo passo',lead_phone:contact.wa_id}});if(notify.error&&notify.error.code!=='23505')throw notify.error
+      if(settingsResult.data.commercial_owner_id){
+        const leadName=client.contact_name||client.company_name
+        const notify=await admin.from('team_notification_outbox').upsert({organization_id:event.organization_id,team_member_id:settingsResult.data.commercial_owner_id,notification_type:'qualified_lead_handoff',idempotency_key:handoffRef,payload:{kind:'qualified_lead_handoff',conversation_id:event.conversation_id,opportunity_id:opportunity.id,name:leadName,company:client.company_name,interests,source:opportunity.source,temperature:temperature.temperature,urgency:q.urgency||'Não informada',need:ou.main_problem||q.main_problem||q.objective,summary,next_action:nextAction||'Entender escopo e preparar próximo passo',lead_phone:contact.wa_id,candidate_items:[{index:1,type:'conversation',conversation_id:event.conversation_id,label:leadName}] }},{onConflict:'organization_id,idempotency_key',ignoreDuplicates:true});if(notify.error)throw notify.error
+        await dispatchTeamWorker()
+      }
+      if(!operationalWindow.open)decision.response='Recebi seu pedido e já deixei tudo registrado para o nosso time. Estamos fora do horário de atendimento e uma pessoa continua com você por aqui no próximo período útil.'
+      else if(settingsResult.data.commercial_owner_id&&commercialOwnerName)decision.response=`Perfeito. ${commercialOwnerName.split(' ')[0]}, do nosso time, continua com você por aqui.`
     }
 
     const providerMessageId=await sendMessage(admin,event,conversation,decision.response)

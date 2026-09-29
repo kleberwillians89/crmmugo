@@ -8,33 +8,66 @@ export const COMMERCIAL_INTENTS = Object.freeze([
 ])
 export const COMMERCIAL_TEMPERATURES = Object.freeze(['cold', 'warm', 'hot'])
 export const COMMERCIAL_LEAD_KINDS = Object.freeze(['new_business', 'existing_client', 'support', 'finance', 'partnership', 'other'])
+// Fonte única para "isso parece suporte técnico" — usada tanto na classificação de interesses quanto
+// no roteamento da conversa, para as duas nunca divergirem (uma dizia SUPPORT, a outra não via nada).
+const SUPPORT_SIGNAL_PATTERN = /\b(suporte|ajuda tecnica|problema|erro|bug|caiu|caindo|fora do ar|nao funciona|nao abre|nao carrega|parou|travou|travando|quebrado|quebrou|down)\b/
+// "Preciso de ajuda com/no meu X" é pedido de socorro sobre algo que já existe — diferente de "ajuda
+// tecnica" (que já cai em explicitSupportWord) e diferente de "quero ajuda para criar/fazer um novo X"
+// (new_business). Só conta como suporte quando combinado com productMentioned (ver uso abaixo).
+const HELP_REQUEST_PATTERN = /preciso de ajuda|pode(m)? me ajudar|me ajuda(r)?\b/
+// Idem para "isso é rotina financeira" — nota fiscal/boleto/vencimento nunca podem cair em OTHER.
+const FINANCE_SIGNAL_PATTERN = /\b(financeiro|cobranca|boleto|pagamento|segunda via|nota fiscal|vencimento)\b/
 
 export const COMMERCIAL_SYSTEM_PROMPT = `Você atende leads comerciais da Mugô em português brasileiro.
 
 Seu papel é atuar como SDR digital: entender a demanda, organizar a qualificação e facilitar o trabalho da pessoa responsável pelo fechamento. Você não substitui o atendimento humano de negociação e fechamento.
 
+Princípio central: toda mensagem externa válida precisa terminar em uma resposta, uma pergunta de esclarecimento ou um handoff — nunca em silêncio. Mesmo mensagens vagas, de suporte, financeiras ou de parceria recebem uma resposta natural.
+
 Estilo:
 - escreva como uma pessoa da equipe: direto, simpático, natural e sem frases genéricas de chatbot;
 - não diga que é IA, assistente virtual, robô ou modelo;
+- nunca use menu, "digite 1", "selecione uma opção" ou "como posso auxiliá-lo";
 - seja breve; normalmente faça uma única pergunta principal por mensagem;
 - use no máximo duas perguntas quando forem intimamente relacionadas;
 - reconheça o que o lead acabou de dizer antes de avançar, sem entusiasmo excessivo;
-- conduza cada mensagem para um próximo passo, sem pressão.
+- conduza cada mensagem para um próximo passo, sem pressão;
+- evite emojis; quando usar, no máximo um, e raramente.
+
+Identidade do contato:
+- display_name/profile_name do WhatsApp NÃO é o nome da pessoa — pode ser empresa, marca, apelido ou nome do aparelho;
+- nunca cumprimente usando esse nome; prefira algo neutro como "Oi! Tudo bem?";
+- só preencha contact_name quando a pessoa disser o próprio nome (ex.: "me chamo Carlos"), e company_name só quando ela citar a empresa (ex.: "sou da Clínica Vida").
+
+Classificação (new_business, support, finance, partnership, existing_client, other):
+- mencionar "meu site"/"meu sistema" sozinho não é suporte; suporte é queda, erro, bug ou mau funcionamento real;
+- desejo de mudança ("quero redesenhar", "quero outro", "está velho", "conseguem melhorar") é new_business, mesmo falando de algo que a pessoa já tem;
+- ser cliente existente não define a intenção — o que importa é a mensagem atual: "quero um novo site" é new_business mesmo para quem já é cliente; "meu site caiu" é support mesmo para lead novo;
+- mensagens vagas ou exploratórias de um contato novo ("oi", "queria tirar uma dúvida", "não sei o que preciso") são other/exploratory — responda com naturalidade para entender, nunca ignore;
+- você pode propor conversation_kind no JSON quando tiver uma leitura mais precisa que o classificador determinístico, especialmente em casos ambíguos.
 
 Contexto e qualificação:
-- trate qualification, opportunity e messages como memória da conversa;
-- nunca pergunte novamente um dado já conhecido;
+- trate qualification, opportunity, messages e o resumo da conversa como memória — a mensagem atual nunca é analisada isolada;
+- nunca pergunte novamente um dado já conhecido; entenda referências como "isso", "os dois", "também" e "o site" a partir do que já foi dito;
 - não transforme a conversa em formulário ou interrogatório;
-- colete progressivamente apenas o dado mais útil para o próximo passo;
-- preserve informações anteriores ao produzir updates e resumo;
+- colete progressivamente apenas o dado mais útil para o próximo passo (nome, empresa, situação atual, necessidade, objetivo, serviço, prazo, urgência; orçamento e decisor só quando fizer sentido);
+- aceite múltiplos interesses na mesma conversa (ex.: "quero site e tráfego" = SITE + PAID_TRAFFIC) sem abrir uma nova oportunidade;
+- preserve informações anteriores ao produzir updates e resumo — nunca sobrescreva um dado bom com vazio;
 - não marque o lead como qualificado sem evidências registradas.
 
 Limites comerciais:
 - nunca invente preço, faixa de preço, prazo, serviço, case, política ou condição comercial;
 - só mencione preço quando existir informação aplicável em authorized_pricing;
 - se perguntarem preço sem preço autorizado ou sem escopo suficiente, explique brevemente que depende do tipo e do escopo e faça uma pergunta objetiva para entender o projeto;
-- uma pergunta isolada sobre preço, valor, desconto ou negociação não justifica handoff;
-- sinalize handoff quando o lead pedir uma pessoa, estiver qualificado para o próximo passo humano, pedir explicitamente proposta ou reunião, demonstrar decisão de contratação, houver tema sensível/frustração, ou a análise exigir julgamento humano.
+- uma pergunta isolada sobre preço, valor, desconto ou negociação não justifica handoff.
+
+Suporte, financeiro e parceria:
+- suporte técnico e pedidos financeiros (nota fiscal, boleto, vencimento) nunca ficam só com você — reconheça o pedido, diga que vai encaminhar para o time responsável, e sinalize handoff; nunca finja resolver um problema técnico ou executar uma ação financeira sem autorização;
+- parceria: converse naturalmente, registre o contexto, e sinalize handoff quando fizer sentido avançar com alguém do time.
+
+Handoff:
+- sinalize handoff quando o lead pedir uma pessoa, estiver qualificado para o próximo passo humano, pedir explicitamente proposta ou reunião, demonstrar decisão de contratação, houver tema sensível/frustração, for suporte ou financeiro, ou a análise exigir julgamento humano;
+- ao sinalizar handoff, nunca informe outro telefone ou canal — o atendimento continua neste mesmo WhatsApp com uma pessoa do time.
 
 Retorne somente o JSON do schema fornecido.`
 
@@ -46,13 +79,13 @@ export function classifyCommercialInterests(text) {
     ['AUTOMATION', /automatiza|automacao/],
     ['CRM', /\bcrm\b|gestao de clientes/],
     ['WHATSAPP', /whatsapp|chatbot|atendimento/],
-    ['PAID_TRAFFIC', /trafego pago|meta ads|google ads|anuncio/],
+    ['PAID_TRAFFIC', /trafego( pago)?|meta ads|google ads|anuncio/],
     ['SOCIAL_MEDIA', /social media|rede social|instagram/],
     ['ECOMMERCE', /e-?commerce|loja virtual/],
     ['DEVELOPMENT', /\b(sistema|aplicativo|app|software|desenvolvimento)\b/],
     ['INTEGRATION', /integracao|integrar|integrad[oa]s?|\bapi\b/],
-    ['SUPPORT', /suporte|problema|erro|nao funciona/],
-    ['FINANCE', /financeiro|cobranca|boleto|pagamento/],
+    ['SUPPORT', SUPPORT_SIGNAL_PATTERN],
+    ['FINANCE', FINANCE_SIGNAL_PATTERN],
     ['PARTNERSHIP', /parceria|parceiro/],
   ]
   for (const [intent, pattern] of rules) if (pattern.test(value)) found.push(intent)
@@ -107,8 +140,12 @@ export function inferLeadSource({ referral, metadata = {} } = {}) {
 
 export function classifyConversationKind(text, { hasExistingClient = false, previousKind = null } = {}) {
   const value = fold(text)
-  if (/meu (sistema|site|app|crm)|parou|fora do ar|nao funciona|erro|bug|suporte|ajuda tecnica|problema (no|com o) (sistema|site|app|crm)/.test(value)) return { kind: 'support', reason: 'Mensagem indica problema em solução ou atendimento existente.' }
-  if (/segunda via|boleto|nota fiscal|pagamento|cobranca|vencimento|falar com (o )?financeiro|setor financeiro/.test(value)) return { kind: 'finance', reason: 'Mensagem trata de cobrança ou rotina financeira.' }
+  // Mencionar "site"/"sistema"/"ecommerce" sozinho NÃO é suporte — só quando aparece junto de um
+  // sinal real de mau funcionamento. "quero redesenhar meu site" é oportunidade, não chamado técnico.
+  const productMentioned = /\b(site|sistema|app|aplicativo|crm|whatsapp|e-?commerce|loja virtual|landing page)\b/.test(value)
+  const explicitSupportWord = /\bsuporte\b|ajuda tecnica/.test(value)
+  if (explicitSupportWord || ((SUPPORT_SIGNAL_PATTERN.test(value) || HELP_REQUEST_PATTERN.test(value)) && productMentioned)) return { kind: 'support', reason: 'Mensagem indica mau funcionamento em solução ou atendimento existente.' }
+  if (FINANCE_SIGNAL_PATTERN.test(value) || /falar com (o )?financeiro|setor financeiro/.test(value)) return { kind: 'finance', reason: 'Mensagem trata de cobrança ou rotina financeira.' }
   if (/parceria|parceiro|colaboracao/.test(value)) return { kind: 'partnership', reason: 'Contato identificado como possível parceria.' }
   const interests = classifyCommercialInterests(text).filter(intent => !['OTHER', 'SUPPORT', 'FINANCE', 'PARTNERSHIP'].includes(intent))
   if (interests.length || /contratar|proposta|orcamento|reuniao|projeto/.test(value)) return { kind: 'new_business', reason: 'Existe interesse identificável em novo projeto ou serviço.' }
@@ -166,9 +203,14 @@ const knownValue = (context, ...keys) => {
 }
 
 function nextDiscoveryResponse(interests, context) {
-  if (!knownValue(context, 'company_name')) return interests.includes('SITE')
-    ? 'Entendi o projeto de site. Qual é o nome da empresa?'
-    : 'Para eu contextualizar direito, qual é o nome da empresa?'
+  const meaningfulInterests = interests.filter(item => !['OTHER', 'SUPPORT', 'FINANCE', 'PARTNERSHIP'].includes(item))
+  if (!knownValue(context, 'company_name')) {
+    if (interests.includes('SITE')) return 'Entendi o projeto de site. Qual é o nome da empresa?'
+    if (meaningfulInterests.length) return 'Para eu contextualizar direito, qual é o nome da empresa?'
+    // Primeira mensagem exploratória (ex.: "oi", "não sei o que preciso") — sem intenção clara ainda,
+    // então a pergunta é aberta, não um formulário de qualificação.
+    return 'Oi! Me conta um pouco o que você está buscando que eu te ajudo a encontrar o melhor caminho.'
+  }
   if (!knownValue(context, 'main_problem', 'objective')) return 'Qual resultado vocês querem alcançar com esse projeto?'
   if (!knownValue(context, 'current_situation')) return 'Como vocês lidam com isso hoje?'
   if (interests.includes('SITE') && !knownValue(context, 'site_type')) return 'Vocês imaginam um site institucional, uma landing page ou uma loja virtual?'
@@ -188,8 +230,10 @@ export function defaultCommercialDecision(text, context = {}) {
   } else if (priceQuestion) {
     if (interests.includes('SITE') && !knownValue(context, 'site_type')) response = 'Consigo te orientar. O valor depende principalmente do tipo de site e do escopo. Você imagina um site institucional, uma landing page ou uma loja virtual?'
     else response = `Consigo te orientar. O valor depende do escopo. ${nextDiscoveryResponse(interests, context)}`
-  } else if (interests.includes('SUPPORT') || interests.includes('FINANCE')) {
-    response = 'Entendi. Vou preservar esse contexto para a equipe responsável continuar o atendimento.'
+  } else if (interests.includes('FINANCE')) {
+    response = 'Entendi. Vou registrar isso e encaminhar para o time financeiro continuar com você por aqui.'
+  } else if (interests.includes('SUPPORT')) {
+    response = 'Entendi. Vou registrar isso e encaminhar para o time verificar com você.'
   } else if (interests.includes('AUTOMATION') || interests.includes('CRM')) {
     response = knownValue(context, 'current_situation')
       ? nextDiscoveryResponse(interests, context)
@@ -205,6 +249,7 @@ export function defaultCommercialDecision(text, context = {}) {
     : (priorSummary || currentSummary)
 
   return {
+    conversation_kind: null,
     intents: interests,
     response,
     contact_updates: {},
@@ -232,6 +277,12 @@ export function enforceCommercialHandoffPolicy(decision, inbound, context = {}) 
     create_task: false,
     qualification_updates: { ...(decision.qualification_updates || {}), needs_human: false },
   }
+  // Suporte técnico e financeiro nunca ficam só com o bot — a equipe humana precisa assumir, mesmo
+  // que a IA não tenha sinalizado handoff sozinha. Rede de segurança determinística sobre a decisão.
+  const topicSignals = classifyCommercialInterests(inbound)
+  if (topicSignals.includes('SUPPORT') || topicSignals.includes('FINANCE')) {
+    return { ...decision, handoff: true, create_task: true, handoff_reason: decision.handoff_reason || (topicSignals.includes('FINANCE') ? 'finance_requires_team' : 'support_requires_team') }
+  }
   return decision
 }
 
@@ -253,6 +304,9 @@ export function validateCommercialDecision(value) {
   if (!response) return null
   const safeObject = input => input && typeof input === 'object' && !Array.isArray(input) ? input : {}
   return {
+    // A IA pode propor a classificação da conversa a partir do histórico; só é aceita se vier de
+    // dentro do enum conhecido — caso contrário o worker usa a classificação determinística.
+    conversation_kind: COMMERCIAL_LEAD_KINDS.includes(value.conversation_kind) ? value.conversation_kind : null,
     intents: intents.length ? intents : ['OTHER'], response,
     contact_updates: safeObject(value.contact_updates),
     opportunity_updates: safeObject(value.opportunity_updates),
