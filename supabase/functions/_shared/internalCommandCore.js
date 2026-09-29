@@ -50,6 +50,9 @@ export function resolveRelativeDate(value, now = new Date()) {
   if (/depois de amanha/.test(text)) return addDays(today, 2)
   if (/\bamanha\b/.test(text)) return addDays(today, 1)
   if (/\bhoje\b/.test(text)) return today
+  // "até o final do dia" / "até o fim do dia" / "fim do dia" / "no final do dia" — sem hora explícita,
+  // sempre hoje (America/Sao_Paulo). Nunca inventa horário: due_time continua null em parseTaskSchedule.
+  if (/\b(?:final|fim)\s+do\s+dia\b/.test(text)) return today
   if (/\bontem\b/.test(text)) return addDays(today, -1)
   const dayOnly = text.match(/^(?:dia\s+)?(\d{1,2})$/)
   if (dayOnly) {
@@ -337,10 +340,36 @@ function parseSingle(rawInput, now) {
 // herdam essa intenção como itens adicionais — nunca vira um único evento/tarefa com descrição
 // genérica tipo "os dois trabalhos".
 const ACTIVITY_INTENTS = new Set(['ACTIVITY_START', 'ACTIVITY_COMPLETE'])
+// Lista numerada inline ("1. item 2. item 3. item" ou "1) item 2) item 3) item") só conta como lista
+// quando há pelo menos 2 marcadores SEQUENCIAIS começando em 1 — evita quebrar números comuns, valores
+// monetários, datas ou versões ("campanha 2026", "R$ 3.500", "versão 2.0") e frases como "terminamos a
+// etapa 4. Começamos a etapa 5" (marcadores existem mas não são sequenciais a partir de 1).
+const INLINE_LIST_MARKER = /(?:^|\s)(\d{1,2})[.)]\s+(?=\S)/g
+export function splitInlineNumberedList(value) {
+  const text = clean(value)
+  const markers = [...text.matchAll(INLINE_LIST_MARKER)]
+  if (markers.length < 2) return null
+  const numbers = markers.map((match) => Number(match[1]))
+  const sequential = numbers[0] === 1 && numbers.every((number, index) => index === 0 || number === numbers[index - 1] + 1)
+  if (!sequential) return null
+  const header = trimEdges(text.slice(0, markers[0].index))
+  const items = markers.map((match, index) => {
+    const start = match.index + match[0].length
+    const end = index + 1 < markers.length ? markers[index + 1].index : text.length
+    return trimEdges(text.slice(start, end))
+  }).filter(Boolean)
+  return items.length >= 2 ? { header, items } : null
+}
 export function parseInternalCommand(rawText, { now = new Date() } = {}) {
   const raw = clean(rawText)
-  const lines = raw.split(/\r?\n/).flatMap((line) => line.split(/\s*[•;]\s*/)).map((line) => clean(line.replace(/^[-*]\s+/, ''))).filter(Boolean)
-  if (lines.length <= 1) return parseSingle(raw, now)
+  let lines = raw.split(/\r?\n/).flatMap((line) => line.split(/\s*[•;]\s*/)).map((line) => clean(line.replace(/^[-*]\s+/, ''))).filter(Boolean)
+  if (lines.length <= 1) {
+    // Sem newline/bullet/";" — ainda pode ser uma lista numerada na mesma linha. Quando for, ela se
+    // comporta exatamente como uma lista multilinha (cabeçalho opcional + itens) daqui em diante.
+    const inline = splitInlineNumberedList(raw)
+    if (!inline) return parseSingle(raw, now)
+    lines = inline.header ? [inline.header, ...inline.items] : inline.items
+  }
   const first = parseSingle(lines[0], now)
 
   if (ACTIVITY_INTENTS.has(first.intent)) {

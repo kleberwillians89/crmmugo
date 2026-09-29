@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
-import { findInternalMemberByPhone, isTaskCreationCommandOnly, parseInternalCommand, taskTitleFromText } from '../supabase/functions/_shared/internalCommandCore.js'
+import { findInternalMemberByPhone, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskTitleFromText } from '../supabase/functions/_shared/internalCommandCore.js'
 
 const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
 const webhook = fs.readFileSync('supabase/functions/whatsapp-webhook/index.ts', 'utf8')
@@ -263,7 +263,7 @@ test('CASO A: título sem data pede "para quando", nunca insere direto', () => {
 
 // --- CASO A (continuação): resposta com a data completa os itens pendentes e segue para confirmação
 test('CASO A (retomada): resposta só com a data ("amanhã") resolve o item pendente via sessionDate', () => {
-  assert.match(worker, /event\.session\?\.pending_action==='resolve_task_date'&&cleanedRaw&&sessionDate/)
+  assert.match(worker, /event\.session\?\.pending_action==='resolve_task_date'&&cleanedRaw\)\{\s*\n\s*if\(sessionDate\)\{/)
   assert.match(worker, /const pendingItems=Array\.isArray\(event\.session\.context\?\.pending_items\)\?event\.session\.context\.pending_items:\[\]/)
   assert.match(worker, /const items=pendingItems\.map\(\(item:any\)=>\(\{\.\.\.item,due_date:item\.due_date\|\|sessionDate\}\)\)/)
 })
@@ -349,5 +349,99 @@ test('regressão Liliu: "to finalizando agora" (sem palavra de data) durante ACT
   // ACTIVITY_DATE_RESOLUTION já está isento do auto-clear por divergência de intenção — a sessão
   // continua aberta para uma nova tentativa (nenhum loop infinito: "cancela" ainda funciona a qualquer
   // momento pelo bloco genérico de CANCEL_FINANCIAL, e a sessão expira em 30min de qualquer forma).
-  assert.match(worker, /'CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION'\]\.includes\(command\.intent\)/)
+  assert.match(worker, /'CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'\]\.includes\(command\.intent\)/)
+})
+
+// ===================================================================================================
+// HOTFIX 2026-09-29: lista numerada inline no mesmo comando ("1. x 2. y 3. z"), "até o final do dia"
+// como data, e resposta de data pendente nunca pode cair no fallback de IA.
+// ===================================================================================================
+
+// --- 1/1b: lista numerada inline vira CREATE_TASK com 1 item por marcador ------------------------
+test('1: lista numerada inline "1. ajustes de latinas 2. demanda de liliu de origami 3. posts roove" gera 3 tarefas', () => {
+  const command = parseInternalCommand('1. ajustes de latinas 2. demanda de liliu de origami 3. posts roove')
+  assert.equal(command.intent, 'CREATE_TASK')
+  assert.equal(command.items.length, 3)
+  assert.deepEqual(command.items.map((item) => item.title), ['ajustes de latinas', 'demanda de liliu de origami', 'posts roove'])
+})
+
+// --- 2: a mesma lista via bullets (comportamento existente) continua produzindo os mesmos 3 itens --
+test('2: a mesma lista via "- item" (bullets, comportamento existente) continua gerando 3 itens', () => {
+  const command = parseInternalCommand('- ajustes de latinas\n- demanda de liliu de origami\n- posts roove')
+  assert.equal(command.intent, 'CREATE_TASK')
+  assert.equal(command.items.length, 3)
+  assert.deepEqual(command.items.map((item) => item.title), ['ajustes de latinas', 'demanda de liliu de origami', 'posts roove'])
+})
+
+// --- 3: marcador com parêntese "1) ... 2) ... 3) ..." também é reconhecido -------------------------
+test('3: "1) item A 2) item B 3) item C" gera 3 itens', () => {
+  const command = parseInternalCommand('1) item A 2) item B 3) item C')
+  assert.equal(command.intent, 'CREATE_TASK')
+  assert.equal(command.items.length, 3)
+  assert.deepEqual(command.items.map((item) => item.title), ['item A', 'item B', 'item C'])
+})
+
+// --- 4: números comuns (versão, valor, ano) nunca são tratados como lista ---------------------------
+test('4: "campanha 2026", "R$ 3.500" e "versão 2.0" nunca são divididos em itens', () => {
+  for (const phrase of ['campanha 2026', 'R$ 3.500', 'versão 2.0']) {
+    assert.equal(splitInlineNumberedList(phrase), null, phrase)
+  }
+  // Marcadores que existem mas não são sequenciais a partir de 1 ("etapa 4. ... etapa 5.") também não contam.
+  assert.equal(splitInlineNumberedList('Terminamos a etapa 4. Começamos a etapa 5. Confirmamos com o cliente.'), null)
+  assert.equal(parseInternalCommand('campanha 2026').intent, 'UNKNOWN')
+})
+
+// --- 5/6: "até o final/fim do dia" resolve para hoje (America/Sao_Paulo), nunca inventa horário -----
+test('5/6: "até o final do dia" / "até o fim do dia" / "fim do dia" / "no final do dia" resolvem para hoje', () => {
+  const now = new Date('2026-09-29T12:00:00-03:00')
+  for (const phrase of ['até o final do dia', 'até o fim do dia', 'fim do dia', 'no final do dia', 'hoje até o final do dia']) {
+    assert.equal(resolveRelativeDate(phrase, now), '2026-09-29', phrase)
+  }
+})
+
+// --- 7/8: parseTaskSchedule nunca inventa horário; devolve due_date=hoje, due_time=null -------------
+test('7/8: parseTaskSchedule("acredito que até o final do dia") => due_date hoje, due_time null', () => {
+  const now = new Date('2026-09-29T12:00:00-03:00')
+  const schedule = parseTaskSchedule('acredito que até o final do dia', now)
+  assert.equal(schedule.due_date, '2026-09-29')
+  assert.equal(schedule.due_time, null)
+})
+
+// --- 8/9: resolve_task_date NUNCA cai no fallback de IA, resolvido ou não ---------------------------
+test('8/9: resolve_task_date sem "&&sessionDate" no guard — separa "resolvido" de "sem data reconhecível" antes do aiFallback', () => {
+  // O guard de entrada não exige mais sessionDate — ambos os casos (resolvido/não resolvido) são
+  // tratados dentro do bloco, e nenhum dos dois desce até o aiFallback (chamado só depois, na seção 4).
+  const guardIdx = worker.indexOf("event.session?.active_intent==='CREATE_TASK'&&event.session?.pending_action==='resolve_task_date'&&cleanedRaw)")
+  const unresolvedIdx = worker.indexOf("command={intent:'CREATE_TASK_DATE_UNRESOLVED',confidence:1}")
+  const aiFallbackCallIdx = worker.indexOf('command=await aiFallback(')
+  assert.ok(guardIdx > -1 && unresolvedIdx > guardIdx && aiFallbackCallIdx > unresolvedIdx)
+  // Handler de CREATE_TASK_DATE_UNRESOLVED só pergunta de novo — nenhum insert/update/upsert, nenhum
+  // recordEvent de decisão/observação.
+  const handlerIdx = worker.indexOf("command.intent==='CREATE_TASK_DATE_UNRESOLVED'")
+  const handlerBlock = worker.slice(handlerIdx, worker.indexOf('\n  }', handlerIdx))
+  assert.doesNotMatch(handlerBlock, /\.insert\(|\.update\(|\.upsert\(|recordEvent\(/)
+  assert.match(handlerBlock, /Qual dia/)
+  // Isento do auto-clear de sessão — a sessão pendente (resolve_task_date) continua aberta.
+  assert.match(worker, /'ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'\]\.includes\(command\.intent\)/)
+})
+
+// --- 10: ACTIVITY_CAPTURE + lista numerada inline gera 1 atividade por item, não uma descrição única
+test('10: ACTIVITY_CAPTURE + "1. ajustes de latina 2. origami 3. posts roove" gera items=3 (não summary único)', () => {
+  const items = splitInlineNumberedList('1. ajustes de latina 2. origami 3. posts roove').items
+  assert.deepEqual(items, ['ajustes de latina', 'origami', 'posts roove'])
+  // O branch de ACTIVITY_CAPTURE não depende mais de command.intent==='UNKNOWN' no guard externo —
+  // ele mesmo decide, olhando splitInlineNumberedList(cleanedRaw) primeiro.
+  assert.match(worker, /else if\(event\.session\?\.active_intent==='ACTIVITY_CAPTURE'&&event\.session\.state==='awaiting_context'&&cleanedRaw\)\{/)
+  assert.match(worker, /const inlineActivities=splitInlineNumberedList\(cleanedRaw\)/)
+  assert.match(worker, /if\(inlineActivities\)command=\{intent:'ACTIVITY_COMPLETE',items:inlineActivities\.items\.map\(\(summary:string\)=>\(\{summary:clean\(summary,240\)\}\)\),summary:clean\(inlineActivities\.items\[0\],240\),contextual:true,confidence:1\}/)
+  // Cada item de ACTIVITY_COMPLETE já grava 1 operational_event individual (mecanismo existente,
+  // reaproveitado sem alteração) com idempotency_key por índice.
+  assert.match(worker, /idempotencyKey=itemIndex===null\?`command:\$\{event\.id\}:\$\{type\}`:`command:\$\{event\.id\}:\$\{type\}:\$\{itemIndex\}`/)
+})
+
+// --- 11: resolução de membro por telefone (Liliu) permanece intocada -------------------------------
+test('11: Liliu (5521974556233) continua resolvida pela mesma regra organização+membro+telefone (sem mudança)', () => {
+  const members = [{ id: 'liliu-id', name: 'Liliu', phone: '5521974556233' }]
+  assert.equal(findInternalMemberByPhone(members, '5521974556233')?.id, 'liliu-id')
+  assert.equal(findInternalMemberByPhone(members, '5521974556233')?.id, findInternalMemberByPhone(members, '5521974556233')?.id)
 })

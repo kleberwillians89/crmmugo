@@ -2,7 +2,7 @@
 // Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TASK_COMMAND_WORKER_KEY,
 // META_ACCESS_TOKEN e, opcionalmente, OPENAI_API_KEY/TASK_COMMAND_MODEL.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
+import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
 
 const headers = { 'Content-Type': 'application/json' }
@@ -681,6 +681,12 @@ async function execute(admin: any, event: any, command: any) {
     if(command.assignee_name&&selected.length!==1)return `Não encontrei um único membro ativo chamado “${clean(command.assignee_name)}”.`
     return `Equipe hoje\n\n${selected.map((member: any) => { const mine = (tasks.data || []).filter((task: any) => task.assigned_to === member.id); return `${member.name}: ${mine.filter((task: any) => !['completed','cancelled'].includes(task.status)).length} pendentes · ${mine.filter((task: any) => task.status === 'completed').length} concluídas` }).join('\n')}`
   }
+  if(command.intent==='CREATE_TASK_DATE_UNRESOLVED'){
+    // Resposta durante resolve_task_date sem data reconhecível: preserva a sessão (nada é limpo, nada é
+    // criado, nenhuma decisão/observação é gravada) e pergunta de novo — nunca passa pelo fallback de IA.
+    const pendingItems=Array.isArray(event.session?.context?.pending_items)?event.session.context.pending_items:[]
+    return pendingItems.length>1?'Qual dia? Pode responder hoje, amanhã, sexta ou dia 5 de outubro.':`Qual dia fica "${clean(pendingItems[0]?.title)}"? Pode responder hoje, amanhã, sexta ou dia 5 de outubro.`
+  }
   if (command.intent === 'CREATE_TASK') {
     // Fluxo obrigatório: intenção → título → data → confirmação explícita → persistência. Sem título,
     // a resposta natural pede a lista (aceita várias por linha); título e data nunca viram crm_task
@@ -868,11 +874,18 @@ async function processEvent(admin: any, event: any) {
       command={intent:'CREATE_TASK',title:clean(event.session.context?.pending_task_title,240),task_type:event.session.context?.pending_task_type||'meeting',participant_name:event.session.context?.participant_name||null,...schedule,schedule_ambiguous:!schedule.due_date||!schedule.due_time,priority:'medium',assignee_name:null,confidence:1}
     }
     // Data obrigatória: título(s) já definidos, só falta o dia — qualquer resposta que resolva para uma
-    // data (relativa, dia/mês, dia da semana) completa os itens pendentes e segue para a confirmação.
-    else if(command.intent==='UNKNOWN'&&event.session?.active_intent==='CREATE_TASK'&&event.session?.pending_action==='resolve_task_date'&&cleanedRaw&&sessionDate){
-      const pendingItems=Array.isArray(event.session.context?.pending_items)?event.session.context.pending_items:[]
-      const items=pendingItems.map((item:any)=>({...item,due_date:item.due_date||sessionDate}))
-      command={intent:'CREATE_TASK',items,title:items[0]?.title||null,due_date:items[0]?.due_date||null,assignee_name:event.session.context?.assignee_name||null,task_type:event.session.context?.task_type||null,priority:event.session.context?.priority||null,confidence:1}
+    // data (relativa, dia/mês, dia da semana, "até o final do dia") completa os itens pendentes e segue
+    // para a confirmação. Sem data reconhecível, a resposta NUNCA pode cair no fallback de IA (já
+    // reclassificou isso como RECORD_DECISION em produção) — preserva a sessão e pede a data de novo,
+    // sem gravar nada.
+    else if(command.intent==='UNKNOWN'&&event.session?.active_intent==='CREATE_TASK'&&event.session?.pending_action==='resolve_task_date'&&cleanedRaw){
+      if(sessionDate){
+        const pendingItems=Array.isArray(event.session.context?.pending_items)?event.session.context.pending_items:[]
+        const items=pendingItems.map((item:any)=>({...item,due_date:item.due_date||sessionDate}))
+        command={intent:'CREATE_TASK',items,title:items[0]?.title||null,due_date:items[0]?.due_date||null,assignee_name:event.session.context?.assignee_name||null,task_type:event.session.context?.task_type||null,priority:event.session.context?.priority||null,confidence:1}
+      }else{
+        command={intent:'CREATE_TASK_DATE_UNRESOLVED',confidence:1}
+      }
     }
     // Confirmação obrigatória antes de qualquer insert: "sim"/"confirmo" já é CONFIRM_FINANCIAL no
     // parser (não UNKNOWN) — reconstrói o CREATE_TASK com date_confirmed para liberar a gravação.
@@ -886,10 +899,14 @@ async function processEvent(admin: any, event: any) {
       const items=lines.map((line:string)=>({title:taskTitleFromText(clean(line,240)),...parseTaskSchedule(line)}))
       command={intent:'CREATE_TASK',items,title:items[0]?.title||null,due_date:items[0]?.due_date||null,priority:'medium',assignee_name:null,confidence:1}
     }
-    else if(command.intent==='UNKNOWN'&&event.session?.active_intent==='ACTIVITY_CAPTURE'&&event.session.state==='awaiting_context'&&cleanedRaw){
+    else if(event.session?.active_intent==='ACTIVITY_CAPTURE'&&event.session.state==='awaiting_context'&&cleanedRaw){
       // "quero registrar atividade" é neutro; a resposta livre sem verbo próprio é tratada como
-      // conclusão — é o padrão mais comum de "me conta o que você fez".
-      command={intent:'ACTIVITY_COMPLETE',summary:clean(cleanedRaw,240),contextual:true,confidence:1}
+      // conclusão — é o padrão mais comum de "me conta o que você fez". Uma lista numerada inline
+      // ("1. x 2. y 3. z") vira uma atividade POR item — nunca uma única descrição genérica com os
+      // números dentro do texto.
+      const inlineActivities=splitInlineNumberedList(cleanedRaw)
+      if(inlineActivities)command={intent:'ACTIVITY_COMPLETE',items:inlineActivities.items.map((summary:string)=>({summary:clean(summary,240)})),summary:clean(inlineActivities.items[0],240),contextual:true,confidence:1}
+      else if(command.intent==='UNKNOWN')command={intent:'ACTIVITY_COMPLETE',summary:clean(cleanedRaw,240),contextual:true,confidence:1}
     }
     else if(command.intent==='ACTIVITY_COMPLETE'&&!clean(command.summary)&&event.session?.active_intent==='ACTIVITY_START'&&clean(event.session.context?.activity_summary)){command={...command,summary:clean(event.session.context.activity_summary,240),contextual:true,confidence:1}}
     // 4) só resta o fallback de IA — recebe contexto estruturado (intenção pendente, itens
@@ -906,7 +923,7 @@ async function processEvent(admin: any, event: any) {
     const contextualActivity=command.intent==='ACTIVITY_COMPLETE'&&['ACTIVITY_START','ACTIVITY_CAPTURE'].includes(event.session?.active_intent)&&command.contextual
     // Uma saudação solta ("oi") não deve derrubar um fluxo pendente (lista aguardando escolha, tarefa
     // aguardando título...) — só um novo comando de verdade cancela o contexto anterior.
-    if(event.session&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
+    if(event.session&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
     await recordEvent(admin,event,'whatsapp_command','Comando interno recebido',event.raw_text||event.media?.filename||event.message_type,{intent:command.intent,message_type:event.message_type})
     const outcome:any = command.intent === 'UNKNOWN' ? CLARIFY_TEXT : await execute(admin, event, command)
     const reply=typeof outcome==='string'?outcome:outcome.reply
