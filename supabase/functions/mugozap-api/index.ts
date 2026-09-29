@@ -26,10 +26,12 @@ const identifier = (value: unknown) => {
   return /^\d{10,15}$/.test(normalized) ? normalized : ''
 }
 const brazilianPhone = (value: unknown) => {
-  let normalized=text(value,40).replace(/\D/g,'')
+  const original=text(value,40);let normalized=original.replace(/\D/g,'')
   if(normalized.startsWith('00'))normalized=normalized.slice(2)
-  if(!normalized.startsWith('55')&&(normalized.length===10||normalized.length===11))normalized=`55${normalized}`
-  return /^55[1-9]{2}\d{8,9}$/.test(normalized)?normalized:''
+  const explicitInternational=/^\s*\+|^\s*00/.test(original)
+  if(!explicitInternational&&!normalized.startsWith('55')&&/^[1-9]{2}(?:9\d{8}|\d{8})$/.test(normalized))normalized=`55${normalized}`
+  if(normalized.startsWith('55'))return /^55[1-9]{2}\d{8,9}$/.test(normalized)?normalized:''
+  return /^[1-9]\d{7,14}$/.test(normalized)?normalized:''
 }
 const metaStatus = (value: unknown) => text(value, 30).toUpperCase()
 const availableTemplate = (value: unknown) => metaStatus(value) === 'APPROVED'
@@ -142,9 +144,13 @@ const persistOutboundMessage = async ({
     const client = await admin.from('clients').select('contact_name,trade_name,company_name').eq('id', clientId).eq('organization_id', organizationId).maybeSingle()
     displayName = text(client.data?.contact_name || client.data?.trade_name || client.data?.company_name, 240)
   }
+  // Não sobrescreve um display_name já definido (ex.: apelido interno configurado manualmente) — só
+  // preenche automaticamente na primeira vez que o contato é criado por este fluxo.
+  const existingContact = await admin.from('whatsapp_contacts').select('display_name').eq('connection_id', connection.id).eq('wa_id', recipient).maybeSingle()
+  const keepExistingName = Boolean(existingContact.data?.display_name)
   const contactResult = await admin.from('whatsapp_contacts').upsert({
     organization_id: organizationId, connection_id: connection.id, wa_id: recipient,
-    ...(clientId ? { client_id: clientId } : {}), ...(displayName ? { display_name: displayName } : {}), last_seen_at: new Date().toISOString(),
+    ...(clientId ? { client_id: clientId } : {}), ...(displayName && !keepExistingName ? { display_name: displayName } : {}), last_seen_at: new Date().toISOString(),
   }, { onConflict: 'connection_id,wa_id' }).select('id,client_id,display_name,profile_name').single()
   if (contactResult.error) throw contactResult.error
   const now = sentAt || new Date().toISOString()
@@ -382,6 +388,8 @@ const handleRequest = async (request: Request, requestId: string) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (request.method !== 'POST') return fail('METHOD_NOT_ALLOWED', 'Método não permitido.', 405)
   try {
+    const incoming = await request.json().catch(() => null)
+    if (!incoming || JSON.stringify(incoming).length > 12000) return fail('INVALID_PAYLOAD', 'Payload inválido ou acima do limite.', 413)
     const authorization = request.headers.get('Authorization')
     if (!authorization) {
       console.log(JSON.stringify({event:'mugozap_auth',request_id:requestId,operation:null,authenticated:false,hasProfile:false,hasOrganization:false,status:403,duration_ms:Date.now()-requestStartedAt}))
@@ -394,15 +402,27 @@ const handleRequest = async (request: Request, requestId: string) => {
     const workspaceId = text(request.headers.get('X-Workspace-Id'), 120)
     if (!supabaseUrl || !anonKey) return fail('SUPABASE_CONFIGURATION_MISSING', 'A configuração interna do Supabase está incompleta.', 503)
 
-    const client = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authorization } } })
-    const { data: { user }, error: userError } = await client.auth.getUser()
-    if (userError || !user) {
-      console.log(JSON.stringify({event:'mugozap_auth',request_id:requestId,operation:null,authenticated:false,hasProfile:false,hasOrganization:false,status:403,duration_ms:Date.now()-requestStartedAt}))
-      return fail('AUTH_INVALID_TOKEN', 'Sua sessão expirou. Entre novamente no CRM.', 403)
+    const expectedWorkerKey=Deno.env.get('TASK_COMMAND_WORKER_KEY')||''
+    const internalWorker=Boolean(expectedWorkerKey&&request.headers.get('X-Task-Command-Worker-Key')===expectedWorkerKey&&incoming.payload?.team_member_id)
+    let client:any,user:any,profile:any,authorizedWorkspace=''
+    if(internalWorker){
+      if(!serviceKey)return fail('SUPABASE_SERVICE_ROLE_KEY_MISSING','A integração interna não está configurada.',503)
+      client=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
+      const member=await client.from('team_members').select('id,organization_id,auth_profile_id').eq('id',text(incoming.payload.team_member_id,80)).eq('active',true).single()
+      if(member.error||!member.data?.auth_profile_id)return fail('INTERNAL_MEMBER_NOT_AUTHORIZED','Membro interno sem perfil ativo vinculado.',403)
+      const profileResult=await client.from('profiles').select('organization_id,role,active').eq('id',member.data.auth_profile_id).eq('organization_id',member.data.organization_id).single()
+      profile=profileResult.data;user={id:member.data.auth_profile_id,app_metadata:{}}
+    }else{
+      client=createClient(supabaseUrl,anonKey,{global:{headers:{Authorization:authorization}}})
+      const authResult=await client.auth.getUser();user=authResult.data.user
+      if(authResult.error||!user){
+        console.log(JSON.stringify({event:'mugozap_auth',request_id:requestId,operation:null,authenticated:false,hasProfile:false,hasOrganization:false,status:403,duration_ms:Date.now()-requestStartedAt}))
+        return fail('AUTH_INVALID_TOKEN','Sua sessão expirou. Entre novamente no CRM.',403)
+      }
+      authorizedWorkspace=text(user.app_metadata?.workspace_id||(user as any).workspace_id,120)
+      if(workspaceId&&(!authorizedWorkspace||workspaceId!==authorizedWorkspace))return fail('FORBIDDEN','Seu usuário não possui acesso a este workspace.',403)
+      const profileResult=await client.from('profiles').select('organization_id,role,active').eq('id',user.id).single();profile=profileResult.data
     }
-    const authorizedWorkspace = text(user.app_metadata?.workspace_id || (user as any).workspace_id, 120)
-    if (workspaceId && (!authorizedWorkspace || workspaceId !== authorizedWorkspace)) return fail('FORBIDDEN', 'Seu usuário não possui acesso a este workspace.', 403)
-    const { data: profile } = await client.from('profiles').select('organization_id,role,active').eq('id', user.id).single()
     if (!profile) {
       console.log(JSON.stringify({event:'mugozap_auth',request_id:requestId,operation:null,authenticated:true,hasProfile:false,hasOrganization:false,status:403,duration_ms:Date.now()-requestStartedAt}))
       return fail('PROFILE_NOT_FOUND', 'Perfil do usuário não encontrado.', 403)
@@ -410,8 +430,6 @@ const handleRequest = async (request: Request, requestId: string) => {
     if (!profile.organization_id) return fail('ORGANIZATION_NOT_FOUND', 'Organização do usuário não encontrada.', 403)
     if (!profile.active) return fail('FORBIDDEN', 'Seu usuário não possui acesso ativo.', 403)
 
-    const incoming = await request.json().catch(() => null)
-    if (!incoming || JSON.stringify(incoming).length > 12000) return fail('INVALID_PAYLOAD', 'Payload inválido ou acima do limite.', 413)
     const requestedOperation=text(incoming.operation,60)
     const operationAliases:Record<string,string>={get_conversation_messages:'list_messages',send_template:'send_template_message'}
     const operation = operationAliases[requestedOperation]||requestedOperation, route = routes[operation]
@@ -704,13 +722,16 @@ const handleRequest = async (request: Request, requestId: string) => {
       if (!clientId || !installmentId || templateName !== 'mugo_alerta_pagamento_pendente' || language !== 'pt_BR') return fail('INVALID_TEMPLATE_REQUEST', 'Os dados para iniciar a conversa são inválidos.', 400)
       const [clientResult, installmentResult, duplicateResult] = await Promise.all([
         client.from('clients').select('id,organization_id,company_name,trade_name,contact_name,phone,billing_contact_phone').eq('id',clientId).eq('organization_id',profile.organization_id).single(),
-        client.from('invoice_installments').select('id,organization_id,client_id,contract_id,status,due_date,amount').eq('id',installmentId).eq('organization_id',profile.organization_id).single(),
+        client.from('invoice_installments').select('id,organization_id,client_id,contract_id,status,due_date,amount,currency,received_amount,paid_at').eq('id',installmentId).eq('organization_id',profile.organization_id).single(),
         client.from('whatsapp_collection_alerts').select('id,status,client_id,wa_id,provider_message_id,template_name,template_language,sent_at').eq('organization_id',profile.organization_id).eq('installment_id',installmentId).eq('template_name',templateName).maybeSingle(),
       ])
       if (clientResult.error || !clientResult.data || installmentResult.error || !installmentResult.data) return fail('COLLECTION_NOT_FOUND', 'Cliente ou parcela não encontrado.', 404)
       const clientRow:any = clientResult.data, installment:any = installmentResult.data
       if (installment.client_id !== clientRow.id) return fail('CLIENT_MISMATCH', 'A parcela não pertence ao cliente informado.', 403)
       if (installment.status === 'paid') return fail('INSTALLMENT_PAID', 'Esta parcela já foi paga e não pode ser cobrada.', 409)
+      if (installment.status === 'cancelled') return fail('INSTALLMENT_CANCELLED', 'Esta parcela foi cancelada e não pode ser cobrada.', 409)
+      if (installment.paid_at) return fail('INSTALLMENT_PAID', 'Esta parcela já foi paga e não pode ser cobrada.', 409)
+      if (Number(installment.received_amount || 0) > 0) return fail('INSTALLMENT_PARTIALLY_PAID', 'Esta parcela já possui valor recebido e não pode ser cobrada por este fluxo.', 409)
       if (duplicateResult.data && duplicateResult.data.status !== 'failed') {
         const previous:any=duplicateResult.data
         if(!previous.provider_message_id)return fail('COLLECTION_DUPLICATE','Um alerta desta cobrança já foi enviado, mas ainda não possui confirmação canônica.',409)
@@ -769,7 +790,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       const couponCode=text(payload.coupon_code,120)
       if(requiresCoupon&&!couponCode)return fail('TEMPLATE_COUPON_REQUIRED','Este template exige um código de cupom para o botão de copiar.',422)
       verifiedPayload = {wa_id:normalizedPhone,template_name:templateName,language,parameters:requiredBodyParameters?[safeName]:[],...(couponCode?{coupon_code:couponCode}:{}),source:'collection',client_id:clientRow.id,installment_id:installment.id}
-      const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,contract_id:installment.contract_id,wa_id:normalizedPhone,recipient:normalizedPhone,company_name:text(clientRow.company_name,200),meta_template_id:officialTemplate.id,template_name:templateName,template_language:language,template_status:'CHECKING',collection_stage:'sending',action:'template_send_requested',status:'sending',sent_by:user.id,origin:'collection',currency:'BRL',sanitized_payload:{to:normalizedPhone,template:{name:templateName,language,parameter_count:requiredBodyParameters,has_coupon:Boolean(couponCode)},source:'collection',idempotency_key:startIdempotencyKey||null}}).select('id').single()
+      const reservation = await client.from('whatsapp_collection_alerts').insert({organization_id:profile.organization_id,client_id:clientRow.id,installment_id:installment.id,contract_id:installment.contract_id,wa_id:normalizedPhone,recipient:normalizedPhone,company_name:text(clientRow.company_name,200),meta_template_id:officialTemplate.id,template_name:templateName,template_language:language,template_status:'CHECKING',collection_stage:'sending',action:'template_send_requested',status:'sending',sent_by:user.id,origin:'collection',currency:text(installment.currency,3)||'BRL',sanitized_payload:{to:normalizedPhone,template:{name:templateName,language,parameter_count:requiredBodyParameters,has_coupon:Boolean(couponCode)},source:'collection',idempotency_key:startIdempotencyKey||null}}).select('id').single()
       if (reservation.error) return fail('COLLECTION_DUPLICATE', 'Um alerta desta cobrança já foi enviado.', 409)
       alertReservationId = reservation.data.id
       if (!serviceKey) {

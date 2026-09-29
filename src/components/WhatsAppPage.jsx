@@ -3,7 +3,7 @@ import { AlertCircle, CheckCheck, CircleDollarSign, Copy, ExternalLink, FileText
 import { FeedbackMessage } from './FeedbackMessage'
 import { PageSkeleton } from './PageSkeleton'
 import { normalizeBrazilianPhone } from '../lib/whatsapp'
-import { assignConversation, closeConversation, createCrmWhatsAppContact, findConversationByPhone, getAttendanceMeta, getConversationIdentifier, getTemplateTestAccess, hasValidConversationIdentifier, health, listConversations, listCrmWhatsAppContacts, listMessages, listWhatsAppUsers, markConversationRead, pauseAutomation, resumeAutomation, sendManualMessage, sendTemplateMessage, startTemplateConversation } from '../services/data/whatsappRepository'
+import { assignConversation, closeConversation, createCrmWhatsAppContact, getAttendanceMeta, getConversationIdentifier, getTemplateTestAccess, hasValidConversationIdentifier, health, listConversations, listCrmWhatsAppContacts, listMessages, listWhatsAppUsers, markConversationRead, pauseAutomation, resumeAutomation, sendManualMessage, sendTemplateMessage, startTemplateConversation } from '../services/data/whatsappRepository'
 import { updateClientPhone } from '../services/data/clientsRepository'
 import { WhatsAppPhoneModal } from './WhatsAppPhoneModal'
 import { StartWhatsAppConversationModal } from './StartWhatsAppConversationModal'
@@ -202,7 +202,7 @@ export function WhatsAppPage({ section = 'inbox', page = 'inbox', clients = [], 
   async function signInAgain(){await getSupabaseClient()?.auth.signOut();window.location.reload()}
   async function mutate(action,success='Ação concluída.'){if(demoMode){setActionFeedback('Modo demonstração: esta ação não foi executada.');return}if(!selected||!canWrite||actionRef.current||typeof action!=='function')return;actionRef.current=true;try{setError('');setActionFeedback('');await action();setActionFeedback(success);await refresh(true,true)}catch(cause){handleOperationError(cause)}finally{actionRef.current=false}}
   async function commercialHandoff(){await mutate(async()=>{await handoffCommercialConversation(selected.id);setCommercialContext(await getConversationCommercialContext(selected.id))},`Conversa encaminhada para ${commercialContext.owner?.name||'o responsável comercial'}.`)}
-  function generateBriefing(){setActionFeedback('O contexto comercial já está registrado no CRMugo.');onNavigate('commercial')}
+  function generateBriefing(){setActionFeedback('O briefing comercial está registrado no CRM Mugô.');onNavigate('commercial')}
   async function linkClient(clientId,options){const link=await linkConversationToClient(selected,clientId,options);setConversationLinks(current=>[...current.filter(item=>item.wa_id!==link.wa_id),link]);setActionFeedback('Conversa vinculada ao cliente.')}
   async function unlinkClient(){if(!selectedLink||!window.confirm('Desvincular esta conversa do cliente?'))return;await unlinkConversation(selected);setConversationLinks(current=>current.filter(item=>item.wa_id!==selectedIdentifier));setActionFeedback('Vínculo removido.')}
   function handleTabKey(event,index){if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;setTab(tabs[next][0]);event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[next]?.focus()}
@@ -237,7 +237,12 @@ export function WhatsAppPage({ section = 'inbox', page = 'inbox', clients = [], 
     const target={installment:item,client:targetClient,phone}
     setCollectionTarget(target);setError('')
     if(!phone){setPhoneModal(true);return}
-    try{if(isTemplateSyncStale()){const result=await refreshTemplateStatuses(),template=result.templates.find(row=>row.name==='mugo_alerta_pagamento_pendente');if(template)setTemplateStatus(template)}const conversation=await findConversationByPhone(phone);if(conversation){await refresh(true);setSelectedId(conversationKey(conversation));onNavigate('inbox')}else{setStartModal(true);setError('Nenhuma conversa anterior encontrada. Você pode iniciar uma nova conversa.')}}catch(cause){setError(cause.message)}
+    // Sempre revisa e confirma pelo modal de cobrança (start_template_conversation), mesmo quando já
+    // existe uma conversa anterior com o cliente — antes, nesse caso, o botão só navegava para a caixa
+    // de entrada e o operador tinha que achar sozinho o modelo certo pelo composer genérico de modelos
+    // (gate de homologação, alheio à elegibilidade real da cobrança). É a causa exata do bloqueio.
+    try{if(isTemplateSyncStale()){const result=await refreshTemplateStatuses(),template=result.templates.find(row=>row.name==='mugo_alerta_pagamento_pendente');if(template)setTemplateStatus(template)}}catch(cause){setError(cause.message);return}
+    setStartModal(true)
   }
   async function savePhone(phone){
     const updated=await updateClientPhone(collectionTarget.client.id,phone)
