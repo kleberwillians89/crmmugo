@@ -66,4 +66,20 @@ assert.match(webhook, /rpc\('increment_whatsapp_unread'/)
 assert.match(webhook, /whatsapp_message_received/)
 assert.match(webhook, /if \(!connectionResult\.data\) \{ unknownConnections \+= 1; continue \}/)
 
+// --- claimWebhookEvent: ledger de idempotência nunca reprocessa completed, nunca duplica em corrida,
+// e só reclama processamento travado (>2min) via optimistic-lock (eq updated_at) ------------------
+assert.match(webhook, /if \(existing\.data\.processing_status === 'completed'\) return \{ claimed: false, id: existing\.data\.id \}/)
+assert.match(webhook, /const recent = existing\.data\.processing_status === 'processing'\s*\n\s*&& startedAt && Date\.now\(\) - new Date\(startedAt\)\.getTime\(\) < 2 \* 60 \* 1000/)
+assert.match(webhook, /if \(recent\) return \{ claimed: false, id: existing\.data\.id \}/)
+assert.match(webhook, /\.eq\('id', existing\.data\.id\)\.eq\('updated_at', existing\.data\.updated_at\)\.select\('id'\)\.maybeSingle\(\)/)
+assert.match(webhook, /if \(inserted\.error\.code !== '23505'\) throw inserted\.error/)
+assert.match(webhook, /\.eq\('id', id\)\.eq\('processing_status', 'processing'\)/)
+
+// --- Regressão: painel lateral (Caixa de Entrada) nunca vincula cliente por nome, só por client_id
+// ou telefone — é o que garante que um lead comercial de homologação (ex.: "Roove" lead) nunca puxe
+// dados de um cliente financeiro homônimo com telefone diferente (ex.: "Roove" financeira real). ---
+const whatsappPage = fs.readFileSync(new URL('../src/components/WhatsAppPage.jsx', import.meta.url), 'utf8')
+assert.match(whatsappPage, /const client=clients\.find\(item=>item\.id===selectedLink\?\.client_id\)\|\|clients\.find\(item=>samePhone\(item\.phone,selected\?\.phone\)\|\|samePhone\(item\.billing_contact_phone,selected\?\.phone\)\)/)
+assert.doesNotMatch(whatsappPage, /clients\.find\([^)]*\.(company_name|trade_name|contact_name)\s*===/, 'painel lateral nunca deve resolver cliente comparando nome')
+
 console.log('WhatsApp webhook behavioral contracts: ok')
