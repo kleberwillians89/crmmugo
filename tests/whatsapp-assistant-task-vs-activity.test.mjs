@@ -445,3 +445,50 @@ test('11: Liliu (5521974556233) continua resolvida pela mesma regra organizaçã
   assert.equal(findInternalMemberByPhone(members, '5521974556233')?.id, 'liliu-id')
   assert.equal(findInternalMemberByPhone(members, '5521974556233')?.id, findInternalMemberByPhone(members, '5521974556233')?.id)
 })
+
+// ===================================================================================================
+// HOTFIX 2026-09-29 (parte 2): timestamp de registro (created_at) exibido na resposta do WhatsApp,
+// sempre separado de due_date/due_time — nunca inventa horário, sempre America/Sao_Paulo.
+// ===================================================================================================
+
+// --- 1: created_at aparece formatado como DD/MM/AAAA às HH:MM (America/Sao_Paulo) -------------------
+test('1: formatRegisteredAt(created_at) produz "29/09/2026 às 18:19" em America/Sao_Paulo, nunca UTC', () => {
+  assert.match(worker, /const formatRegisteredAt = \(createdAt: string\) => \{/)
+  assert.match(worker, /timeZone: 'America\/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric'/)
+  assert.match(worker, /timeZone: 'America\/Sao_Paulo', hour: '2-digit', minute: '2-digit'/)
+  assert.match(worker, /return `\$\{datePart\} às \$\{timePart\}`/)
+})
+
+// --- 2: due_date (prazo) continua um conceito separado de created_at (registro) ----------------------
+test('2: due_date (prazo) e created_at (registro) nunca se confundem — devem vir de colunas diferentes', () => {
+  assert.match(worker, /Prazo: \$\{ddmmyyyy\(task\.due_date\)\}/)
+  assert.match(worker, /Registrada: \$\{formatRegisteredAt\(task\.created_at\)\}/)
+  // ddmmyyyy só reordena os dígitos de due_date (uma DATE, sem timezone) — nunca reconstrói via `new Date`.
+  assert.match(worker, /const ddmmyyyy = \(dueDate: string\) => \{ const \[y, m, d\] = String\(dueDate\)\.split\('-'\); return `\$\{d\}\/\$\{m\}\/\$\{y\}` \}/)
+  // Os dois SELECTs de crm_tasks (novo insert e o de idempotência) trazem created_at explicitamente —
+  // nenhuma coluna duplicada foi criada, é o created_at que já existe no schema.
+  assert.match(worker, /select\('id,title,due_date,due_time,created_at'\)\.eq\('organization_id', org\)\.eq\('source_ref', sourceRef\)/)
+  assert.match(worker, /\.select\('id,title,due_date,due_time,created_at'\)\.single\(\)/)
+})
+
+// --- 3: due_time aparece no prazo quando existir, no formato "às HH:MM" ------------------------------
+test('3: due_time aparece como "Prazo: DD/MM/AAAA às HH:MM" só quando due_time existir', () => {
+  assert.match(worker, /task\.due_time \? ` às \$\{String\(task\.due_time\)\.slice\(0,5\)\}` : ''/)
+})
+
+test('resposta de múltiplas tarefas mostra "Registradas:" uma única vez ao final (não repete created_at por item)', () => {
+  assert.match(worker, /Registradas: \$\{formatRegisteredAt\(created\[0\]\.created_at\)\}/)
+  // Cada item da lista usa ddmmyyyy no lugar do ISO cru (formato antigo "— 2026-09-29").
+  assert.match(worker, /\$\{i \+ 1\}\. \$\{taskShortId\(t\.id\)\} \$\{t\.title\}\$\{t\.due_date \? ` — \$\{ddmmyyyy\(t\.due_date\)\}` : ''\}/)
+})
+
+test('OperationsHubPage (Meu Dia/Semana/Backlog) mostra "Registrada em" usando created_at em America/Sao_Paulo', () => {
+  const page = fs.readFileSync('src/components/OperationsHubPage.jsx', 'utf8')
+  assert.match(page, /const formatRegisteredAt=\(createdAt\)=>\{/)
+  assert.match(page, /timeZone:'America\/Sao_Paulo',day:'2-digit',month:'2-digit',year:'numeric'/)
+  assert.match(page, /item\.created_at&&<small className="task-registered-at">Registrada em \{formatRegisteredAt\(item\.created_at\)\}<\/small>/)
+  // A busca de tarefas usa select('*', ...) — created_at já vem junto, nenhuma mudança de repositório
+  // foi necessária (nenhuma coluna nova, nenhum select específico faltando o campo).
+  const repo = fs.readFileSync('src/services/data/tasksRepository.js', 'utf8')
+  assert.match(repo, /const select='\*,/)
+})

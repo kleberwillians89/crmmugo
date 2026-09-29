@@ -16,6 +16,16 @@ const describeDatePt = (dueDate: string) => {
   if (dueDate === tomorrowDate()) return `amanhã, ${ddmm}`
   return ddmm
 }
+// due_date é uma DATE (sem timezone) — só reordena os dígitos, nunca reconstrói via new Date().
+const ddmmyyyy = (dueDate: string) => { const [y, m, d] = String(dueDate).split('-'); return `${d}/${m}/${y}` }
+// created_at é um timestamptz real — precisa converter para America/Sao_Paulo (nunca due_date, que é
+// só o prazo; "registrada em" é sempre o momento real do INSERT).
+const formatRegisteredAt = (createdAt: string) => {
+  const date = new Date(createdAt)
+  const datePart = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(date)
+  const timePart = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }).format(date)
+  return `${datePart} às ${timePart}`
+}
 // HELP nunca é fallback universal — reservado para pedidos explícitos de ajuda (ver GREETING_PATTERN/
 // HELP_PATTERN no parser). Texto livre não reconhecido recebe uma pergunta de esclarecimento genérica.
 const CLARIFY_TEXT = 'Não entendi esse comando. Pode me dizer de outro jeito o que você precisa?'
@@ -723,20 +733,20 @@ async function execute(admin: any, event: any, command: any) {
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index]
       const sourceRef = items.length > 1 ? `${event.id}:${index}` : event.id
-      const existing = await admin.from('crm_tasks').select('id,title,due_date').eq('organization_id', org).eq('source_ref', sourceRef).maybeSingle()
+      const existing = await admin.from('crm_tasks').select('id,title,due_date,due_time,created_at').eq('organization_id', org).eq('source_ref', sourceRef).maybeSingle()
       if (existing.error) throw existing.error
       const client = existing.data ? null : await resolveClientMentionedIn(admin, org, item.title)
-      const inserted = existing.data ? { data: existing.data, error: null } : await admin.from('crm_tasks').insert({ organization_id: org, title: clean(item.title, 240), category: 'Trabalho', client_id: client?.id || null, assigned_to: assignee?.id || event.team_member_id, due_date: item.due_date || null, due_time: item.due_time || null, task_type: item.task_type || command.task_type || 'general', priority: command.priority || 'medium', source: 'whatsapp', source_ref: sourceRef, metadata: { origin: 'whatsapp', command_event_id: event.id, ...(item.participant_name ? { participant_name: item.participant_name } : {}) } }).select('id,title,due_date,due_time').single()
+      const inserted = existing.data ? { data: existing.data, error: null } : await admin.from('crm_tasks').insert({ organization_id: org, title: clean(item.title, 240), category: 'Trabalho', client_id: client?.id || null, assigned_to: assignee?.id || event.team_member_id, due_date: item.due_date || null, due_time: item.due_time || null, task_type: item.task_type || command.task_type || 'general', priority: command.priority || 'medium', source: 'whatsapp', source_ref: sourceRef, metadata: { origin: 'whatsapp', command_event_id: event.id, ...(item.participant_name ? { participant_name: item.participant_name } : {}) } }).select('id,title,due_date,due_time,created_at').single()
       if (inserted.error) throw inserted.error
       created.push({ ...inserted.data, client })
     }
     await clearAssistantSession(admin, event)
     event.entity_type='crm_tasks';event.entity_id=created[0].id
     if (created.length > 1) {
-      return `Prontinho. Criei ${created.length} tarefas ✓\n\n${created.map((t: any, i: number) => `${i + 1}. ${taskShortId(t.id)} ${t.title}${t.due_date ? ` — ${t.due_date}` : ''}`).join('\n')}`
+      return `Prontinho. Criei ${created.length} tarefas ✓\n\n${created.map((t: any, i: number) => `${i + 1}. ${taskShortId(t.id)} ${t.title}${t.due_date ? ` — ${ddmmyyyy(t.due_date)}` : ''}`).join('\n')}\n\nRegistradas: ${formatRegisteredAt(created[0].created_at)}`
     }
     const task = created[0]
-    return `Tarefa criada ✓\n${taskShortId(task.id)} ${task.title}${task.client ? ` — ${task.client.trade_name||task.client.company_name}` : ''}${task.due_date ? `\nPrazo: ${task.due_date}${task.due_time ? ` às ${String(task.due_time).slice(0,5)}` : ''}` : ''}`
+    return `Tarefa criada ✓\n${taskShortId(task.id)} ${task.title}${task.client ? ` — ${task.client.trade_name||task.client.company_name}` : ''}${task.due_date ? `\nPrazo: ${ddmmyyyy(task.due_date)}${task.due_time ? ` às ${String(task.due_time).slice(0,5)}` : ''}` : ''}\nRegistrada: ${formatRegisteredAt(task.created_at)}`
   }
   if (['COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK'].includes(command.intent)) {
     const found = await findTask(admin, event, command)
