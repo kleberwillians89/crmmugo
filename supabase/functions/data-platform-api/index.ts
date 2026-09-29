@@ -1,6 +1,8 @@
 // Ponte read-only CRM Mugô -> Mugô Dados. Nunca expõe service_role, nunca aceita JWT de usuário final,
-// nunca recebe organization_id diretamente do chamador (só external_client_id, resolvido via
-// external_integrations). Ver docs/CRM_DATA_BRIDGE.md para o funil canônico e o modelo de segurança.
+// nunca recebe organization_id/client_id diretamente do chamador (só external_client_id, resolvido via
+// external_integrations). Uma organização tem vários clients (Roove, Origami, Curavino...) — todo
+// filtro é sempre organization_id + client_id, nunca organization_id sozinho, senão um mapping
+// vazaria dados entre clientes da mesma organização. Ver docs/CRM_DATA_BRIDGE.md.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -11,14 +13,16 @@ const clampLimit = (value: unknown, fallback = 100, max = 500) => Math.min(Math.
 const dayStart = (date: string) => `${date}T00:00:00.000Z`
 const dayEnd = (date: string) => `${date}T23:59:59.999Z`
 
-async function handleFunnel(admin: any, org: string, start: string, end: string) {
+async function handleFunnel(admin: any, org: string, clientId: string, start: string, end: string) {
   const [opportunities, proposals] = await Promise.all([
-    admin.from('commercial_opportunities').select('id,stage').eq('organization_id', org).gte('entered_at', dayStart(start)).lte('entered_at', dayEnd(end)),
-    admin.from('proposals').select('id,status').eq('organization_id', org).not('sent_at', 'is', null).gte('sent_at', start).lte('sent_at', end),
+    admin.from('commercial_opportunities').select('id,stage').eq('organization_id', org).eq('client_id', clientId).gte('entered_at', dayStart(start)).lte('entered_at', dayEnd(end)),
+    admin.from('proposals').select('id,status').eq('organization_id', org).eq('client_id', clientId).not('sent_at', 'is', null).gte('sent_at', start).lte('sent_at', end),
   ])
   if (opportunities.error) throw opportunities.error
   if (proposals.error) throw proposals.error
   const opportunityIds = opportunities.data.map((row: any) => row.id)
+  // commercial_qualifications só deriva dos opportunity_ids já filtrados por organization_id+client_id
+  // acima — nunca tem sua própria checagem de tenant, então nunca pode vazar por si só.
   const qualifications = opportunityIds.length
     ? await admin.from('commercial_qualifications').select('opportunity_id').in('opportunity_id', opportunityIds).eq('qualified', true)
     : { data: [], error: null }
@@ -37,10 +41,10 @@ async function handleFunnel(admin: any, org: string, start: string, end: string)
   })
 }
 
-async function handleAttribution(admin: any, org: string, start: string, end: string, limit: number) {
+async function handleAttribution(admin: any, org: string, clientId: string, start: string, end: string, limit: number) {
   const opportunities = await admin.from('commercial_opportunities')
     .select('id,source,campaign,utm_source,utm_medium,utm_campaign,stage')
-    .eq('organization_id', org).gte('entered_at', dayStart(start)).lte('entered_at', dayEnd(end))
+    .eq('organization_id', org).eq('client_id', clientId).gte('entered_at', dayStart(start)).lte('entered_at', dayEnd(end))
   if (opportunities.error) throw opportunities.error
   const opportunityIds = opportunities.data.map((row: any) => row.id)
   const qualifications = opportunityIds.length
@@ -61,13 +65,13 @@ async function handleAttribution(admin: any, org: string, start: string, end: st
   return json({ ok: true, data: { period: { start, end }, groups: [...groups.values()].slice(0, limit) } })
 }
 
-async function handleRevenue(admin: any, org: string, start: string, end: string) {
+async function handleRevenue(admin: any, org: string, clientId: string, start: string, end: string) {
   const [proposals, installments] = await Promise.all([
     // Revenue = proposta GANHA (valor contratado). Nunca inferido de conversa; proposal != sale.
-    admin.from('proposals').select('total_value').eq('organization_id', org).eq('status', 'won').not('closed_at', 'is', null).gte('closed_at', start).lte('closed_at', end),
+    admin.from('proposals').select('total_value').eq('organization_id', org).eq('client_id', clientId).eq('status', 'won').not('closed_at', 'is', null).gte('closed_at', start).lte('closed_at', end),
     // Received revenue = dinheiro que realmente entrou (parcela paga). Sale != received cash;
     // collection != payment — cobrança enviada nunca conta como receita.
-    admin.from('invoice_installments').select('amount,original_amount,currency').eq('organization_id', org).eq('status', 'paid').gte('paid_at', dayStart(start)).lte('paid_at', dayEnd(end)),
+    admin.from('invoice_installments').select('amount,original_amount,currency').eq('organization_id', org).eq('client_id', clientId).eq('status', 'paid').gte('paid_at', dayStart(start)).lte('paid_at', dayEnd(end)),
   ])
   if (proposals.error) throw proposals.error
   if (installments.error) throw installments.error
@@ -103,8 +107,9 @@ Deno.serve(async (request: Request) => {
   if (!isIsoDate(periodStart) || !isIsoDate(periodEnd)) return json({ ok: false, code: 'INVALID_PERIOD' }, 400)
   if (periodEnd < periodStart) return json({ ok: false, code: 'INVALID_PERIOD_RANGE' }, 400)
 
-  // Nunca aceita organization_id do chamador — resolve sempre pelo vínculo explícito, nunca por nome.
-  const integration = await admin.from('external_integrations').select('organization_id')
+  // Nunca aceita organization_id/client_id do chamador — resolve sempre pelo vínculo explícito
+  // (organização + cliente específico), nunca por nome, nunca só por organização.
+  const integration = await admin.from('external_integrations').select('organization_id,client_id')
     .eq('provider', 'mugo_dados').eq('external_client_id', externalClientId).eq('status', 'active').maybeSingle()
   if (integration.error) {
     console.log(JSON.stringify({ event: 'data_platform_lookup_failed', endpoint, duration_ms: Date.now() - startedAt }))
@@ -112,19 +117,20 @@ Deno.serve(async (request: Request) => {
   }
   if (!integration.data) return json({ ok: false, code: 'UNKNOWN_EXTERNAL_CLIENT' }, 403)
   const organizationId = integration.data.organization_id
+  const clientId = integration.data.client_id
 
   try {
     let response: Response
-    if (endpoint === 'funnel') response = await handleFunnel(admin, organizationId, periodStart, periodEnd)
-    else if (endpoint === 'attribution') response = await handleAttribution(admin, organizationId, periodStart, periodEnd, limit)
-    else if (endpoint === 'revenue') response = await handleRevenue(admin, organizationId, periodStart, periodEnd)
+    if (endpoint === 'funnel') response = await handleFunnel(admin, organizationId, clientId, periodStart, periodEnd)
+    else if (endpoint === 'attribution') response = await handleAttribution(admin, organizationId, clientId, periodStart, periodEnd, limit)
+    else if (endpoint === 'revenue') response = await handleRevenue(admin, organizationId, clientId, periodStart, periodEnd)
     else return json({ ok: false, code: 'NOT_FOUND' }, 404)
-    // Log nunca carrega PII/conteúdo — só organização (id), endpoint e duração, igual ao padrão de
-    // auditOperation já usado em mugozap-api.
-    console.log(JSON.stringify({ event: 'data_platform_request', organization_id: organizationId, endpoint, status_http: response.status, duration_ms: Date.now() - startedAt }))
+    // Log nunca carrega PII/conteúdo — só organização/cliente (ids), endpoint e duração, igual ao
+    // padrão de auditOperation já usado em mugozap-api.
+    console.log(JSON.stringify({ event: 'data_platform_request', organization_id: organizationId, client_id: clientId, endpoint, status_http: response.status, duration_ms: Date.now() - startedAt }))
     return response
   } catch (error) {
-    console.log(JSON.stringify({ event: 'data_platform_query_failed', organization_id: organizationId, endpoint, error_code: text((error as any)?.code || (error as any)?.message, 120) }))
+    console.log(JSON.stringify({ event: 'data_platform_query_failed', organization_id: organizationId, client_id: clientId, endpoint, error_code: text((error as any)?.code || (error as any)?.message, 120) }))
     return json({ ok: false, code: 'QUERY_FAILED' }, 500)
   }
 })
