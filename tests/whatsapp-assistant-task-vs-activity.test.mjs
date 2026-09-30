@@ -268,11 +268,11 @@ test('CASO A (retomada): resposta só com a data ("amanhã") resolve o item pend
   assert.match(worker, /const items=pendingItems\.map\(\(item:any\)=>\(\{\.\.\.item,due_date:item\.due_date\|\|sessionDate\}\)\)/)
 })
 
-// --- CASO B/C: título+data na mesma mensagem (relativa ou "dia N de mês") ainda exige confirmação --
-test('CASO B: data já presente na mensagem não pula a confirmação antes do insert', () => {
-  assert.match(worker, /if \(!command\.date_confirmed\) \{/)
+// --- CASO B/C: fluxo legado mantém confirmação; plano validado da secretária pode executar direto ---
+test('CASO B: data presente mantém confirmação no legado e permite baixo risco na secretária', () => {
+  assert.match(worker, /if \(!command\.date_confirmed && !command\.secretary_direct\) \{/)
   assert.match(worker, /pending_action:'confirm_task_date'/)
-  const dateConfirmGuard = worker.indexOf('if (!command.date_confirmed)')
+  const dateConfirmGuard = worker.indexOf('if (!command.date_confirmed && !command.secretary_direct)')
   const insertCall = worker.indexOf("await admin.from('crm_tasks').insert", dateConfirmGuard)
   assert.ok(dateConfirmGuard > -1 && insertCall > dateConfirmGuard)
   // "sim"/"confirmo" já é CONFIRM_FINANCIAL no parser (não precisa de novo vocabulário) — a retomada

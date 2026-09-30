@@ -4,7 +4,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
-import { planInternalSecretaryMessage, runSecretaryActions, secretaryActionToCommand } from '../_shared/internalSecretaryAgent.js'
+import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, runSecretaryActions, secretaryActionToCommand, secretaryCommandInputRequest } from '../_shared/internalSecretaryAgent.js'
 
 const headers = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers })
@@ -109,11 +109,14 @@ async function applyTaskAction(admin: any, event: any, task: any, intent: string
   if (intent === 'START_TASK') patch.status = 'in_progress'
   if (intent === 'CANCEL_TASK') patch.status = 'cancelled'
   if (intent === 'UPDATE_TASK_STATUS') patch.status = fields.task_status
-  if (intent === 'MOVE_TASK') patch.due_date = fields.due_date
+  if (intent === 'MOVE_TASK') {
+    if (fields.due_date) patch.due_date = fields.due_date
+    if (fields.due_time) patch.due_time = fields.due_time
+  }
   if (intent === 'SET_PRIORITY') patch.priority = fields.priority
   if (intent === 'ASSIGN_TASK') {
     const member = await findMember(admin, event, fields.assignee_name)
-    if (!member) return { reply: 'Não encontrei um único responsável ativo com esse nome.' }
+    if (!member) return { status:'awaiting_context',reply: 'Não encontrei um único responsável ativo com esse nome.' }
     patch.assigned_to = member.id
   }
   const changed = await admin.from('crm_tasks').update(patch).eq('id', task.id).eq('organization_id', event.organization_id)
@@ -122,16 +125,9 @@ async function applyTaskAction(admin: any, event: any, task: any, intent: string
   return { reply: `${taskShortId(task.id)} atualizada ✓` }
 }
 const taskLines = (items: any[]) => items.length ? items.slice(0, 15).map((item: any) => `${item.priority === 'high' || item.priority === 'critical' ? '🔴' : '•'} ${taskShortId(item.id)} ${item.title}${item.due_date ? ` — ${item.due_date}` : ''}`).join('\n') : 'Nenhuma tarefa encontrada.'
-const compactSecretaryCommands=(commands:any[])=>{
-  const creates=commands.filter((item:any)=>item.intent==='CREATE_TASK')
-  if(creates.length<2||new Set(creates.map((item:any)=>item.assignee_name||'')).size>1)return commands
-  const first=creates[0]
-  const items=creates.flatMap((item:any)=>Array.isArray(item.items)&&item.items.length?item.items:[{title:item.title,due_date:item.due_date,due_time:item.due_time,task_type:item.task_type}])
-  const remaining=commands.filter((item:any)=>item.intent!=='CREATE_TASK')
-  // CREATE_TASK sempre fica por último: ele pode abrir confirmação de data na sessão e nenhuma
-  // action posterior deve limpar esse contexto antes da resposta do membro.
-  return [...remaining,{...first,title:items[0]?.title||null,due_date:items[0]?.due_date||null,items}]
-}
+// Mantém uma action por demanda. Além de preservar prazo/horário/responsável, isso deixa cada criação
+// com checkpoint e entity_id próprios para correções naturais posteriores sem duplicar tarefa.
+const compactSecretaryCommands=(commands:any[])=>commands
 const brl=(value:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(value)
 const dayWindow=(day:string=today())=>({start:`${day}T00:00:00-03:00`,end:`${day}T23:59:59.999-03:00`})
 const friendlyFailure=(error:any)=>{
@@ -759,7 +755,7 @@ async function execute(admin: any, event: any, command: any) {
       return `Qual dia e horário devo colocar para “${clean(command.title)}”?`
     }
     const assignee = await findMember(admin, event, command.assignee_name)
-    if (command.assignee_name && !assignee) return `Não encontrei um único membro ativo chamado “${clean(command.assignee_name)}”. Confira o nome e tente novamente.`
+    if (command.assignee_name && !assignee) return {status:'awaiting_context',reply:`Não encontrei um único membro ativo chamado “${clean(command.assignee_name)}”. Confira o nome e tente novamente.`}
     const items = Array.isArray(command.items) && command.items.length ? command.items : [{ title: command.title, due_date: command.due_date, due_time: command.due_time, task_type: command.task_type, participant_name: command.participant_name }]
     if (items.some((item:any)=>!clean(item.title)||isTaskCreationCommandOnly(item.title))) {
       await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:'CREATE_TASK',context:{},pending_action:'describe_tasks',pending_entity_type:null,pending_entity_id:null})
@@ -772,7 +768,7 @@ async function execute(admin: any, event: any, command: any) {
       await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:'CREATE_TASK',context:{pending_items:items,assignee_name:command.assignee_name||null,task_type:command.task_type||null,priority:command.priority||null},pending_action:'resolve_task_date',pending_entity_type:null,pending_entity_id:null})
       return items.length>1?'Para quando ficam essas tarefas?':`Para quando fica "${clean(items[0].title)}"?`
     }
-    if (!command.date_confirmed) {
+    if (!command.date_confirmed && !command.secretary_direct) {
       await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'CREATE_TASK',context:{pending_items:items,assignee_name:command.assignee_name||null,task_type:command.task_type||null,priority:command.priority||null},pending_action:'confirm_task_date',pending_entity_type:null,pending_entity_id:null})
       return items.length>1
         ? `Confirmo estas tarefas?\n${items.map((item:any)=>`"${clean(item.title)}" — ${describeDatePt(item.due_date)}`).join('\n')}`
@@ -802,11 +798,11 @@ async function execute(admin: any, event: any, command: any) {
     const found = await findTask(admin, event, command)
     if (found.kind === 'ambiguous') {
       const candidateItems = found.items.slice(0, 8).map((item: any, index: number) => ({ index: index + 1, type: 'task', task_id: item.id, label: item.title }))
-      await saveAssistantSession(admin, event, { state: 'awaiting_selection', active_intent: 'TASK_SELECTION', context: { candidate_items: candidateItems, pending_task_intent: command.intent, pending_task_fields: { due_date: command.due_date, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status } }, pending_action: 'select_task', pending_entity_type: 'crm_tasks', pending_entity_id: null })
+      await saveAssistantSession(admin, event, { state: 'awaiting_selection', active_intent: 'TASK_SELECTION', context: { candidate_items: candidateItems, pending_task_intent: command.intent, pending_task_fields: { due_date: command.due_date, due_time: command.due_time, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status } }, pending_action: 'select_task', pending_entity_type: 'crm_tasks', pending_entity_id: null })
       return `Encontrei mais de uma:\n\n${candidateItems.map((c: any) => `${c.index}. ${c.label}`).join('\n')}\n\nQual delas?`
     }
-    if (found.kind !== 'one') return 'Não encontrei essa tarefa. Pode me dizer o nome como está no CRM, ou usar o código curto se tiver (ex.: #A1B2C3).'
-    const outcome = await applyTaskAction(admin, event, found.item, command.intent, { due_date: command.due_date, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status })
+    if (found.kind !== 'one') return {status:'awaiting_context',reply:'Não encontrei essa tarefa. Pode me dizer o nome como está no CRM, ou usar o código curto se tiver (ex.: #A1B2C3).'}
+    const outcome = await applyTaskAction(admin, event, found.item, command.intent, { due_date: command.due_date, due_time: command.due_time, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status })
     await saveAssistantSession(admin,event,{state:'idle',active_intent:'TASK_BROWSE',context:{candidate_items:[{index:1,type:'task',task_id:found.item.id,label:found.item.title}],selected_task:{index:1,type:'task',task_id:found.item.id,label:found.item.title}},pending_action:null,pending_entity_type:'crm_tasks',pending_entity_id:found.item.id})
     return outcome.reply
   }
@@ -862,6 +858,7 @@ async function processEvent(admin: any, event: any) {
     if (member.error) throw Object.assign(new Error('Membro interno não está mais ativo.'), { code: 'TEAM_MEMBER_INACTIVE' })
     event.team_member = member.data
     const cleanedRaw=clean(event.raw_text),foldedRaw=foldText(cleanedRaw)
+    const secretaryOwnsTurn=Boolean(event.session?.context?.secretary_plan)
     const candidateItems:any[]=Array.isArray(event.session?.context?.candidate_items)?event.session.context.candidate_items:[]
     const selectableItems=candidateItems.length?candidateItems:(Array.isArray(event.session?.context?.installment_ids)?event.session.context.installment_ids.map((id:any,index:number)=>({index:index+1,id})):[])
     const sessionDate=resolveRelativeDate(cleanedRaw)
@@ -976,15 +973,20 @@ async function processEvent(admin: any, event: any) {
     // 4) linguagem natural primeiro: a secretária planeja somente tools allowlisted. Ela recebe um
     // read model resumido e nunca toca o banco; execute() continua sendo a única camada de efeito.
     const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
+    const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4
     const deterministicShortcut=['document','image'].includes(event.message_type)
-      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','GREETING','HELP','ACTIVITY_DATE_RESOLUTION','SESSION_SELECTION','TASK_CONTEXT_LIST','CREATE_TASK_DATE_UNRESOLVED','TAKE_CONVERSATION_BY_ID','CONVERSATION_CONTEXT'].includes(command.intent)
-      || Boolean(command.task_short_id)
-      || protectedPendingActions.has(event.session?.pending_action)
+      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL'].includes(command.intent)
+      || (!secretaryOwnsTurn&&(
+        standaloneGreeting
+        || ['HELP','ACTIVITY_DATE_RESOLUTION','SESSION_SELECTION','TASK_CONTEXT_LIST','CREATE_TASK_DATE_UNRESOLVED','TAKE_CONVERSATION_BY_ID','CONVERSATION_CONTEXT'].includes(command.intent)
+        || Boolean(command.task_short_id)
+        || protectedPendingActions.has(event.session?.pending_action)
+      ))
     const secretaryKey=Deno.env.get('OPENAI_API_KEY')||'',secretaryModel=Deno.env.get('TASK_COMMAND_MODEL')||Deno.env.get('OPENAI_MODEL')||''
     const savedSecretaryPlan=event.parsed_command?.orchestrator==='internal_secretary'?event.parsed_command:null
     if(savedSecretaryPlan?.plan?.reply_mode==='execute'&&Array.isArray(savedSecretaryPlan.commands)&&savedSecretaryPlan.commands.length&&!deterministicShortcut){
       secretaryPlan=savedSecretaryPlan.plan
-      secretaryCommands=compactSecretaryCommands(savedSecretaryPlan.commands)
+      secretaryCommands=compactSecretaryCommands(savedSecretaryPlan.commands.map((item:any)=>({...item,secretary_direct:true})))
       command=secretaryCommands[0]
       processingPath='secretary_agent'
     }else if(secretaryKey&&secretaryModel&&!deterministicShortcut){
@@ -1001,13 +1003,17 @@ async function processEvent(admin: any, event: any) {
       })
       if(secretaryPlan)processingPath='secretary_agent'
       if(secretaryPlan?.reply_mode==='execute'){
-        secretaryCommands=compactSecretaryCommands(secretaryPlan.actions.map(secretaryActionToCommand).filter(Boolean))
+        secretaryCommands=compactSecretaryCommands(secretaryPlan.actions.map(secretaryActionToCommand).filter(Boolean).map((item:any)=>({...item,secretary_direct:true})))
         if(secretaryCommands.length)command=secretaryCommands[0]
         else secretaryPlan={reply_mode:'clarify',message:'Ainda não consigo executar essa ação. Pode me dizer o que você precisa de outro jeito?',actions:[]}
       }
     }
+    if(secretaryOwnsTurn&&!deterministicShortcut&&!secretaryPlan){
+      secretaryPlan={reply_mode:'clarify',message:'Não consegui continuar esse plano agora. Pode tentar novamente?',actions:[]}
+      processingPath='secretary_agent'
+    }
     // 5) parser/IA legado permanece apenas como fallback transitório quando a secretária não planejou.
-    if(!secretaryPlan&&command.intent==='UNKNOWN'){
+    if(!secretaryPlan&&!secretaryOwnsTurn&&command.intent==='UNKNOWN'){
       const awaiting=await pendingCommercial(admin,event)
       if(awaiting?.action_type==='proposal_attachment'&&awaiting.status==='awaiting_context'){
         command={intent:'ATTACH_PROPOSAL_FILE',context_query:event.raw_text,confidence:1}
@@ -1020,12 +1026,13 @@ async function processEvent(admin: any, event: any) {
     const contextualActivity=command.intent==='ACTIVITY_COMPLETE'&&['ACTIVITY_START','ACTIVITY_CAPTURE'].includes(event.session?.active_intent)&&command.contextual
     // Uma saudação solta ("oi") não deve derrubar um fluxo pendente (lista aguardando escolha, tarefa
     // aguardando título...) — só um novo comando de verdade cancela o contexto anterior.
-    if(event.session&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
+    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
     await recordEvent(admin,event,'whatsapp_command','Comando interno recebido','Comando processado via WhatsApp',{intent:command.intent,message_type:event.message_type,secretary:Boolean(secretaryPlan),action_count:secretaryCommands.length||null,processing_path:processingPath})
     let outcome:any
     if(secretaryPlan&&secretaryPlan.reply_mode!=='execute'){
       if(secretaryPlan.reply_mode==='clarify'){
-        await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:'SECRETARY_CLARIFICATION',context:{request:cleanedRaw,previous_context:event.session?.context||null},pending_action:'secretary_clarification',pending_entity_type:null,pending_entity_id:null})
+        const priorPlan=event.session?.context?.secretary_plan||null
+        await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:priorPlan?'SECRETARY_PLAN':'SECRETARY_CLARIFICATION',context:{...(event.session?.context||{}),request:cleanedRaw,...(priorPlan?{secretary_plan:priorPlan}:{previous_context:event.session?.context||null})},pending_action:priorPlan?'resolve_secretary_plan':'secretary_clarification',pending_entity_type:null,pending_entity_id:null})
       }else if(event.session?.active_intent==='SECRETARY_CLARIFICATION'){
         await clearAssistantSession(admin,event)
       }
@@ -1033,6 +1040,9 @@ async function processEvent(admin: any, event: any) {
     }else if(secretaryCommands.length){
       const planned=await admin.from('task_command_events').update({parsed_command:{orchestrator:'internal_secretary',plan:secretaryPlan,commands:secretaryCommands},result:{...(event.result||{}),processing_path:processingPath}}).eq('id',event.id)
       if(planned.error)throw planned.error
+      const initialSecretaryPlan=buildPendingSecretaryPlan({plan:secretaryPlan,commands:secretaryCommands,messageKey:event.id})
+      await saveAssistantSession(admin,event,{state:'idle',active_intent:'SECRETARY_PLAN',context:{...(event.session?.context||{}),secretary_plan:initialSecretaryPlan},pending_action:'execute_secretary_plan',pending_entity_type:null,pending_entity_id:null})
+      let criticalPendingSession:any=null
       outcome=await runSecretaryActions({
         messageKey:event.id,
         commands:secretaryCommands,
@@ -1040,13 +1050,17 @@ async function processEvent(admin: any, event: any) {
         toolCallResults:event.result?.tool_call_results||{},
         executeTool:async(toolCommand:any,{index}:any)=>{
           event.action_index=index
+          const missing=secretaryCommandInputRequest(toolCommand)
+          if(missing)return{reply:missing,pending:true,status:'awaiting_context'}
+          event.entity_type=null;event.entity_id=null
           const beforeSession=event.session
           const result:any=await execute(admin,event,toolCommand)
+          if(event.session?.active_intent==='COLLECTION_SEND')criticalPendingSession=event.session
           const pending=Boolean(
             result?.status==='confirmation_required'
             || (event.session&&event.session!==beforeSession&&['awaiting_context','awaiting_selection','awaiting_confirmation'].includes(event.session.state))
           )
-          return typeof result==='string'?{reply:result,pending,status:pending?'awaiting_context':undefined}:{...result,pending}
+          return typeof result==='string'?{reply:result,pending,status:pending?'awaiting_context':undefined,entity_type:event.entity_type,entity_id:event.entity_id}:{...result,pending,entity_type:event.entity_type,entity_id:event.entity_id}
         },
         onProgress:async(progress:any)=>{
           const checkpoint=await admin.from('task_command_events').update({result:{...(event.result||{}),...progress,processing_path:processingPath}}).eq('id',event.id)
@@ -1055,6 +1069,14 @@ async function processEvent(admin: any, event: any) {
         },
       })
       delete event.action_index
+      const updatedSecretaryPlan=buildPendingSecretaryPlan({plan:secretaryPlan,commands:secretaryCommands,messageKey:event.id,outcome})
+      const pendingActions=updatedSecretaryPlan.actions.filter((item:any)=>['needs_input','awaiting_confirmation','failed'].includes(item.status))
+      const collectionSession=criticalPendingSession||((event.session?.active_intent==='COLLECTION_SEND')?event.session:null)
+      const preserveCollection=Boolean(collectionSession)
+      await saveAssistantSession(admin,event,preserveCollection
+        ? {state:collectionSession.state,active_intent:collectionSession.active_intent,context:{...(collectionSession.context||{}),secretary_plan:updatedSecretaryPlan},pending_action:collectionSession.pending_action,pending_entity_type:collectionSession.pending_entity_type,pending_entity_id:collectionSession.pending_entity_id}
+        : {state:pendingActions.length?'awaiting_context':'idle',active_intent:'SECRETARY_PLAN',context:{...(event.session?.context||{}),secretary_plan:updatedSecretaryPlan},pending_action:pendingActions.length?'resolve_secretary_plan':null,pending_entity_type:null,pending_entity_id:null})
+      outcome.reply=formatSecretaryExecutionReply({commands:secretaryCommands,outcome,memberName:event.team_member?.name,localDate:today()})
     }else{
       outcome=command.intent === 'UNKNOWN' ? CLARIFY_TEXT : await execute(admin, event, command)
     }

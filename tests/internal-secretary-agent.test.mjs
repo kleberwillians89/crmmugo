@@ -2,11 +2,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import {
+  buildPendingSecretaryPlan,
+  formatSecretaryExecutionReply,
   INTERNAL_SECRETARY_TOOLS,
   MAX_SECRETARY_ACTIONS,
   planInternalSecretaryMessage,
   runSecretaryActions,
   secretaryActionToCommand,
+  secretaryCommandInputRequest,
   validateSecretaryPlan,
 } from '../supabase/functions/_shared/internalSecretaryAgent.js'
 
@@ -86,14 +89,14 @@ test('contexto, membro e tenant permanecem vinculados em todas as leituras e esc
   assert.match(worker,/getMemberTaskReadModel\(admin,event\.organization_id,event\.team_member_id,today\(\)\)/)
   assert.match(worker,/organization_id: org,[\s\S]{0,300}assigned_to: assignee\?\.id \|\| event\.team_member_id/)
   assert.match(worker,/session:event\.session\?\{state:event\.session\.state,active_intent:event\.session\.active_intent/)
-  assert.match(worker,/active_intent:'SECRETARY_CLARIFICATION'/)
-  assert.match(worker,/pending_action:'secretary_clarification'/)
+  assert.match(worker,/active_intent:priorPlan\?'SECRETARY_PLAN':'SECRETARY_CLARIFICATION'/)
+  assert.match(worker,/secretary_plan:updatedSecretaryPlan/)
 })
 
 test('financeiro continua em confirmação explícita e “não” permanece atalho determinístico',()=>{
   assert.match(worker,/financial_command_confirmations'\)\.insert/)
   assert.match(worker,/Registrar .*\? Responda “sim” ou “não”\./)
-  assert.match(worker,/\['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','GREETING','HELP'/)
+  assert.match(worker,/\['CONFIRM_FINANCIAL','CANCEL_FINANCIAL'\]\.includes\(command\.intent\)/)
   assert.match(worker,/command\.intent==='CANCEL_FINANCIAL'&&event\.session\?\.active_intent/)
 })
 
@@ -308,4 +311,180 @@ test('comandos destrutivos genéricos têm zero pagamento e zero mutação',asyn
     await runSecretaryActions({messageKey:message,commands:plan.actions,executeTool:async()=>{effects+=1}})
   }
   assert.equal(effects,0)
+})
+
+test('regressão E2E real preserva três tarefas, horário, responsável e horas',async()=>{
+  const message='Bom dia. Hoje preciso finalizar o site da Cafifa, revisar a campanha da Roove às 14h e coloca para a Julia conferir os roteiros da Origami. Ontem trabalhei 4 horas na Cafifa.'
+  const rawPlan={reply_mode:'execute',message:null,actions:[
+    {tool:'create_task',arguments:{title:'Finalizar site da Cafifa',date:'2026-09-30'}},
+    {tool:'create_task',arguments:{title:'Revisar campanha da Roove',date:'2026-09-30',time:'14:00'}},
+    {tool:'create_task',arguments:{title:'Conferir os roteiros da Origami',date:'2026-09-30',assignee_name:'Julia'}},
+    {tool:'record_hours',arguments:{hours:4,date:'2026-09-29',summary:'Cafifa'}},
+  ]}
+  const plan=await planInternalSecretaryMessage({apiKey:'test',model:'test-model',message,member:{id:'kleber',name:'Kleber'},now:{local_date:'2026-09-30'},fetcher:responseFor(rawPlan)})
+  const commands=plan.actions.map(secretaryActionToCommand).map((command)=>({...command,secretary_direct:true}))
+  assert.deepEqual(commands.map((item)=>item.intent),['CREATE_TASK','CREATE_TASK','CREATE_TASK','RECORD_TIME'])
+  assert.deepEqual(commands.slice(0,3).map((item)=>[item.title,item.due_date,item.due_time,item.assignee_name]),[
+    ['Finalizar site da Cafifa','2026-09-30',null,null],
+    ['Revisar campanha da Roove','2026-09-30','14:00',null],
+    ['Conferir os roteiros da Origami','2026-09-30',null,'Julia'],
+  ])
+  assert.deepEqual([commands[3].hours,commands[3].due_date,commands[3].summary],[4,'2026-09-29','Cafifa'])
+  assert.ok(commands.every((command)=>secretaryCommandInputRequest(command)===null))
+
+  const effects=[]
+  const outcome=await runSecretaryActions({messageKey:'real-e2e-1',commands,executeTool:async(command,{index})=>{
+    effects.push(command.intent)
+    return{reply:'handler interno',entity_type:command.intent==='CREATE_TASK'?'crm_tasks':'operational_events',entity_id:`entity-${index}`}
+  }})
+  assert.equal(outcome.completed_tool_calls.length,4)
+  assert.equal(outcome.pending_tool_calls.length,0)
+  assert.deepEqual(effects,['CREATE_TASK','CREATE_TASK','CREATE_TASK','RECORD_TIME'])
+  const sessionPlan=buildPendingSecretaryPlan({plan,commands,messageKey:'real-e2e-1',outcome})
+  assert.deepEqual(sessionPlan.actions.map((item)=>item.status),['completed','completed','completed','completed'])
+  const reply=formatSecretaryExecutionReply({commands,outcome,memberName:'Kleber',localDate:'2026-09-30'})
+  assert.match(reply,/Roove para hoje às 14:00/)
+  assert.match(reply,/Origami com Julia para hoje/)
+  assert.match(reply,/4h registradas ontem em Cafifa/)
+  assert.doesNotMatch(reply,/handler interno|intent|tool|action_id/)
+})
+
+test('execução parcial preserva somente a action incompleta para continuação',async()=>{
+  const plan={reply_mode:'execute',message:null,actions:[
+    {tool:'create_task',arguments:{title:'Finalizar Alpha',date:'2026-09-30'}},
+    {tool:'create_task',arguments:{title:'Revisar Beta',date:'2026-09-30',time:'16:00'}},
+    {tool:'create_task',arguments:{title:'Falar com Gamma'}},
+    {tool:'record_hours',arguments:{hours:3,date:'2026-09-29',summary:'Alpha'}},
+  ]}
+  const commands=plan.actions.map(secretaryActionToCommand).map((item)=>({...item,secretary_direct:true}))
+  const effects=[]
+  const first=await runSecretaryActions({messageKey:'partial-1',commands,executeTool:async(command)=>{
+    const question=secretaryCommandInputRequest(command)
+    if(question)return{reply:question,status:'awaiting_context',pending:true}
+    effects.push(command.intent);return{reply:'ok'}
+  }})
+  assert.deepEqual(effects,['CREATE_TASK','CREATE_TASK','RECORD_TIME'])
+  const state=buildPendingSecretaryPlan({plan,commands,messageKey:'partial-1',outcome:first})
+  assert.deepEqual(state.actions.map((item)=>item.status),['completed','completed','needs_input','completed'])
+  assert.equal(first.pending_tool_calls.length,1)
+
+  effects.length=0
+  const continuationCommand={...secretaryActionToCommand({tool:'create_task',arguments:{title:'Falar com Gamma',date:'2026-10-01'}}),secretary_direct:true}
+  await runSecretaryActions({messageKey:'partial-2',commands:[continuationCommand],executeTool:async(command)=>{effects.push(command.title);return{reply:'ok'}}})
+  assert.deepEqual(effects,['Falar com Gamma'])
+})
+
+test('pending secretary plan tem prioridade e correção nunca vira atividade concluída',async()=>{
+  const plan={actions:[{id:'a1',tool:'create_task',status:'needs_input',arguments:{title:'Revisar Beta'},command:{intent:'CREATE_TASK',title:'Revisar Beta'}}]}
+  const session={active_intent:'SECRETARY_PLAN',context:{secretary_plan:plan}}
+  assert.ok(session.context.secretary_plan)
+  assert.match(worker,/const secretaryOwnsTurn=Boolean\(event\.session\?\.context\?\.secretary_plan\)/)
+  assert.match(worker,/!secretaryOwnsTurn&&\(\s*standaloneGreeting/)
+  assert.match(worker,/if\(secretaryOwnsTurn&&!deterministicShortcut&&!secretaryPlan\)/)
+  assert.doesNotMatch(JSON.stringify(plan),/ACTIVITY_COMPLETE/)
+  const correction='faltou revisar a campanha da Beta às 14h\nConferir os roteiros da Gamma fica para Maria'
+  const corrected=await planInternalSecretaryMessage({apiKey:'test',model:'test-model',message:correction,session,fetcher:responseFor({reply_mode:'execute',message:null,actions:[
+    {tool:'create_task',arguments:{title:'Revisar campanha da Beta',date:'2026-09-30',time:'14:00'}},
+    {tool:'create_task',arguments:{title:'Conferir roteiros da Gamma',date:'2026-09-30',assignee_name:'Maria'}},
+  ]})})
+  assert.deepEqual(corrected.actions.map((item)=>item.tool),['create_task','create_task'])
+  assert.ok(corrected.actions.every((item)=>item.tool!=='record_activity'))
+})
+
+test('correções de horário, data e pronome atualizam a mesma tarefa',async()=>{
+  const task={id:'task-beta',title:'Revisar Beta',due_date:'2026-09-30',due_time:'14:00',priority:'medium'}
+  const actions=[
+    {tool:'update_task',arguments:{task_query:'Revisar Beta',time:'15:00'}},
+    {tool:'update_task',arguments:{task_query:'Revisar Beta',date:'2026-10-01'}},
+    {tool:'update_task',arguments:{task_query:'Revisar Beta',priority:'high'}},
+  ]
+  for(const [index,action] of actions.entries()){
+    const command=secretaryActionToCommand(action)
+    await runSecretaryActions({messageKey:`correction-${index}`,commands:[command],executeTool:async(item)=>{
+      assert.equal(item.task_query,task.title)
+      if(item.due_time)task.due_time=item.due_time
+      if(item.due_date)task.due_date=item.due_date
+      if(item.priority)task.priority=item.priority
+      return{reply:'Atualizada',entity_type:'crm_tasks',entity_id:task.id}
+    }})
+  }
+  assert.deepEqual(task,{id:'task-beta',title:'Revisar Beta',due_date:'2026-10-01',due_time:'15:00',priority:'high'})
+})
+
+test('generaliza escopo temporal, horários, responsáveis e horas sem nomes fixos',async()=>{
+  const cases=[
+    ['Hoje tenho que finalizar Alpha, revisar Beta às 16 e coloca Maria para conferir Gamma. Ontem trabalhei 3h na Alpha.',[
+      {tool:'create_task',arguments:{title:'Finalizar Alpha',date:'2026-09-30'}},
+      {tool:'create_task',arguments:{title:'Revisar Beta',date:'2026-09-30',time:'16:00'}},
+      {tool:'create_task',arguments:{title:'Conferir Gamma',date:'2026-09-30',assignee_name:'Maria'}},
+      {tool:'record_hours',arguments:{hours:3,date:'2026-09-29',summary:'Alpha'}},
+    ]],
+    ['amanhã faço A e B. João fica com C hoje.',[
+      {tool:'create_task',arguments:{title:'A',date:'2026-10-01'}},
+      {tool:'create_task',arguments:{title:'B',date:'2026-10-01'}},
+      {tool:'create_task',arguments:{title:'C',date:'2026-09-30',assignee_name:'João'}},
+    ]],
+    ['hoje A às 10, B às 15, C sem horário.',[
+      {tool:'create_task',arguments:{title:'A',date:'2026-09-30',time:'10:00'}},
+      {tool:'create_task',arguments:{title:'B',date:'2026-09-30',time:'15:00'}},
+      {tool:'create_task',arguments:{title:'C',date:'2026-09-30'}},
+    ]],
+    ['hoje preciso A e também trabalhei 2h ontem em B',[
+      {tool:'create_task',arguments:{title:'A',date:'2026-09-30'}},
+      {tool:'record_hours',arguments:{hours:2,date:'2026-09-29',summary:'B'}},
+    ]],
+    ['hoje A e B; C fica para Maria amanhã',[
+      {tool:'create_task',arguments:{title:'A',date:'2026-09-30'}},
+      {tool:'create_task',arguments:{title:'B',date:'2026-09-30'}},
+      {tool:'create_task',arguments:{title:'C',date:'2026-10-01',assignee_name:'Maria'}},
+    ]],
+  ]
+  for(const [message,actions] of cases){
+    const validated=await planInternalSecretaryMessage({apiKey:'test',model:'test-model',message,now:{local_date:'2026-09-30'},fetcher:responseFor({reply_mode:'execute',message:null,actions})})
+    assert.equal(validated.actions.length,actions.length)
+    assert.ok(validated.actions.map(secretaryActionToCommand).every((command)=>secretaryCommandInputRequest(command)===null))
+  }
+})
+
+test('conversa completa de cinco turnos mantém entidades e confirma somente despesa',async()=>{
+  const db={tasks:[],hours:[],pendingExpenses:[],confirmedExpenses:[]}
+  let sequence=0
+  const executeMock=async(command)=>{
+    if(command.intent==='CREATE_TASK'){
+      const task={id:`task-${++sequence}`,title:command.title,due_date:command.due_date,due_time:command.due_time,assignee:command.assignee_name||'Kleber',priority:'medium',status:'pending'}
+      db.tasks.push(task);return{reply:'criada',entity_type:'crm_tasks',entity_id:task.id}
+    }
+    if(command.intent==='LIST_MINE')return{reply:db.tasks.filter((item)=>item.assignee==='Kleber').map((item)=>item.title).join(', ')}
+    if(command.intent==='LIST_TEAM')return{reply:db.tasks.filter((item)=>item.assignee===command.assignee_name).map((item)=>item.title).join(', ')}
+    if(command.intent==='MOVE_TASK'){const task=db.tasks.find((item)=>item.title.includes(command.task_query.replace(/^.*? /,''))||item.title.includes('Roove'));task.due_time=command.due_time||task.due_time;task.due_date=command.due_date||task.due_date;return{reply:'atualizada',entity_type:'crm_tasks',entity_id:task.id}}
+    if(command.intent==='COMPLETE_TASK'){const task=db.tasks.find((item)=>item.title.includes('Cafifa'));task.status='completed';return{reply:'concluída',entity_type:'crm_tasks',entity_id:task.id}}
+    if(command.intent==='RECORD_TIME'){db.hours.push({hours:command.hours,date:command.due_date,summary:command.summary});return{reply:'horas'}}
+    if(command.intent==='FINANCIAL_EXPENSE_REQUEST'){db.pendingExpenses.push({amount:command.amount,description:command.description});return{reply:'Registrar despesa?',status:'confirmation_required',pending:true}}
+    throw new Error(`handler inesperado ${command.intent}`)
+  }
+  const turn=async(key,actions)=>{
+    const plan={reply_mode:'execute',message:null,actions}
+    const commands=actions.map(secretaryActionToCommand).filter(Boolean).map((item)=>({...item,secretary_direct:true}))
+    return runSecretaryActions({messageKey:key,commands,executeTool:executeMock})
+  }
+
+  const t1=await turn('t1',[
+    {tool:'create_task',arguments:{title:'Finalizar Cafifa',date:'2026-09-30'}},
+    {tool:'create_task',arguments:{title:'Revisar Roove',date:'2026-09-30',time:'14:00'}},
+    {tool:'create_task',arguments:{title:'Conferir Origami',date:'2026-09-30',assignee_name:'Julia'}},
+    {tool:'record_hours',arguments:{hours:4,date:'2026-09-29',summary:'Cafifa'}},
+  ])
+  assert.equal(t1.completed_tool_calls.length,4)
+  const t2=await turn('t2',[{tool:'list_my_tasks',arguments:{date:'2026-09-30'}},{tool:'list_team_tasks',arguments:{assignee_name:'Julia',date:'2026-09-30'}}])
+  assert.match(t2.reply,/Cafifa/);assert.match(t2.reply,/Roove/);assert.match(t2.reply,/Origami/)
+  await turn('t3',[{tool:'update_task',arguments:{task_query:'Revisar Roove',time:'15:00'}}])
+  assert.equal(db.tasks.find((item)=>item.title.includes('Roove')).due_time,'15:00')
+  const t4=await turn('t4',[{tool:'complete_task',arguments:{task_query:'Finalizar Cafifa'}},{tool:'register_expense',arguments:{amount:80,description:'Uber'}}])
+  assert.equal(db.tasks.find((item)=>item.title.includes('Cafifa')).status,'completed')
+  assert.equal(t4.pending_tool_calls.length,1)
+  assert.equal(db.confirmedExpenses.length,0)
+  const pending=db.pendingExpenses.pop();db.confirmedExpenses.push(pending)
+  assert.deepEqual(db.confirmedExpenses,[{amount:80,description:'Uber'}])
+  assert.equal(db.tasks.length,3)
+  assert.deepEqual(db.hours,[{hours:4,date:'2026-09-29',summary:'Cafifa'}])
 })

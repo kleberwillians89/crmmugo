@@ -12,7 +12,7 @@ export const MAX_SECRETARY_ACTIONS = 6
 const TOOL_SET = new Set(INTERNAL_SECRETARY_TOOLS)
 const TOOL_ARGUMENTS = Object.freeze({
   create_task: ['title','items','date','time','assignee_name','priority','task_type'],
-  update_task: ['task_query','task_short_id','date','priority','assignee_name','status'],
+  update_task: ['task_query','task_short_id','date','time','priority','assignee_name','status'],
   complete_task: ['task_query','task_short_id'],
   start_task: ['task_query','task_short_id'],
   list_my_tasks: ['scope','date'],
@@ -94,7 +94,7 @@ function isValidToolArguments(tool, args, rawArguments) {
     if (items.some((item) => item?.time != null && (typeof item.time !== 'string' || !isClockTime(item.time)))) return false
   }
   if (['complete_task', 'start_task'].includes(tool) && !hasTaskReference(args)) return false
-  if (tool === 'update_task' && (!hasTaskReference(args) || !['date', 'priority', 'assignee_name', 'status'].some((key) => args[key] != null))) return false
+  if (tool === 'update_task' && (!hasTaskReference(args) || !['date', 'time', 'priority', 'assignee_name', 'status'].some((key) => args[key] != null))) return false
   if (tool === 'record_hours' && !isPositiveNumber(args.hours)) return false
   if (tool === 'record_activity' && !clean(args.summary, 500) && !(Array.isArray(args.items) && args.items.length)) return false
   if (tool === 'record_activity' && args.status != null && !['started', 'completed'].includes(clean(args.status, 20))) return false
@@ -128,7 +128,10 @@ Retorne somente JSON no schema solicitado. Use exclusivamente as tools permitida
 Regras:
 - use apenas fatos da mensagem, sessão e contexto operacional; nunca invente cliente, tarefa, valor, pagamento, pessoa ou ID;
 - uma mensagem pode gerar várias actions independentes;
-- quando houver várias tarefas para o mesmo responsável, prefira uma única action create_task com arguments.items;
+- preserve cada demanda, horário, responsável e registro de horas da mensagem; não descarte cláusulas independentes;
+- uma indicação temporal compartilhada no início da frase se aplica às demandas coordenadas seguintes até surgir outro marcador temporal;
+- em conversas com session.context.secretary_plan, o plano salvo é a fonte da continuação: retorne somente actions pendentes ou correções pedidas e nunca repita actions completed;
+- correções naturais devem atualizar a tarefa existente com update_task, usando os resultados/candidate_items do plano; não crie uma tarefa duplicada;
 - quando faltar um dado realmente obrigatório, reply_mode=clarify, actions=[] e faça uma única pergunta curta;
 - create_task exige título, mas data e horário são opcionais; não use frases como “criar tarefa” como título;
 - register_expense/register_receipt/send_collection apenas iniciam handlers que mantêm confirmação explícita;
@@ -209,7 +212,7 @@ export function secretaryActionToCommand(action) {
     }
     case 'update_task': {
       const base = taskReference(args)
-      if (isoDate(args.date)) return { intent: 'MOVE_TASK', ...base, due_date: isoDate(args.date), confidence: 1 }
+      if (isoDate(args.date) || clockTime(args.time)) return { intent: 'MOVE_TASK', ...base, due_date: isoDate(args.date), due_time: clockTime(args.time), confidence: 1 }
       if (validPriority(args.priority)) return { intent: 'SET_PRIORITY', ...base, priority: validPriority(args.priority), confidence: 1 }
       if (args.assignee_name) return { intent: 'ASSIGN_TASK', ...base, assignee_name: clean(args.assignee_name,120), confidence: 1 }
       if (safeTaskStatus(args.status)) return { intent: 'UPDATE_TASK_STATUS', ...base, task_status: safeTaskStatus(args.status), confidence: 1 }
@@ -240,6 +243,18 @@ export function secretaryActionToCommand(action) {
 export const secretaryActionKey = (messageKey, index, command) =>
   `${clean(messageKey, 160)}:action:${index}:${clean(command?.intent, 80)}`
 
+export function secretaryCommandInputRequest(command) {
+  if (command?.intent !== 'CREATE_TASK') return null
+  const items = Array.isArray(command.items) && command.items.length
+    ? command.items
+    : [{ title: command.title, due_date: command.due_date, due_time: command.due_time }]
+  if (items.some((item) => !clean(item?.title, 240))) return 'Qual é a tarefa que devo registrar?'
+  if (items.some((item) => !item?.due_date)) return items.length > 1
+    ? 'Para quando ficam essas tarefas?'
+    : `Para quando fica “${clean(items[0].title, 240)}”?`
+  return null
+}
+
 // Executor puro: não conhece Supabase nem handlers concretos. O worker injeta o handler validado e
 // persiste cada checkpoint, permitindo retry sem repetir ações que já terminaram.
 export async function runSecretaryActions({ messageKey, commands, completedToolCalls = [], toolCallResults = {}, executeTool, onProgress = async () => {} }) {
@@ -261,7 +276,13 @@ export async function runSecretaryActions({ messageKey, commands, completedToolC
     if (normalized.status) statuses.push(normalized.status)
     if (normalized.pending === true || ['ambiguous', 'awaiting_context', 'confirmation_required'].includes(normalized.status)) pending.push(key)
     else completed.add(key)
-    results[key] = { reply: clean(normalized.reply, 4000) || null, status: clean(normalized.status, 80) || null, pending: pending.includes(key) }
+    results[key] = {
+      reply: clean(normalized.reply, 4000) || null,
+      status: clean(normalized.status, 80) || null,
+      pending: pending.includes(key),
+      entity_type: clean(normalized.entity_type, 80) || null,
+      entity_id: clean(normalized.entity_id, 120) || null,
+    }
     await onProgress({ completed_tool_calls: [...completed], pending_tool_calls: [...pending], tool_call_results: results })
   }
   return {
@@ -271,4 +292,91 @@ export async function runSecretaryActions({ messageKey, commands, completedToolC
     pending_tool_calls: pending,
     tool_call_results: results,
   }
+}
+
+export function buildPendingSecretaryPlan({ plan, commands, messageKey, outcome = null }) {
+  const completed = new Set(outcome?.completed_tool_calls || [])
+  const pending = new Set(outcome?.pending_tool_calls || [])
+  const results = outcome?.tool_call_results || {}
+  return {
+    actions: commands.slice(0, MAX_SECRETARY_ACTIONS).map((command, index) => {
+      const key = secretaryActionKey(messageKey, index, command)
+      const result = results[key] || {}
+      const missingCreateInput = Boolean(secretaryCommandInputRequest(command))
+      const status = completed.has(key)
+        ? 'completed'
+        : pending.has(key)
+          ? (result.status === 'confirmation_required' ? 'awaiting_confirmation' : 'needs_input')
+          : missingCreateInput ? 'needs_input' : 'ready'
+      return {
+        id: `a${index + 1}`,
+        tool: plan?.actions?.[index]?.tool || null,
+        status,
+        arguments: plan?.actions?.[index]?.arguments || {},
+        command,
+        result: result.entity_id ? { entity_type: result.entity_type, entity_id: result.entity_id } : null,
+      }
+    }),
+  }
+}
+
+const friendlyDate = (value, localDate) => {
+  if (value === localDate) return 'hoje'
+  if (value && localDate) {
+    const previous = new Date(`${localDate}T12:00:00Z`)
+    previous.setUTCDate(previous.getUTCDate() - 1)
+    if (value === previous.toISOString().slice(0, 10)) return 'ontem'
+  }
+  return value || null
+}
+
+export function formatSecretaryExecutionReply({ commands, outcome, memberName = '', localDate = '' }) {
+  const completed = new Set(outcome?.completed_tool_calls || [])
+  const results = outcome?.tool_call_results || {}
+  const lines = []
+  const pendingReplies = []
+  commands.forEach((command, index) => {
+    const key = Object.keys(results).find((candidate) => candidate.includes(`:action:${index}:`))
+    const result = key ? results[key] : null
+    if (result?.pending) {
+      if (result.reply) pendingReplies.push(result.reply)
+      return
+    }
+    if (!key || !completed.has(key)) return
+    if (command.intent === 'CREATE_TASK') {
+      const owner = command.assignee_name ? ` com ${command.assignee_name}` : ''
+      const items = Array.isArray(command.items) && command.items.length
+        ? command.items
+        : [{ title: command.title, due_date: command.due_date, due_time: command.due_time }]
+      items.forEach((item) => {
+        const date = friendlyDate(item.due_date || command.due_date, localDate)
+        const time = item.due_time || command.due_time
+        lines.push(`${clean(item.title, 240)}${owner}${date ? ` para ${date}` : ''}${time ? ` às ${String(time).slice(0, 5)}` : ''}`)
+      })
+    } else if (command.intent === 'RECORD_TIME') {
+      const date = friendlyDate(command.due_date, localDate)
+      lines.push(`${command.hours}h registradas${date ? ` ${date}` : ''}${command.summary ? ` em ${clean(command.summary, 160)}` : ''}`)
+    } else if (command.intent === 'COMPLETE_TASK') {
+      lines.push(`${clean(command.task_query, 180) || 'Tarefa'} concluída`)
+    } else if (command.intent === 'MOVE_TASK') {
+      lines.push(`${clean(command.task_query, 180) || 'Tarefa'} atualizada${command.due_date ? ` para ${friendlyDate(command.due_date, localDate)}` : ''}${command.due_time ? ` às ${String(command.due_time).slice(0, 5)}` : ''}`)
+    } else if (command.intent === 'SET_PRIORITY') {
+      lines.push(`${clean(command.task_query, 180) || 'Tarefa'} com prioridade ${command.priority}`)
+    } else if (command.intent === 'ASSIGN_TASK') {
+      lines.push(`${clean(command.task_query, 180) || 'Tarefa'} ficou com ${clean(command.assignee_name, 120)}`)
+    } else if (command.intent === 'ACTIVITY_COMPLETE') {
+      const items = Array.isArray(command.items) && command.items.length ? command.items : [{ summary: command.summary }]
+      items.forEach((item) => lines.push(`${clean(item.summary, 180)} concluída`))
+    } else if (command.intent === 'ACTIVITY_START') {
+      lines.push(`${clean(command.summary, 180)} iniciada`)
+    } else if (command.intent === 'RECORD_DECISION') {
+      lines.push(`Decisão registrada: ${clean(command.summary, 180)}`)
+    } else if (command.intent === 'RECORD_OBSERVATION') {
+      lines.push(`Observação registrada: ${clean(command.summary, 180)}`)
+    }
+  })
+  const firstName = clean(memberName, 120).split(' ')[0]
+  const prefix = firstName ? `Pronto, ${firstName}.` : 'Pronto.'
+  const completedText = lines.length ? `${prefix} Organizei tudo:\n${lines.map((line) => `• ${line};`).join('\n')}` : ''
+  return [completedText, ...pendingReplies].filter(Boolean).join('\n\n') || outcome?.reply || 'Pronto.'
 }
