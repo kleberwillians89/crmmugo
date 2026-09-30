@@ -378,7 +378,7 @@ test('pending secretary plan tem prioridade e correção nunca vira atividade co
   const plan={actions:[{id:'a1',tool:'create_task',status:'needs_input',arguments:{title:'Revisar Beta'},command:{intent:'CREATE_TASK',title:'Revisar Beta'}}]}
   const session={active_intent:'SECRETARY_PLAN',context:{secretary_plan:plan}}
   assert.ok(session.context.secretary_plan)
-  assert.match(worker,/const secretaryOwnsTurn=Boolean\(event\.session\?\.context\?\.secretary_plan\)/)
+  assert.match(worker,/const secretaryOwnsTurn=Boolean\(previousSecretaryPlan\)/)
   assert.match(worker,/!secretaryOwnsTurn&&\(\s*standaloneGreeting/)
   assert.match(worker,/if\(secretaryOwnsTurn&&!deterministicShortcut&&!secretaryPlan\)/)
   assert.doesNotMatch(JSON.stringify(plan),/ACTIVITY_COMPLETE/)

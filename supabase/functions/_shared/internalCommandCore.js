@@ -47,6 +47,12 @@ const weekdayIndex = { domingo: 0, segunda: 1, terca: 2, quarta: 3, quinta: 4, s
 export function resolveRelativeDate(value, now = new Date()) {
   const text = foldText(value)
   const today = isoInSaoPaulo(now)
+  const numericDate = text.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(20\d{2}))?\b/)
+  if (numericDate) {
+    const candidate = `${numericDate[3] || today.slice(0, 4)}-${numericDate[2].padStart(2, '0')}-${numericDate[1].padStart(2, '0')}`
+    const parsed = new Date(`${candidate}T12:00:00Z`)
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === candidate ? candidate : null
+  }
   if (/depois de amanha/.test(text)) return addDays(today, 2)
   if (/\bamanha\b/.test(text)) return addDays(today, 1)
   if (/\bhoje\b/.test(text)) return today

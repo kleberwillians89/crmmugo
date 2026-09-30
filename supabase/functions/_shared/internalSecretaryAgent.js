@@ -1,4 +1,73 @@
+import { foldText, resolveRelativeDate, parseTaskSchedule } from './internalCommandCore.js'
+
 const clean = (value, max = 500) => String(value ?? '').trim().slice(0, max)
+
+export function normalizeSecretaryDate(text, localDate, timezone = 'America/Sao_Paulo') {
+  if (!localDate || timezone !== 'America/Sao_Paulo') return null
+  if (/\bou\b/i.test(String(text))) return null
+  const value = resolveRelativeDate(text, new Date(`${localDate}T12:00:00Z`))
+  if (!value) return null
+  const parsed = new Date(`${value}T12:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : null
+}
+
+const READ_TOOLS = new Set(['list_my_tasks','list_team_tasks','get_day_summary','get_week_summary','plan_my_day','list_pending_charges'])
+const RELATIONS = new Set(['continue_plan','correct_plan','new_request','cancel_plan'])
+const taskWords = (text) => foldText(text).split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !['para','uma','hoje','ontem','site','finalizar','finalizado','finalizei','atrasada','revisar','concluido'].includes(word))
+
+// Exact token containment only; ambiguity is never resolved by a fuzzy score.
+export function enrichSecretaryPlan(raw, { message, localDate, operationalContext = {} }) {
+  const plan = structuredClone(raw)
+  // Enrichment must not erase forbidden identity arguments before validation.
+  if (plan.actions?.some((action) => ['organization_id','team_member_id','user_id','member_id','due_date','due_time'].some((key) => key in (action.arguments || {})))) return plan
+  const knownTasks = (operationalContext.my_tasks || []).map((task) => ({ ...task, title: task.title || task.label }))
+  const clauses = String(message).split(/[.!?]/).filter(Boolean)
+  for (const action of plan.actions || []) {
+    const args = action.arguments || {}
+    if (['update_task','complete_task','start_task'].includes(action.tool) && args.task_query && !args.task_short_id) {
+      const words = taskWords(args.task_query)
+      const tasks = knownTasks.filter((task) => !['completed','cancelled'].includes(task.status))
+      const exact = tasks.filter((task) => foldText(task.title) === foldText(args.task_query))
+      const matches = exact.length ? exact : tasks.filter((task) => words.length && words.every((word) => taskWords(task.title).includes(word)))
+      if (matches.length === 1) args.task_query = matches[0].title
+      if (matches.length > 1) return { reply_mode: 'clarify', message: `Encontrei mais de uma tarefa: ${matches.map((task) => task.title).join('; ')}. Qual delas?`, actions: [], turn_relation: plan.turn_relation }
+    }
+    for (const target of [args, ...(Array.isArray(args.items) ? args.items.filter((item) => item && typeof item === 'object') : [])]) {
+      if (target.date) target.date = normalizeSecretaryDate(target.date, localDate) || target.date
+      if (localDate && target.time && !/^\d{2}:\d{2}$/.test(target.time)) target.time = parseTaskSchedule(`às ${target.time}`, new Date(`${localDate}T12:00:00Z`)).due_time || target.time
+      if (!target.date && ['create_task','record_hours'].includes(action.tool)) {
+        const words = taskWords(target.title || target.summary || args.title || args.summary)
+        const matches = clauses.filter((clause) => words.length && words.every((word) => taskWords(clause).includes(word)) && (action.tool === 'record_hours' ? /\btrabalhei\b/i.test(clause) && /\d+\s*(?:h|horas)/i.test(clause) : !/\btrabalhei\b/i.test(clause)))
+        if (matches.length === 1) target.date = normalizeSecretaryDate(matches[0], localDate)
+      }
+      if (localDate && !target.time && action.tool === 'create_task') {
+        const words = taskWords(target.title || args.title)
+        const matches = String(message).split(/[,.;]|\s+e\s+/).filter((clause) => words.length && words.every((word) => taskWords(clause).includes(word)))
+        if (matches.length === 1) target.time = parseTaskSchedule(matches[0], new Date(`${localDate}T12:00:00Z`)).due_time
+      }
+    }
+    if (action.tool === 'record_activity' && !args.items?.length && /\b(finalizad[oa]|finalizei|terminei|concluid[oa]|conclui|iniciei|comecei)\b/.test(foldText(message))) {
+      const words = taskWords(args.summary)
+      const matches = knownTasks.filter((task) => !['completed','cancelled'].includes(task.status) && words.length && words.every((word) => taskWords(task.title).includes(word)))
+      if (matches.length > 1) return { reply_mode: 'clarify', message: `Encontrei mais de uma tarefa: ${matches.map((task) => task.title).join('; ')}. Qual delas?`, actions: [], turn_relation: plan.turn_relation }
+      if (matches.length === 1) {
+        action.tool = args.status === 'started' ? 'start_task' : 'complete_task'
+        action.arguments = { task_query: matches[0].title }
+      }
+    }
+  }
+  if (plan.actions?.length && plan.actions.every((action) => READ_TOOLS.has(action.tool))) plan.turn_relation = 'new_request'
+  return plan
+}
+
+export function retainSecretaryPlan(previous, current, relation, now = Date.now()) {
+  if (relation === 'cancel_plan') return null
+  if (relation === 'new_request' && current.actions.every((action) => READ_TOOLS.has(action.tool)) && previous?.actions?.some((action) => action.status === 'needs_input')) {
+    const interruptedAt = previous.interrupted_at || now
+    if (now - interruptedAt < 30 * 60 * 1000) return { ...previous, interrupted_at: interruptedAt }
+  }
+  return current
+}
 
 export const INTERNAL_SECRETARY_TOOLS = Object.freeze([
   'create_task', 'update_task', 'complete_task', 'start_task',
@@ -48,19 +117,24 @@ export function validateSecretaryPlan(value) {
   const actions = []
   for (const candidate of Array.isArray(value.actions) ? value.actions.slice(0, MAX_SECRETARY_ACTIONS) : []) {
     const tool = clean(candidate?.tool, 80)
-    if (!TOOL_SET.has(tool)) continue
+    if (!TOOL_SET.has(tool)) return null
     const allowed = new Set(TOOL_ARGUMENTS[tool])
     const rawArguments = candidate?.arguments && typeof candidate.arguments === 'object' && !Array.isArray(candidate.arguments) ? candidate.arguments : {}
     const args = Object.fromEntries(Object.entries(rawArguments)
       .filter(([key]) => allowed.has(key))
       .map(([key,item]) => [key, safeValue(item)]))
-    if (isValidToolArguments(tool, args, rawArguments)) actions.push({ tool, arguments: args })
+    if (!isValidToolArguments(tool, args, rawArguments)) return null
+    actions.push({ tool, arguments: args })
   }
   if (replyMode === 'execute' && !actions.length) return null
-  return { reply_mode: replyMode, message: value.message == null ? null : clean(value.message, 1000), actions }
+  return { reply_mode: replyMode, message: value.message == null ? null : clean(value.message, 1000), actions, ...(RELATIONS.has(value.turn_relation) ? { turn_relation: value.turn_relation } : {}) }
 }
 
-const isIsoDate = (value) => /^20\d{2}-\d{2}-\d{2}$/.test(clean(value, 10))
+const isIsoDate = (value) => {
+  if (typeof value !== 'string' || !/^20\d{2}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T12:00:00Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
 const isClockTime = (value) => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clean(value, 5))
 const isPositiveNumber = (value) => Number.isFinite(Number(value)) && Number(value) > 0
 const hasTaskReference = (args) => Boolean(clean(args.task_query, 240) || /^[a-f0-9]{6}$/i.test(clean(args.task_short_id, 20).replace(/^#/, '')))
@@ -130,10 +204,14 @@ Regras:
 - uma mensagem pode gerar várias actions independentes;
 - preserve cada demanda, horário, responsável e registro de horas da mensagem; não descarte cláusulas independentes;
 - uma indicação temporal compartilhada no início da frase se aplica às demandas coordenadas seguintes até surgir outro marcador temporal;
-- em conversas com session.context.secretary_plan, o plano salvo é a fonte da continuação: retorne somente actions pendentes ou correções pedidas e nunca repita actions completed;
+- classifique semanticamente cada turno em turn_relation: continue_plan (resposta ao dado pendente), correct_plan (correção), new_request (pedido independente), cancel_plan (abandono explícito);
+- um plano salvo não obriga continuação: perguntas sobre dia, semana, atrasos ou equipe são new_request e devem consultar tools imediatamente;
+- somente em continue_plan/correct_plan use o plano salvo; nunca repita actions completed. Em cancel_plan retorne answer sem actions;
+- tarefa aberta correspondente em operational_context.my_tasks tem prioridade sobre record_activity quando o usuário indica conclusão/início/alteração; use complete_task/start_task/update_task. Se houver ambiguidade, pergunte qual;
+- complete_task usa o momento real e não pede data de atividade. Referências elípticas de horário usam a última tarefa alterada; datas humanas devem virar ISO;
 - correções naturais devem atualizar a tarefa existente com update_task, usando os resultados/candidate_items do plano; não crie uma tarefa duplicada;
 - quando faltar um dado realmente obrigatório, reply_mode=clarify, actions=[] e faça uma única pergunta curta;
-- create_task exige título, mas data e horário são opcionais; não use frases como “criar tarefa” como título;
+- create_task exige título e date; time é opcional. Infira date do escopo temporal inequívoco antes de perguntar. Preserve actions completas mesmo quando outra precisa de data; não use frases como “criar tarefa” como título;
 - register_expense/register_receipt/send_collection apenas iniciam handlers que mantêm confirmação explícita;
 - referências como “ela” só podem usar candidate_items inequívocos da sessão;
 - para perguntas operacionais ou fatos internos, escolha uma tool de leitura; se nenhuma tool puder consultar o dado, diga que não conseguiu consultar e não invente;
@@ -162,6 +240,7 @@ Tools: ${INTERNAL_SECRETARY_TOOLS.join(', ')}.`
       text: { format: { type: 'json_schema', name: 'internal_secretary_plan', strict: false, schema: {
         type: 'object', additionalProperties: false,
         properties: {
+          turn_relation: { type: 'string', enum: [...RELATIONS] },
           reply_mode: { type: 'string', enum: ['execute','clarify','answer'] },
           message: { type: ['string','null'] },
           actions: { type: 'array', maxItems: MAX_SECRETARY_ACTIONS, items: {
@@ -170,7 +249,7 @@ Tools: ${INTERNAL_SECRETARY_TOOLS.join(', ')}.`
             required: ['tool','arguments'],
           } },
         },
-        required: ['reply_mode','message','actions'],
+        required: ['reply_mode','message','actions','turn_relation'],
       } } },
     }),
     signal: AbortSignal.timeout(15_000),
@@ -178,10 +257,12 @@ Tools: ${INTERNAL_SECRETARY_TOOLS.join(', ')}.`
   if (!response.ok) return null
   const body = await response.json().catch(() => ({}))
   try {
-    const rawPlan = JSON.parse(clean(outputText(body), 12000) || '{}')
+    const rawPlan = enrichSecretaryPlan(JSON.parse(clean(outputText(body), 12000) || '{}'), { message, localDate: now?.local_date, operationalContext })
     const plan = validateSecretaryPlan(rawPlan)
+    if (plan?.turn_relation === 'cancel_plan') return { ...plan, reply_mode: 'answer', actions: [], message: 'Certo, deixei esse plano de lado.' }
     if (!plan && rawPlan?.reply_mode === 'execute') {
-      return { reply_mode: 'clarify', message: 'Não posso executar essa ação. Posso ajudar com outra coisa?', actions: [] }
+      const forbidden = rawPlan.actions?.some((action) => !TOOL_SET.has(action.tool) || ['organization_id','team_member_id','user_id','member_id'].some((key) => key in (action.arguments || {})))
+      return { reply_mode: 'clarify', message: forbidden ? 'Não posso executar essa ação. Posso ajudar com outra coisa?' : rawPlan.actions?.some((action) => action.arguments?.date) ? 'Qual data você quer colocar? Use dia, mês e ano para eu confirmar.' : 'Qual tarefa você quer alterar?', actions: [], turn_relation: rawPlan.turn_relation }
     }
     if (plan?.reply_mode === 'answer' && requiresOperationalRead(message)) {
       return { reply_mode: 'clarify', message: 'Não consegui consultar esse dado agora. Pode tentar novamente?', actions: [] }

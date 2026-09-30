@@ -4,7 +4,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
-import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, runSecretaryActions, secretaryActionToCommand, secretaryCommandInputRequest } from '../_shared/internalSecretaryAgent.js'
+import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, secretaryActionToCommand, secretaryCommandInputRequest } from '../_shared/internalSecretaryAgent.js'
 
 const headers = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers })
@@ -858,7 +858,12 @@ async function processEvent(admin: any, event: any) {
     if (member.error) throw Object.assign(new Error('Membro interno não está mais ativo.'), { code: 'TEAM_MEMBER_INACTIVE' })
     event.team_member = member.data
     const cleanedRaw=clean(event.raw_text),foldedRaw=foldText(cleanedRaw)
-    const secretaryOwnsTurn=Boolean(event.session?.context?.secretary_plan)
+    if(event.session?.context?.secretary_plan?.interrupted_at && Date.now()-event.session.context.secretary_plan.interrupted_at>=30*60*1000){
+      if(event.session.active_intent==='SECRETARY_PLAN')await clearAssistantSession(admin,event)
+      else await saveAssistantSession(admin,event,{state:event.session.state,active_intent:event.session.active_intent,context:{...event.session.context,secretary_plan:null},pending_action:event.session.pending_action,pending_entity_type:event.session.pending_entity_type,pending_entity_id:event.session.pending_entity_id})
+    }
+    const previousSecretaryPlan=event.session?.context?.secretary_plan||null
+    const secretaryOwnsTurn=Boolean(previousSecretaryPlan)
     const candidateItems:any[]=Array.isArray(event.session?.context?.candidate_items)?event.session.context.candidate_items:[]
     const selectableItems=candidateItems.length?candidateItems:(Array.isArray(event.session?.context?.installment_ids)?event.session.context.installment_ids.map((id:any,index:number)=>({index:index+1,id})):[])
     const sessionDate=resolveRelativeDate(cleanedRaw)
@@ -1027,22 +1032,25 @@ async function processEvent(admin: any, event: any) {
     // Uma saudação solta ("oi") não deve derrubar um fluxo pendente (lista aguardando escolha, tarefa
     // aguardando título...) — só um novo comando de verdade cancela o contexto anterior.
     if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
-    await recordEvent(admin,event,'whatsapp_command','Comando interno recebido','Comando processado via WhatsApp',{intent:command.intent,message_type:event.message_type,secretary:Boolean(secretaryPlan),action_count:secretaryCommands.length||null,processing_path:processingPath})
+    const turnRelation=secretaryPlan?.turn_relation||'new_request'
+    event.result={...(event.result||{}),turn_relation:turnRelation}
+    if(turnRelation==='cancel_plan')await clearAssistantSession(admin,event)
+    await recordEvent(admin,event,'whatsapp_command','Comando interno recebido','Comando processado via WhatsApp',{intent:command.intent,message_type:event.message_type,secretary:Boolean(secretaryPlan),action_count:secretaryCommands.length||null,processing_path:processingPath,turn_relation:turnRelation})
     let outcome:any
     if(secretaryPlan&&secretaryPlan.reply_mode!=='execute'){
       if(secretaryPlan.reply_mode==='clarify'){
-        const priorPlan=event.session?.context?.secretary_plan||null
-        await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:priorPlan?'SECRETARY_PLAN':'SECRETARY_CLARIFICATION',context:{...(event.session?.context||{}),request:cleanedRaw,...(priorPlan?{secretary_plan:priorPlan}:{previous_context:event.session?.context||null})},pending_action:priorPlan?'resolve_secretary_plan':'secretary_clarification',pending_entity_type:null,pending_entity_id:null})
-      }else if(event.session?.active_intent==='SECRETARY_CLARIFICATION'){
+        const priorPlan=['continue_plan','correct_plan'].includes(turnRelation)?event.session?.context?.secretary_plan||null:null
+        await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:priorPlan?'SECRETARY_PLAN':'SECRETARY_CLARIFICATION',context:{request:cleanedRaw,secretary_plan:priorPlan},pending_action:priorPlan?'resolve_secretary_plan':'secretary_clarification',pending_entity_type:null,pending_entity_id:null})
+      }else if(event.session?.active_intent==='SECRETARY_CLARIFICATION'||(turnRelation==='new_request'&&event.session?.active_intent==='SECRETARY_PLAN')){
         await clearAssistantSession(admin,event)
       }
       outcome=secretaryPlan.message||CLARIFY_TEXT
     }else if(secretaryCommands.length){
       const planned=await admin.from('task_command_events').update({parsed_command:{orchestrator:'internal_secretary',plan:secretaryPlan,commands:secretaryCommands},result:{...(event.result||{}),processing_path:processingPath}}).eq('id',event.id)
       if(planned.error)throw planned.error
-      const initialSecretaryPlan=buildPendingSecretaryPlan({plan:secretaryPlan,commands:secretaryCommands,messageKey:event.id})
+      let criticalPendingSession:any=event.session?.active_intent==='COLLECTION_SEND'?event.session:null
+      const initialSecretaryPlan=retainSecretaryPlan(previousSecretaryPlan,buildPendingSecretaryPlan({plan:secretaryPlan,commands:secretaryCommands,messageKey:event.id}),turnRelation)
       await saveAssistantSession(admin,event,{state:'idle',active_intent:'SECRETARY_PLAN',context:{...(event.session?.context||{}),secretary_plan:initialSecretaryPlan},pending_action:'execute_secretary_plan',pending_entity_type:null,pending_entity_id:null})
-      let criticalPendingSession:any=null
       outcome=await runSecretaryActions({
         messageKey:event.id,
         commands:secretaryCommands,
@@ -1069,7 +1077,7 @@ async function processEvent(admin: any, event: any) {
         },
       })
       delete event.action_index
-      const updatedSecretaryPlan=buildPendingSecretaryPlan({plan:secretaryPlan,commands:secretaryCommands,messageKey:event.id,outcome})
+      const updatedSecretaryPlan=retainSecretaryPlan(previousSecretaryPlan,buildPendingSecretaryPlan({plan:secretaryPlan,commands:secretaryCommands,messageKey:event.id,outcome}),turnRelation)
       const pendingActions=updatedSecretaryPlan.actions.filter((item:any)=>['needs_input','awaiting_confirmation','failed'].includes(item.status))
       const collectionSession=criticalPendingSession||((event.session?.active_intent==='COLLECTION_SEND')?event.session:null)
       const preserveCollection=Boolean(collectionSession)
