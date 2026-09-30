@@ -1,4 +1,4 @@
-import { foldText, hasExplicitWriteSignal, parseInternalCommand, resolveRelativeDate, parseTaskSchedule } from './internalCommandCore.js'
+import { foldText, hasExplicitWriteSignal, parseInternalCommand, parseMultiAssigneeTask, resolveRelativeDate, parseTaskSchedule } from './internalCommandCore.js'
 
 const clean = (value, max = 500) => String(value ?? '').trim().slice(0, max)
 
@@ -338,9 +338,32 @@ const resolveWriteRescueAssignee = (name, teamMembers) => {
 // ambíguo/desconhecido, ou qualquer intenção que não seja create_task) cancela o rescue inteiro — nunca
 // executa parcialmente, nunca adivinha o resto. Mensagens de uma cláusula só não passam por aqui: já
 // resolvem sozinhas pelo parser determinístico normal (ver TASK_CREATE_LEAD_PATTERN).
+// "crie uma reunião ... uma para X e outra para Y" (ou "para X e Y"/"para mim e Y"): mesma reunião/tarefa
+// para responsáveis diferentes. crm_tasks.assigned_to é singular, então vira uma create_task POR pessoa,
+// todas com o mesmo título/data/hora/task_type. Um nome que não resolve para exatamente um membro ativo
+// (ou dois nomes que resolvem para a mesma pessoa) nunca cria nada parcialmente — pede confirmação antes
+// de tocar no banco, em vez da recusa genérica de indisponibilidade usada para o resto do write rescue.
+function multiAssigneeWriteRescue(raw, { now, teamMembers }) {
+  const parsed = parseMultiAssigneeTask(raw, now)
+  if (!parsed) return undefined
+  const resolved = parsed.assignee_names.map((name) => resolveWriteRescueAssignee(name, teamMembers))
+  const unresolved = resolved.findIndex((item) => !item.ok)
+  if (unresolved !== -1) {
+    return { reply_mode: 'clarify', message: `Não encontrei um único responsável ativo chamado "${clean(parsed.assignee_names[unresolved])}". Confira o nome e tente de novo.`, actions: [], turn_relation: 'new_request' }
+  }
+  const memberKeys = resolved.map((item) => item.member ? item.member.id : 'self')
+  if (new Set(memberKeys).size !== memberKeys.length) {
+    return { reply_mode: 'clarify', message: 'Os dois responsáveis parecem ser a mesma pessoa. Pode confirmar os dois nomes?', actions: [], turn_relation: 'new_request' }
+  }
+  const actions = resolved.map((item) => ({ tool: 'create_task', arguments: { title: parsed.title, date: parsed.due_date, time: parsed.due_time || undefined, task_type: parsed.task_type, assignee_name: item.member ? item.member.name : undefined } }))
+  return { reply_mode: 'execute', message: null, actions, turn_relation: 'new_request' }
+}
+
 export function safeSecretaryWriteRescue(message, { now = new Date(), teamMembers = [] } = {}) {
   const raw = clean(message, 2000)
   if (!hasExplicitWriteSignal(raw)) return null
+  const multiAssignee = multiAssigneeWriteRescue(raw, { now, teamMembers })
+  if (multiAssignee) return multiAssignee
   const clauses = raw.split(/\s+e\s+(?=\S)/iu).map((part) => clean(part)).filter(Boolean)
   if (clauses.length < 2) return null
   const actions = []

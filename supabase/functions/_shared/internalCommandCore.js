@@ -101,18 +101,28 @@ export function parseTaskSchedule(value, now = new Date()) {
   return { due_date: resolveRelativeDate(raw, now) || (dueTime ? isoInSaoPaulo(now) : null), due_time: dueTime }
 }
 
+// "crie/marca/coloca (uma) reunião ..." é o mesmo reconhecimento de "reunião com Fulano" de sempre, só
+// com o verbo de criação opcional na frente. Duas formas de nomear a reunião: "reunião chamada X" (ou
+// "reunião X" nua) dá o NOME da própria reunião — o título vira só "X", sem prefixo. "reunião com Fulano"
+// continua distinto: aí o texto é o nome de uma PESSOA, e o título preserva "Reunião com X".
+const MEETING_CREATE_LEAD = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:crie|cria|criar|marca|marque|marcar|coloca|colocar|bota|p[õo]e)\s+/iu
+const stripScheduleWords = (value) => trimEdges(value
+  .replace(/(?:^|\s)(?:às?|as)\s*\d{1,2}(?::\d{2})?(?:\s*(?:h|hrs?|horas?))?\b|\b\d{1,2}(?::\d{2})?\s*(?:h|hrs?|horas?)\b|\b\d{1,2}:\d{2}\b/giu, '')
+  .replace(/(?:^|\s)(hoje|amanhã|depois de amanhã|segunda(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|domingo)(?=\s|$)/giu, ''))
 function meetingCommand(raw, now) {
-  const match = raw.match(/^\s*(reuni[aã]o|call|liga[cç][aã]o)\s+(?:com\s+)?(.+)$/iu)
+  const withoutLead = raw.replace(MEETING_CREATE_LEAD, '')
+  const match = withoutLead.match(/^\s*(?:uma\s+)?(reuni[aã]o|call|liga[cç][aã]o)\s+(.+)$/iu)
   if (!match) return null
+  const rest = match[2]
   const schedule = parseTaskSchedule(raw, now)
-  const participant = trimEdges(match[2]
-    .replace(/(?:^|\s)(?:às?|as)\s*\d{1,2}(?::\d{2})?(?:\s*(?:h|hrs?|horas?))?\b|\b\d{1,2}(?::\d{2})?\s*(?:h|hrs?|horas?)\b|\b\d{1,2}:\d{2}\b/giu, '')
-    .replace(/(?:^|\s)(hoje|amanhã|depois de amanhã|segunda(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|domingo)(?=\s|$)/giu, ''))
+  const named = rest.match(/\bchamad[ao]\s+(.+)$/iu)
+  const withPerson = !named && /^\s*com\s+/iu.test(rest)
+  const participant = named ? trimEdges(named[1]) : stripScheduleWords(withPerson ? rest.replace(/^\s*com\s+/iu, '') : rest)
   if (!participant && !schedule.due_date && !schedule.due_time) return null
   const kind = foldText(match[1]) === 'reuniao' ? 'Reunião' : foldText(match[1]) === 'call' ? 'Call' : 'Ligação'
   return {
-    intent: 'CREATE_TASK', raw_text: raw, title: participant ? `${kind} com ${participant}` : kind,
-    participant_name: participant || null, task_type: 'meeting', ...schedule,
+    intent: 'CREATE_TASK', raw_text: raw, title: withPerson ? (participant ? `${kind} com ${participant}` : kind) : (participant || kind),
+    participant_name: withPerson ? (participant || null) : null, task_type: 'meeting', ...schedule,
     schedule_ambiguous: !schedule.due_date || !schedule.due_time,
     assignee_name: null, priority: 'medium', confidence: schedule.due_date && schedule.due_time ? .99 : .72,
   }
@@ -163,7 +173,7 @@ const ACTIVITY_CAPTURE_PATTERN = /\b(?:quero|vou|preciso)\s+registrar\s+(?:uma\s
 // Um verbo de escrita explícito no meio da frase sempre vence um sinal de leitura genérico que apareça
 // de carona na mesma mensagem — nunca deixa "cria uma tarefa ... hoje" cair em LIST_TODAY só porque
 // contém "tarefa" e "hoje" em qualquer lugar (ver uso nos gates de leitura abaixo).
-const EXPLICIT_WRITE_SIGNAL = /\b(cria|criar|crie|adicione|adiciona|adicionar|inclua|inclui|incluir|registre|registra|registrar|coloca|colocar|muda|mudar|move|mover|finaliza|finalizar|conclui|concluir|atribui|atribuir|cobra|cobrar)\b/
+const EXPLICIT_WRITE_SIGNAL = /\b(cria|criar|crie|marca|marque|marcar|adicione|adiciona|adicionar|inclua|inclui|incluir|registre|registra|registrar|coloca|colocar|muda|mudar|move|mover|finaliza|finalizar|conclui|concluir|atribui|atribuir|cobra|cobrar)\b/
 export const hasExplicitWriteSignal = (value) => EXPLICIT_WRITE_SIGNAL.test(foldText(value))
 const TASK_CREATE_LEAD_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|crie|registrar|registre|registra|adicionar|adicione|adiciona|incluir|inclua|inclui)(?:\s+uma)?\s+tarefas?\b|^nova(?:\s+uma)?\s+tarefa\b/iu
 const TASK_CREATE_COMMAND_ONLY_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|crie|registrar|registre|registra|adicionar|adicione|adiciona|incluir|inclua|inclui)(?:\s+uma)?\s+tarefas?[\s.!?]*$|^nova(?:\s+uma)?\s+tarefa[\s.!?]*$/iu
@@ -385,6 +395,34 @@ function parseSingle(rawInput, now) {
     return { ...base, due_date: schedule.due_date, due_time: schedule.due_time, intent: 'CREATE_TASK', title: clean(title), assignee_name: assignee, priority: priority(text) || 'medium', confidence: title ? .95 : .6 }
   }
   return { intent: 'UNKNOWN', confidence: 0, raw_text: raw }
+}
+
+// Uma reunião/tarefa para MAIS DE UM responsável ("uma para X e outra para Y", "para X e Y", "para mim e
+// Y"): crm_tasks.assigned_to é singular, então isso nunca cabe em um único comando. Aqui só isolamos o
+// rabo com os nomes e reaproveitamos parseSingle para tudo que ele já sabe extrair sozinho (título, data,
+// hora, task_type) a partir do que sobra da frase. Resolver os nomes contra membros reais — e decidir se
+// executa ou pergunta quando um nome não bate — é responsabilidade de quem chama (nunca aqui: este é o
+// parser puro reaproveitado por todo o CRM, que nunca assume que um nome existe).
+const MULTI_ASSIGNEE_TAIL_PATTERNS = [
+  /,?\s*uma\s+(?:para|pra)\s+([\p{L}'-]+)\s+e\s+outra\s+(?:para|pra)\s+([\p{L}'-]+)\s*[.!?]*$/iu,
+  /,?\s*(?:para|pra)\s+([\p{L}'-]+)\s+e\s+(?:para|pra)\s+([\p{L}'-]+)\s*[.!?]*$/iu,
+  /,?\s*(?:para|pra)\s+([\p{L}'-]+)\s+e\s+([\p{L}'-]+)\s*[.!?]*$/iu,
+]
+export function parseMultiAssigneeTask(rawInput, now) {
+  const raw = clean(rawInput)
+  for (const pattern of MULTI_ASSIGNEE_TAIL_PATTERNS) {
+    const match = raw.match(pattern)
+    if (!match) continue
+    const names = [match[1], match[2]].map((name) => (['mim', 'eu'].includes(foldText(name)) ? null : clean(name)))
+    // "pra mim e mim"/dois apelidos do mesmo nome nunca vira duas tarefas para a mesma pessoa.
+    if (names[0] === names[1] || (names[0] && names[1] && foldText(names[0]) === foldText(names[1]))) continue
+    const base = clean(raw.slice(0, match.index))
+    if (!base) continue
+    const parsedBase = parseSingle(base, now)
+    if (parsedBase.intent !== 'CREATE_TASK' || Array.isArray(parsedBase.items) || !clean(parsedBase.title) || !parsedBase.due_date) continue
+    return { title: parsedBase.title, due_date: parsedBase.due_date, due_time: parsedBase.due_time || null, task_type: parsedBase.task_type || 'general', assignee_names: names }
+  }
+  return null
 }
 
 // Mensagens com várias linhas registram vários itens em um só envio: a primeira linha define a
