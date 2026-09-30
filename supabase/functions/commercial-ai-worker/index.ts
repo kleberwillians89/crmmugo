@@ -2,7 +2,7 @@
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {brazilianPhoneCandidates} from '../_shared/internalCommandCore.js'
 import {getOperationalWindow} from '../_shared/operationalCalendar.js'
-import {COMMERCIAL_INTENTS,COMMERCIAL_LEAD_KINDS,COMMERCIAL_SYSTEM_PROMPT,assessCommercialTemperature,buildCommercialSummary,classifyConversationKind,defaultCommercialDecision,enforceCommercialHandoffPolicy,enforceCommercialResponsePolicy,hasMinimumCommercialContext,qualificationClassification,validateCommercialDecision} from '../_shared/commercialAgentCore.js'
+import {COMMERCIAL_INTENTS,COMMERCIAL_LEAD_KINDS,COMMERCIAL_SYSTEM_PROMPT,applyInterestCorrection,assessCommercialTemperature,buildCommercialSummary,classifyConversationKind,defaultCommercialDecision,enforceCommercialHandoffPolicy,enforceCommercialPrivacyPolicy,enforceCommercialResponsePolicy,hasMinimumCommercialContext,qualificationClassification,validateCommercialDecision} from '../_shared/commercialAgentCore.js'
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}})
 const clean=(value:unknown,max=1000)=>String(value??'').trim().slice(0,max)
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
@@ -112,7 +112,7 @@ async function processEvent(admin:any,event:any){
         }
         const task=await admin.from('crm_tasks').upsert({organization_id:event.organization_id,title:`${currentKind.kind==='finance'?'Financeiro':'Suporte'} — ${client.contact_name||client.company_name}`,status:'pending',priority:'medium',due_date:today(),assigned_to:settingsResult.data.commercial_owner_id||null,client_id:client.id,task_type:'general',source:'automation',source_ref:handoffRef,notes:`Mensagem: ${clean(inbound,500)}\nTelefone: +${contact.wa_id}\nClassificação: ${currentKind.kind}`,metadata:{origin:'automation',sync_external:true,existing_client_handoff:true,kind:currentKind.kind}},{onConflict:'organization_id,source_ref'})
         if(task.error)throw task.error
-        const response='Certo. Vou encaminhar o contexto desta conversa para a pessoa responsável continuar com você.'
+        const response=commercialOwnerName?`Perfeito. Vou passar esse contexto para ${commercialOwnerName.split(' ')[0]} continuar com você.`:'Certo. Vou encaminhar o contexto desta conversa para a pessoa responsável continuar com você.'
         const providerMessageId=await sendMessage(admin,event,conversation,response)
         await admin.from('commercial_ai_events').update({status:'completed',decision:{reason:'existing_client_non_commercial',kind:currentKind.kind,provider_message_id:providerMessageId},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id)
         return true
@@ -132,6 +132,9 @@ async function processEvent(admin:any,event:any){
     decision=validateCommercialDecision(decision)||defaultCommercialDecision(inbound,decisionContext)
     decision=enforceCommercialHandoffPolicy(decision,inbound,decisionContext)
     decision=enforceCommercialResponsePolicy(decision,inbound,decisionContext)
+    // Última palavra sobre o texto: nenhuma resposta (da IA real ou do fallback) pode soar como se
+    // soubesse dado interno da equipe — mesmo que a IA tente, ela nunca recebe esse dado no contexto.
+    decision=enforceCommercialPrivacyPolicy(decision,inbound)
     // Segunda checagem, agora que a chamada à OpenAI (que pode levar alguns segundos) já terminou —
     // fecha a janela de corrida caso um humano assuma DURANTE o processamento, antes de qualquer
     // persistência ou envio acontecer.
@@ -160,7 +163,9 @@ async function processEvent(admin:any,event:any){
     if(Object.keys(contactPatch).length){const updatedClient=await admin.from('clients').update(contactPatch).eq('id',client.id).eq('organization_id',event.organization_id);if(updatedClient.error)throw updatedClient.error}
 
     const qualificationPatch=meaningfulPatch(decision.qualification_updates)
-    const interests=mergeInterests(qualification.service_interest,opportunity.service_interests,decision.intents,decision.opportunity_updates?.service_interests)
+    // A mensagem ATUAL pode remover ou estreitar o foco ("esquece o site, por enquanto só tráfego") —
+    // mergeInterests sozinho só soma; sem a correção por cima, um interesse já abandonado voltava sempre.
+    const interests=applyInterestCorrection(inbound,mergeInterests(qualification.service_interest,opportunity.service_interests,decision.intents,decision.opportunity_updates?.service_interests))
     // A IA pode propor conversation_kind a partir do histórico completo — só é aceito quando vem do
     // enum conhecido (já validado em validateCommercialDecision); sem isso, cai no classificador
     // determinístico, que também serve de base quando a OpenAI está indisponível.

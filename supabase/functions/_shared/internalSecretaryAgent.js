@@ -14,6 +14,12 @@ export function normalizeSecretaryDate(text, localDate, timezone = 'America/Sao_
 const READ_TOOLS = new Set(['list_my_tasks','list_team_tasks','get_day_summary','get_week_summary','plan_my_day','list_pending_charges'])
 const RELATIONS = new Set(['continue_plan','correct_plan','new_request','cancel_plan'])
 const taskWords = (text) => foldText(text).split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !['para','uma','hoje','ontem','site','finalizar','finalizado','finalizei','atrasada','revisar','concluido'].includes(word))
+// Só reconhece o membro se o nome aparecer como token inteiro na query — nunca por substring, para não
+// confundir "Julia" com uma palavra que só contenha essas letras por acaso.
+const mentionedMember = (query, teamMembers) => {
+  const words = foldText(query).split(/[^a-z0-9]+/)
+  return (teamMembers || []).find((member) => foldText(member.name).split(' ').some((part) => part.length > 2 && words.includes(part))) || null
+}
 
 // Exact token containment only; ambiguity is never resolved by a fuzzy score.
 export function enrichSecretaryPlan(raw, { message, localDate, operationalContext = {} }) {
@@ -36,10 +42,19 @@ export function enrichSecretaryPlan(raw, { message, localDate, operationalContex
       if (contexts.length === 1) args.summary = clean(contexts[0][2])
     }
     if (['update_task','complete_task','start_task'].includes(action.tool) && args.task_query && !args.task_short_id) {
-      const words = taskWords(args.task_query)
-      const tasks = knownTasks.filter((task) => !['completed','cancelled'].includes(task.status))
+      // "a da Julia"/"aquela que pedi pra Julia" referencia uma tarefa de OUTRO membro — nunca resolvida
+      // contra my_tasks (que é só o remetente). A busca fica restrita ao que este mesmo plano acabou de
+      // criar nesta conversa (recent_plan_tasks) para aquele membro específico, nunca a qualquer tarefa
+      // da organização; sem isso, "e a da Julia" só podia mirar as próprias tarefas do remetente.
+      const member = mentionedMember(args.task_query, operationalContext.team_members)
+      const words = member
+        ? taskWords(args.task_query).filter((word) => !foldText(member.name).split(' ').includes(word))
+        : taskWords(args.task_query)
+      const tasks = member
+        ? (operationalContext.recent_plan_tasks || []).filter((task) => foldText(task.assignee_name || '') === foldText(member.name))
+        : knownTasks.filter((task) => !['completed','cancelled'].includes(task.status))
       const exact = tasks.filter((task) => foldText(task.title) === foldText(args.task_query))
-      const matches = exact.length ? exact : tasks.filter((task) => words.length && words.every((word) => taskWords(task.title).includes(word)))
+      const matches = exact.length ? exact : (words.length ? tasks.filter((task) => words.every((word) => taskWords(task.title).includes(word))) : tasks)
       if (matches.length === 1) args.task_query = matches[0].title
       if (matches.length > 1) return { reply_mode: 'clarify', message: `Encontrei mais de uma tarefa: ${matches.map((task) => task.title).join('; ')}. Qual delas?`, actions: [], turn_relation: plan.turn_relation }
     }
@@ -277,7 +292,10 @@ export function safeSecretaryReadRescue(message, { localDate, teamMembers = [] }
   if (/\b(cria|criar|crie|adiciona|adicionar|move|mover|muda|mudar|conclui|concluir|registra|registrar|trabalhei|escrever|escreva|envia|enviar|pagar|exclui|apaga)\b/.test(text)) return null
   const clarify = () => ({reply_mode:'clarify',message:'Você quer consultar seu dia, sua semana ou as tarefas de alguém da equipe?',actions:[],turn_relation:'new_request'})
   const members = teamMembers.filter((member) => member.active !== false && foldText(member.name).split(' ').some((name) => name.length > 2 && text.split(/[^a-z0-9]+/).includes(name)))
-  const domain = requiresOperationalRead(text) || /\b(hoje|amanha|semana|equipe)\b/.test(text)
+  // Mencionar um colega real pelo nome ("o que pedi pra Julia?") já é, sozinho, um sinal de domínio
+  // operacional — sem isso, "qual foi mesmo o que pedi pra Julia?" (sem "hoje"/"tarefas") nunca alcançava
+  // o ramo de list_team_tasks abaixo e caía fora do rescue.
+  const domain = requiresOperationalRead(text) || /\b(hoje|amanha|semana|equipe)\b/.test(text) || members.length > 0
   if (!domain) return null
   if (/\b(pagamentos?|recebi|recebe|paguei|despesas?|receitas?|cobrancas?|dinheiro|faturas?|reais|valor)\b/.test(text)) return clarify()
   if (members.length > 1 || /\bou\b/.test(text)) return clarify()
@@ -291,6 +309,20 @@ export function safeSecretaryReadRescue(message, { localDate, teamMembers = [] }
   else if (/\b(dia|hoje|amanha|tenho|preciso fazer|demandas?|tarefas?|agenda operacional)\b/.test(text)) {tool='plan_my_day';args={date}}
   else return clarify()
   return {reply_mode:'execute',message:null,actions:[{tool,arguments:args}],turn_relation:'new_request'}
+}
+
+// "termina a Roove" seguido de "não, pera, não termina não" precisa reabrir a MESMA tarefa — nunca
+// fingir um rollback silencioso (a conclusão já foi persistida, não existe estado "pendente" para
+// simplesmente descartar) e nunca adivinhar qual tarefa. Age apenas sobre a ÚLTIMA conclusão do plano
+// recém-executado NESTA conversa — nunca sobre uma tarefa antiga que o remetente nem mencionou agora.
+const UNDO_COMPLETION_PATTERN = /\b(?:nao|pera,?\s*nao|espera,?\s*nao)[\s,]*(?:termina|conclui|finaliza)\w*\b|\bdesfaz(?:er)?\s+(?:a\s+)?conclusao\b|\bcancela\s+(?:a\s+)?conclusao\b|\bnao\s+era\s+pra\s+(?:ter\s+)?(?:terminado|concluido|finalizado)\b/
+export function safeUndoLastCompletionRescue(message, { recentCompletedTasks = [] } = {}) {
+  if (!UNDO_COMPLETION_PATTERN.test(foldText(message))) return null
+  const last = recentCompletedTasks.at(-1)
+  if (!last?.entity_id) return null
+  const shortId = clean(last.entity_id).replace(/-/g, '').slice(0, 6)
+  if (!/^[a-f0-9]{6}$/i.test(shortId)) return null
+  return { reply_mode: 'execute', message: null, actions: [{ tool: 'update_task', arguments: { task_short_id: shortId, status: 'pending' } }], turn_relation: 'correct_plan' }
 }
 
 const outputText = (body) => body?.output_text || (body?.output || [])

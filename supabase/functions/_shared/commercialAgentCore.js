@@ -10,13 +10,23 @@ export const COMMERCIAL_TEMPERATURES = Object.freeze(['cold', 'warm', 'hot'])
 export const COMMERCIAL_LEAD_KINDS = Object.freeze(['new_business', 'existing_client', 'support', 'finance', 'partnership', 'other'])
 // Fonte única para "isso parece suporte técnico" — usada tanto na classificação de interesses quanto
 // no roteamento da conversa, para as duas nunca divergirem (uma dizia SUPPORT, a outra não via nada).
-const SUPPORT_SIGNAL_PATTERN = /\b(suporte|ajuda tecnica|problema|erro|bug|caiu|caindo|fora do ar|nao funciona|nao abre|nao carrega|parou|travou|travando|quebrado|quebrou|down)\b/
+// Inclui variações naturais de "não está funcionando" (site/tráfego/campanha "não roda"/"não está
+// rodando") e frases de pedido de verificação ("conseguem olhar", "preciso que olhem", "deu ruim") —
+// sozinhas elas não bastam (ver SERVICE_SURFACE_PATTERN abaixo), só quando combinadas com uma
+// superfície/serviço da Mugô mencionado.
+const SUPPORT_SIGNAL_PATTERN = /\b(suporte|ajuda tecnica|problema|erro|bug|caiu|caindo|fora do ar|nao funciona|nao abre|nao carrega|nao (?:esta )?rodando|nao roda|parou|travou|travando|quebrado|quebrou|down|deu ruim|conseguem olhar|consegue olhar|precis[ao] que olh[ae]m?)\b/
 // "Preciso de ajuda com/no meu X" é pedido de socorro sobre algo que já existe — diferente de "ajuda
 // tecnica" (que já cai em explicitSupportWord) e diferente de "quero ajuda para criar/fazer um novo X"
 // (new_business). Só conta como suporte quando combinado com productMentioned (ver uso abaixo).
 const HELP_REQUEST_PATTERN = /preciso de ajuda|pode(m)? me ajudar|me ajuda(r)?\b/
 // Idem para "isso é rotina financeira" — nota fiscal/boleto/vencimento nunca podem cair em OTHER.
 const FINANCE_SIGNAL_PATTERN = /\b(financeiro|cobranca|boleto|pagamento|segunda via|nota fiscal|vencimento)\b/
+// Superfícies/áreas do serviço Mugô — fonte única usada tanto para decidir se uma mensagem de "algo
+// quebrou" é suporte (precisa mencionar uma dessas + um sinal de problema) quanto para reconhecer o
+// interesse SITE em variações coloquiais de landing (ver classifyCommercialInterests). Cobre mídia paga
+// (anúncio/campanha/tráfego), o que faltava antes e fazia "meu anúncio caiu" cair como new_business.
+const LANDING_PATTERN = /landing(?:\s*page)?|\blp\b|pagina de campanha|pagina de captura/
+const SERVICE_SURFACE_PATTERN = new RegExp(`\\b(site|sistema|app|aplicativo|crm|whatsapp|e-?commerce|loja virtual|portal|checkout|anuncios?|campanhas?|trafego(?:\\s*pago)?|meta ads|google ads|pixel|conversao|automac[a-z]*|${LANDING_PATTERN.source})\\b`)
 
 export const COMMERCIAL_SYSTEM_PROMPT = `Você atende leads comerciais da Mugô em português brasileiro.
 
@@ -75,11 +85,11 @@ export function classifyCommercialInterests(text) {
   const value = fold(text)
   const found = []
   const rules = [
-    ['SITE', /\b(site|landing page|pagina institucional|portal)\b/],
+    ['SITE', new RegExp(`\\b(site|pagina institucional|portal)\\b|${LANDING_PATTERN.source}`)],
     ['AUTOMATION', /automatiza|automacao/],
     ['CRM', /\bcrm\b|gestao de clientes/],
     ['WHATSAPP', /whatsapp|chatbot|atendimento/],
-    ['PAID_TRAFFIC', /trafego( pago)?|meta ads|google ads|anuncio/],
+    ['PAID_TRAFFIC', /trafego( pago)?|meta ads|google ads|anuncia|anuncio/],
     ['SOCIAL_MEDIA', /social media|rede social|instagram/],
     ['ECOMMERCE', /e-?commerce|loja virtual/],
     ['DEVELOPMENT', /\b(sistema|aplicativo|app|software|desenvolvimento)\b/],
@@ -92,9 +102,47 @@ export function classifyCommercialInterests(text) {
   return found.length ? [...new Set(found)] : ['OTHER']
 }
 
+const INTEREST_WORD_MAP = { site: 'SITE', landing: 'SITE', trafego: 'PAID_TRAFFIC', anuncio: 'PAID_TRAFFIC', automacao: 'AUTOMATION', crm: 'CRM', whatsapp: 'WHATSAPP', ecommerce: 'ECOMMERCE' }
+const interestFromWord = (word) => INTEREST_WORD_MAP[fold(word).replace(/[^a-z]/g, '')] || null
+// A mensagem ATUAL pode remover ou estreitar o foco comercial já acumulado — sem isto, mergeInterests
+// (união pura com o histórico) sempre reintroduzia um interesse que o lead já tinha abandonado
+// explicitamente ("esquece o site"). Nunca apaga o resumo/histórico da conversa, só o conjunto de
+// interesses usado para decidir a próxima pergunta e o que fica registrado como foco atual.
+export function applyInterestCorrection(text, mergedInterests) {
+  const value = fold(text)
+  let interests = [...(Array.isArray(mergedInterests) ? mergedInterests : [])]
+  const dropPattern = /\b(?:esquece|esqueca|deixa|deixe)(?:\s+de\s+lado)?\s+(?:o|a|os|as)?\s*(site|landing|trafego|anuncio|automacao|crm|whatsapp|ecommerce)\b/g
+  for (const match of value.matchAll(dropPattern)) {
+    const interest = interestFromWord(match[1])
+    if (interest) interests = interests.filter((item) => item !== interest)
+  }
+  const focusMatch = value.match(/\b(?:quero|preciso|fica|ficamos)\s+(?:e\s+)?(?:so|apenas)\s+(?:o|a|os|as)?\s*(site|landing|trafego|anuncio|automacao|crm|whatsapp|ecommerce)\b/)
+  if (focusMatch) {
+    const interest = interestFromWord(focusMatch[1])
+    if (interest) interests = [interest]
+  }
+  return interests.length ? [...new Set(interests)] : (Array.isArray(mergedInterests) ? mergedInterests : [])
+}
+
+// Um lead nunca recebe dado interno — mas antes disso nada impedia uma resposta (da IA ou de um jailbreak
+// bem-sucedido) que SOASSE como se soubesse tarefas, telefones pessoais ou outros clientes, já que o
+// contexto real nunca contém esses dados. Isto é aplicado por cima de qualquer decisão, como última
+// palavra. Nunca bloqueia perguntas legítimas sobre o próprio atendimento ("quem vai falar comigo?").
+const INTERNAL_DATA_REQUEST_PATTERN = /\b(tarefas?\s+(?:d[aeo]|as?)\b|agenda\s+(?:d[aeo]|as?)\b|clientes que (?:voces|voce) atend\w*|outras empresas|outros clientes(?! da mugo)|dados internos|informac(?:oes|ao) intern\w*|conversas? (?:internas?|privadas?)|telefone (?:pessoal|particular) d[aeo]|numero (?:pessoal|particular) d[aeo]|organization_?id|organizac[a-z]* ?id|id da organizacao)\b/
+export function isInternalDataRequest(text) {
+  return INTERNAL_DATA_REQUEST_PATTERN.test(fold(text))
+}
+export const INTERNAL_DATA_REQUEST_REPLY = 'Não tenho acesso a informações internas da equipe. Posso te ajudar com seu atendimento ou com os serviços da Mugô.'
+// Só troca o texto da resposta — nunca mexe em handoff/opportunity, que continuam decididos pelas
+// outras políticas (ex.: um pedido de humano misturado com a tentativa continua sinalizando handoff).
+export function enforceCommercialPrivacyPolicy(decision, inbound) {
+  if (!isInternalDataRequest(inbound)) return decision
+  return { ...decision, response: INTERNAL_DATA_REQUEST_REPLY }
+}
+
 export function isCommercialPriceQuestion(text) {
   const value = fold(text)
-  return /\b(preco|precos|valor|valores|custa|custaria|custo|quanto fica|quanto sai|investimento|desconto|condicao|condicoes|negociar|negociacao|orcamento)\b/.test(value)
+  return /\b(preco|precos|valor|valores|custa|custaria|custo|quanto fica|quanto sai|quanto\s+(?:voces\s+|vcs\s+)?cobram?|cobram?\s+quanto|vale quanto|investimento|desconto|condicao|condicoes|negociar|negociacao|orcamento)\b/.test(value)
 }
 
 export function detectCommercialHandoff(text, { qualified = false, complex = false } = {}) {
@@ -140,9 +188,12 @@ export function inferLeadSource({ referral, metadata = {} } = {}) {
 
 export function classifyConversationKind(text, { hasExistingClient = false, previousKind = null } = {}) {
   const value = fold(text)
-  // Mencionar "site"/"sistema"/"ecommerce" sozinho NÃO é suporte — só quando aparece junto de um
-  // sinal real de mau funcionamento. "quero redesenhar meu site" é oportunidade, não chamado técnico.
-  const productMentioned = /\b(site|sistema|app|aplicativo|crm|whatsapp|e-?commerce|loja virtual|landing page)\b/.test(value)
+  // Mencionar "site"/"sistema"/"anúncio"/"tráfego" sozinho NÃO é suporte — só quando aparece junto de um
+  // sinal real de mau funcionamento. "quero redesenhar meu site"/"quero fazer tráfego" é oportunidade,
+  // não chamado técnico. SERVICE_SURFACE_PATTERN cobre toda área do serviço Mugô (site, mídia paga,
+  // automação, checkout etc.) para "meu anúncio caiu"/"minha campanha não está rodando" também virarem
+  // suporte, e não só bugs de site/sistema.
+  const productMentioned = SERVICE_SURFACE_PATTERN.test(value)
   const explicitSupportWord = /\bsuporte\b|ajuda tecnica/.test(value)
   if (explicitSupportWord || ((SUPPORT_SIGNAL_PATTERN.test(value) || HELP_REQUEST_PATTERN.test(value)) && productMentioned)) return { kind: 'support', reason: 'Mensagem indica mau funcionamento em solução ou atendimento existente.' }
   if (FINANCE_SIGNAL_PATTERN.test(value) || /falar com (o )?financeiro|setor financeiro/.test(value)) return { kind: 'finance', reason: 'Mensagem trata de cobrança ou rotina financeira.' }
@@ -218,8 +269,17 @@ function nextDiscoveryResponse(interests, context) {
   return 'Qual seria o próximo passo mais útil para vocês agora?'
 }
 
+// Sem chamada real à IA (ou enquanto ela ainda não persistiu nada), o fallback determinístico não pode
+// "esquecer" um interesse já sinalizado em turnos anteriores — soma ao que a mensagem atual traz, nunca
+// substitui. Extração de fatos novos (nome, situação, prazo) continua sendo trabalho da IA real; isto só
+// evita repetir a pergunta de abertura genérica quando já se sabe, por exemplo, que é um projeto de site.
+const knownInterests = (value) => Array.isArray(value) ? value.filter((item) => COMMERCIAL_INTENTS.includes(item)) : []
+
 export function defaultCommercialDecision(text, context = {}) {
-  const interests = classifyCommercialInterests(text)
+  const currentInterests = classifyCommercialInterests(text)
+  const known = [...new Set([...knownInterests(context.opportunity?.service_interests), ...knownInterests(context.qualification?.service_interest)])]
+  const merged = [...new Set([...known, ...currentInterests])]
+  const interests = merged.length > 1 ? merged.filter((item) => item !== 'OTHER') : merged
   const qualified = Boolean(context.qualification?.qualified)
   const handoff = detectCommercialHandoff(text, { qualified })
   const priceQuestion = isCommercialPriceQuestion(text)
@@ -228,8 +288,12 @@ export function defaultCommercialDecision(text, context = {}) {
   if (handoff.handoff) {
     response = 'Certo. Vou encaminhar o contexto desta conversa para a pessoa responsável continuar com você.'
   } else if (priceQuestion) {
+    const meaningfulInterests = interests.filter(item => !['OTHER', 'SUPPORT', 'FINANCE', 'PARTNERSHIP'].includes(item))
+    // Nunca emenda a orientação de preço com a saudação exploratória ("Oi! Me conta...") — quando ainda
+    // não há nenhum interesse conhecido, a própria pergunta de preço já é o gancho da conversa.
     if (interests.includes('SITE') && !knownValue(context, 'site_type')) response = 'Consigo te orientar. O valor depende principalmente do tipo de site e do escopo. Você imagina um site institucional, uma landing page ou uma loja virtual?'
-    else response = `Consigo te orientar. O valor depende do escopo. ${nextDiscoveryResponse(interests, context)}`
+    else if (meaningfulInterests.length) response = `Consigo te orientar. O valor depende do escopo. ${nextDiscoveryResponse(interests, context)}`
+    else response = 'Consigo te orientar. O valor depende do tipo de projeto e do escopo — me conta um pouco o que você está buscando que eu te oriento certo.'
   } else if (interests.includes('FINANCE')) {
     response = 'Entendi. Vou registrar isso e encaminhar para o time financeiro continuar com você por aqui.'
   } else if (interests.includes('SUPPORT')) {

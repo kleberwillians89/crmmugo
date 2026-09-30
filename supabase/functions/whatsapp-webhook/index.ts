@@ -432,7 +432,10 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
       responsibleId=settings.data?.commercial_owner_id||null
     }
     if(responsibleId){
-      const notified=await admin.from('team_notification_outbox').insert({organization_id:connection.organization_id,team_member_id:responsibleId,notification_type:'human_mode_message',idempotency_key:`human-mode-message:${providerMessageId}`,payload:{kind:'human_mode_message',conversation_id:conversationResult.data.id,opportunity_id:conversationResult.data.opportunity_id,lead_name:profileName||null,lead_phone:waId,preview:content.body||content.type,candidate_items:[{index:1,type:'conversation',conversation_id:conversationResult.data.id,label:profileName||`Contato final ${waId.slice(-4)}`}]}})
+      // Sinal só informativo (nunca cria opportunity nem retoma automação) — uma nova demanda comercial
+      // chegando durante um handoff de suporte não pode ficar invisível para quem já está com a conversa.
+      const commercialSignal=classifyConversationKind(content.body||'',{hasExistingClient:Boolean(contactResult.data.client_id)}).kind
+      const notified=await admin.from('team_notification_outbox').insert({organization_id:connection.organization_id,team_member_id:responsibleId,notification_type:'human_mode_message',idempotency_key:`human-mode-message:${providerMessageId}`,payload:{kind:'human_mode_message',conversation_id:conversationResult.data.id,opportunity_id:conversationResult.data.opportunity_id,lead_name:profileName||null,lead_phone:waId,preview:content.body||content.type,commercial_signal:commercialSignal,candidate_items:[{index:1,type:'conversation',conversation_id:conversationResult.data.id,label:profileName||`Contato final ${waId.slice(-4)}`}]}})
       if(notified.error&&notified.error.code!=='23505')throw notified.error
     }
     await completeWebhookEvent(admin, ledger.id)

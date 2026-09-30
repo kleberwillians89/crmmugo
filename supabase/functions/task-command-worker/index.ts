@@ -4,7 +4,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
-import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
+import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
 
 const headers = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers })
@@ -866,6 +866,16 @@ async function processEvent(admin: any, event: any) {
     }
     const previousSecretaryPlan=event.session?.context?.secretary_plan||null
     const secretaryOwnsTurn=Boolean(previousSecretaryPlan)
+    // Tarefas recém-criadas nesta MESMA conversa (mesmo as de outro membro, ex. "Origami pra Julia") e
+    // conclusões recém-feitas — nunca uma consulta a qualquer tarefa da organização, só o que este
+    // plano específico já tocou. Usado para resolver "e a da Julia deixa amanhã" e desfazer uma
+    // conclusão que acabou de acontecer ("não, pera, não termina não").
+    const recentPlanActions:any[]=Array.isArray(previousSecretaryPlan?.actions)?previousSecretaryPlan.actions:[]
+    const recentPlanTasks=recentPlanActions.filter((action:any)=>action.command?.intent==='CREATE_TASK'&&action.status==='completed').flatMap((action:any)=>{
+      const items=Array.isArray(action.command.items)&&action.command.items.length?action.command.items:[{title:action.command.title}]
+      return items.map((item:any)=>({title:item.title,assignee_name:action.command.assignee_name||null,status:'pending'}))
+    })
+    const recentCompletedTasks=recentPlanActions.filter((action:any)=>action.command?.intent==='COMPLETE_TASK'&&action.status==='completed'&&action.result?.entity_id).map((action:any)=>({entity_id:action.result.entity_id}))
     const candidateItems:any[]=Array.isArray(event.session?.context?.candidate_items)?event.session.context.candidate_items:[]
     const selectableItems=candidateItems.length?candidateItems:(Array.isArray(event.session?.context?.installment_ids)?event.session.context.installment_ids.map((id:any,index:number)=>({index:index+1,id})):[])
     const sessionDate=resolveRelativeDate(cleanedRaw)
@@ -982,6 +992,9 @@ async function processEvent(admin: any, event: any) {
     const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
     const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4
     const operationalReadProbe=safeSecretaryReadRescue(event.raw_text,{localDate:today()})
+    // Correção determinística de alta prioridade: nunca depende do planner estar disponível (é uma
+    // reabertura de tarefa, ação sensível o bastante para não arriscar na confiabilidade de um LLM).
+    const undoCompletionProbe=safeUndoLastCompletionRescue(event.raw_text,{recentCompletedTasks})
     const deterministicShortcut=['document','image'].includes(event.message_type)
       || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL'].includes(command.intent)
       || (!secretaryOwnsTurn&&(
@@ -989,10 +1002,15 @@ async function processEvent(admin: any, event: any) {
         || ['HELP','ACTIVITY_DATE_RESOLUTION','SESSION_SELECTION','TASK_CONTEXT_LIST','CREATE_TASK_DATE_UNRESOLVED','TAKE_CONVERSATION_BY_ID','CONVERSATION_CONTEXT'].includes(command.intent)
         || Boolean(command.task_short_id)
         || protectedPendingActions.has(event.session?.pending_action)
-      )&&!operationalReadProbe)
+      )&&!operationalReadProbe&&!undoCompletionProbe)
     const secretaryKey=Deno.env.get('OPENAI_API_KEY')||'',secretaryModel=Deno.env.get('TASK_COMMAND_MODEL')||Deno.env.get('OPENAI_MODEL')||''
     const savedSecretaryPlan=event.parsed_command?.orchestrator==='internal_secretary'?event.parsed_command:null
-    if(savedSecretaryPlan?.plan?.reply_mode==='execute'&&Array.isArray(savedSecretaryPlan.commands)&&savedSecretaryPlan.commands.length&&!deterministicShortcut){
+    if(!deterministicShortcut&&undoCompletionProbe){
+      secretaryPlan=undoCompletionProbe
+      secretaryCommands=secretaryPlan.actions.map(secretaryActionToCommand).filter(Boolean)
+      if(secretaryCommands.length)command=secretaryCommands[0]
+      processingPath='secretary_undo_rescue'
+    }else if(savedSecretaryPlan?.plan?.reply_mode==='execute'&&Array.isArray(savedSecretaryPlan.commands)&&savedSecretaryPlan.commands.length&&!deterministicShortcut){
       // Never reinterpret/split a legacy retry: that would shift completed action checkpoints.
       secretaryPlan=validateSecretaryPlan(savedSecretaryPlan.plan)
       try{
@@ -1013,7 +1031,7 @@ async function processEvent(admin: any, event: any) {
         apiKey:secretaryKey,model:secretaryModel,message:event.raw_text,
         member:{...event.team_member,organization_id:event.organization_id},now:{iso:new Date().toISOString(),local_date:today(),timezone:'America/Sao_Paulo'},
         session:event.session?{state:event.session.state,active_intent:event.session.active_intent,pending_action:event.session.pending_action,context:event.session.context}:null,
-        operationalContext:{my_tasks:memberModel.candidateItems,team_members:(team.data||[]).map((item:any)=>({id:item.id,name:item.name}))},
+        operationalContext:{my_tasks:memberModel.candidateItems,team_members:(team.data||[]).map((item:any)=>({id:item.id,name:item.name})),recent_plan_tasks:recentPlanTasks},
       })
       if(secretaryPlan)processingPath='secretary_agent'
       if(secretaryPlan?.reply_mode==='execute'){

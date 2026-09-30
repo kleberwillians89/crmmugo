@@ -223,6 +223,13 @@ function parseSingle(rawInput, now) {
   if (/^(recebi|entrou|recebemos|caiu)\b/.test(text)) { const {amount,subject_query}=receiptParts(raw,text);return{...base,intent:'FINANCIAL_RECEIPT_REQUEST',amount,subject_query,confidence:amount?.toString()&&subject_query?0.96:0.6} }
   if(PAID_BY_PATTERN.test(raw)){const {amount,subject_query}=receiptParts(raw,text);return{...base,intent:'FINANCIAL_RECEIPT_REQUEST',amount,subject_query,confidence:amount?.toString()&&subject_query?0.96:0.6}}
   if (/^(gastei|paguei|despesa de)\b/.test(text)) { const amount=moneyAmount(text),category=after(raw, /(?:em|com)\s+(.+)$/iu);return { ...base,intent:'FINANCIAL_EXPENSE_REQUEST',amount,category_name:category,description:category,confidence:amount?.toString()?0.98:0.55 } }
+  // Variações naturais sem "gastei/paguei/despesa de": "registra/coloca/lança N (reais) de X (como
+  // despesa)". Só conta como despesa junto de "despesa" ou "reais" — evita colidir com outros usos de
+  // "registra"/"coloca" no parser (ex.: RECORD_OBSERVATION usa "anota", nunca estes verbos).
+  if (/^(?:registra(?:r)?|coloca(?:r)?|lan[cç]a(?:r)?)\b/.test(text) && /\b(?:despesa|reais?)\b/.test(text)) {
+    const amount=moneyAmount(text),category=after(stripAmount(raw).replace(/\bcomo\s+despesa\b/iu,''), /(?:de|do|da)\s+(.+)$/iu)
+    return { ...base,intent:'FINANCIAL_EXPENSE_REQUEST',amount,category_name:category,description:category,confidence:amount?.toString()?0.95:0.5 }
+  }
   const proposalUpdate=raw.match(/^(.+?)\s+(aceitou|aprovou|recusou|rejeitou|visualizou)\s+(?:o\s+|a\s+)?(?:orçamento|orcamento|proposta)\b/iu)
   if(proposalUpdate){const action=foldText(proposalUpdate[2]),status=/aceitou|aprovou/.test(action)?'accepted':/recusou|rejeitou/.test(action)?'rejected':'viewed';return{...base,intent:'UPDATE_PROPOSAL',subject_query:clean(proposalUpdate[1]),proposal_status:status,confidence:.98}}
   if(/\b(proposta|orçamento|orcamento)\b/.test(text)){const parts=proposalParts(raw),proposal_status=/\b(mandamos|enviamos)\b/.test(text)?'sent':'draft';return{...base,intent:'RECORD_PROPOSAL',...parts,proposal_status,confidence:parts.subject_query&&parts.amount?0.98:.62}}
@@ -236,11 +243,21 @@ function parseSingle(rawInput, now) {
   const promised = raw.match(new RegExp(`^${ARTICLE}([\\p{L}][\\p{L}\\s'-]*?)\\s+disse que paga\\b`, 'iu'))
   if(promised)return{...base,intent:'COLLECTION_ACTIVITY',collection_kind:'promised',subject_query:clean(promised[1]),summary:raw,confidence:.9}
   if(/^cobrei\b/.test(text)){const namePart=raw.replace(new RegExp(`^cobrei\\s+${ARTICLE}`,'iu'),'').split(/\s+porque\b/i)[0];return{...base,intent:'COLLECTION_ACTIVITY',collection_kind:'contacted',subject_query:clean(namePart),summary:raw,confidence:.93}}
-  if(/^cobrar\b/.test(text)){
-    const namePart=clean(clean(raw.replace(/^cobrar\s*/iu,'')).replace(new RegExp(`^${ARTICLE}`,'iu'),''))
+  if(/^cobra(?:r)?\b/.test(text)){
+    const namePart=clean(clean(raw.replace(/^cobra(?:r)?\s*/iu,'')).replace(new RegExp(`^${ARTICLE}`,'iu'),''))
     const foldedName=foldText(namePart).replace(/[.?!]+$/,'')
     if(!namePart||GENERIC_COLLECTION_WORDS.has(foldedName))return{...base,intent:'LIST_PENDING_CHARGES',confidence:.95}
     return{...base,intent:'COLLECTION_SEND',subject_query:namePart,confidence:.98}
+  }
+  // "manda (uma) cobrança pra/para X" e "lembra X do pagamento" são a mesma intenção de "cobra(r) X" —
+  // variações naturais de pedir o envio da cobrança.
+  const collectionRequest = raw.match(/^manda(?:r)?\s+(?:uma\s+)?cobran[cç]a\s+(?:pra|para)\s+(.+)$/iu)
+    || raw.match(new RegExp(`^lembra(?:r)?\\s+${ARTICLE}(.+?)\\s+d[oe]\\s+pagamento\\b`, 'iu'))
+  if(collectionRequest){
+    const namePart=clean(collectionRequest[1])
+    const foldedName=foldText(namePart).replace(/[.?!]+$/,'')
+    if(!namePart||GENERIC_COLLECTION_WORDS.has(foldedName))return{...base,intent:'LIST_PENDING_CHARGES',confidence:.95}
+    return{...base,intent:'COLLECTION_SEND',subject_query:namePart,confidence:.96}
   }
   const reminder = raw.match(new RegExp(`^me\\s+lembr[ae]?\\s+de\\s+cobrar\\s+${ARTICLE}(.+)$`, 'iu'))
   if(reminder){let subject=reminder[1];for(const word of['hoje','amanhã','depois de amanhã','segunda','terça','quarta','quinta','sexta','sábado','domingo','fim da semana','semana que vem'])subject=subject.replace(new RegExp(`\\s+${word}$`,'iu'),'');return{...base,intent:'FOLLOW_UP',subject_query:clean(subject),confidence:.95}}
