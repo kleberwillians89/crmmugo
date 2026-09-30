@@ -376,6 +376,9 @@ verify_jwt = false
 [functions.task-sync-worker]
 verify_jwt = false
 
+[functions.task-reminder-worker]
+verify_jwt = false
+
 [functions.trello-task-webhook]
 verify_jwt = false
 
