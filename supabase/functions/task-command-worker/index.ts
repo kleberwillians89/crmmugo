@@ -4,7 +4,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
-import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
+import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
 
 const headers = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers })
@@ -644,6 +644,7 @@ async function execute(admin: any, event: any, command: any) {
     let query = admin.from('crm_tasks').select('id,title,status,priority,due_date,planned_hours').eq('organization_id', org).not('status', 'in', '(completed,cancelled)').order('due_date')
     if (command.intent === 'LIST_TODAY') query = query.eq('due_date', today())
     if (command.intent === 'LIST_OVERDUE') query = query.lt('due_date', today())
+    if (command.intent === 'LIST_OVERDUE') query = query.eq('assigned_to',event.team_member_id)
     const result = await query
     if (result.error) throw result.error
     return `${command.intent === 'LIST_OVERDUE' ? 'Tarefas atrasadas' : 'Hoje na Mugô'} — ${today()}\n\n${taskLines(result.data || [])}`
@@ -848,6 +849,7 @@ async function processEvent(admin: any, event: any) {
   if (claimed.error || !claimed.data) return false
   try {
     let secretaryPlan:any=null,secretaryCommands:any[]=[],processingPath='deterministic_gate'
+    let plannerStatus:string|null=null,secretaryTeam:any[]|null=null
     let command: any = ['document','image'].includes(event.message_type)&&event.media?.id
       ? {intent:'ATTACH_PROPOSAL_FILE',confidence:1}
       : parseInternalCommand(event.raw_text)
@@ -979,6 +981,7 @@ async function processEvent(admin: any, event: any) {
     // read model resumido e nunca toca o banco; execute() continua sendo a única camada de efeito.
     const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
     const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4
+    const operationalReadProbe=safeSecretaryReadRescue(event.raw_text,{localDate:today()})
     const deterministicShortcut=['document','image'].includes(event.message_type)
       || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL'].includes(command.intent)
       || (!secretaryOwnsTurn&&(
@@ -986,7 +989,7 @@ async function processEvent(admin: any, event: any) {
         || ['HELP','ACTIVITY_DATE_RESOLUTION','SESSION_SELECTION','TASK_CONTEXT_LIST','CREATE_TASK_DATE_UNRESOLVED','TAKE_CONVERSATION_BY_ID','CONVERSATION_CONTEXT'].includes(command.intent)
         || Boolean(command.task_short_id)
         || protectedPendingActions.has(event.session?.pending_action)
-      ))
+      )&&!operationalReadProbe)
     const secretaryKey=Deno.env.get('OPENAI_API_KEY')||'',secretaryModel=Deno.env.get('TASK_COMMAND_MODEL')||Deno.env.get('OPENAI_MODEL')||''
     const savedSecretaryPlan=event.parsed_command?.orchestrator==='internal_secretary'?event.parsed_command:null
     if(savedSecretaryPlan?.plan?.reply_mode==='execute'&&Array.isArray(savedSecretaryPlan.commands)&&savedSecretaryPlan.commands.length&&!deterministicShortcut){
@@ -1004,7 +1007,9 @@ async function processEvent(admin: any, event: any) {
         admin.from('team_members').select('id,name').eq('organization_id',event.organization_id).eq('active',true),
       ])
       if(team.error)throw team.error
+      secretaryTeam=team.data||[]
       secretaryPlan=await planInternalSecretaryMessage({
+        onPlannerStatus:(status:string)=>{plannerStatus=status},
         apiKey:secretaryKey,model:secretaryModel,message:event.raw_text,
         member:{...event.team_member,organization_id:event.organization_id},now:{iso:new Date().toISOString(),local_date:today(),timezone:'America/Sao_Paulo'},
         session:event.session?{state:event.session.state,active_intent:event.session.active_intent,pending_action:event.session.pending_action,context:event.session.context}:null,
@@ -1017,12 +1022,24 @@ async function processEvent(admin: any, event: any) {
         else secretaryPlan={reply_mode:'clarify',message:'Ainda não consigo executar essa ação. Pode me dizer o que você precisa de outro jeito?',actions:[]}
       }
     }
+    if(!deterministicShortcut&&operationalReadProbe&&(!secretaryPlan||plannerStatus&&plannerStatus!=='ok')){
+      if(!secretaryTeam){
+        const members=await admin.from('team_members').select('id,name').eq('organization_id',event.organization_id).eq('active',true)
+        if(members.error)throw members.error
+        secretaryTeam=members.data||[]
+      }
+      secretaryPlan=safeSecretaryReadRescue(event.raw_text,{localDate:today(),teamMembers:secretaryTeam})
+      secretaryCommands=secretaryPlan?.actions.map(secretaryActionToCommand).filter(Boolean)||[]
+      if(secretaryCommands.length)command=secretaryCommands[0]
+      processingPath='secretary_read_rescue'
+    }
+    event.result={...(event.result||{}),planner_status:plannerStatus}
     if(secretaryOwnsTurn&&!deterministicShortcut&&!secretaryPlan){
       secretaryPlan={reply_mode:'clarify',message:'Não consegui continuar esse plano agora. Pode tentar novamente?',actions:[]}
       processingPath='secretary_agent'
     }
     // 5) parser/IA legado permanece apenas como fallback transitório quando a secretária não planejou.
-    if(!secretaryPlan&&!secretaryOwnsTurn&&command.intent==='UNKNOWN'){
+    if(!secretaryPlan&&!secretaryOwnsTurn&&!operationalReadProbe&&command.intent==='UNKNOWN'){
       const awaiting=await pendingCommercial(admin,event)
       if(awaiting?.action_type==='proposal_attachment'&&awaiting.status==='awaiting_context'){
         command={intent:'ATTACH_PROPOSAL_FILE',context_query:event.raw_text,confidence:1}

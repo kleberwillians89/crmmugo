@@ -267,8 +267,31 @@ function isValidToolArguments(tool, args, rawArguments) {
   return true
 }
 
-const INTERNAL_FACT_PATTERN = /\b(quanto|quantas?|quem|como esta|atrasad[oa]s?|paga|recebe|tarefas?|pendencias?)\b/i
+const INTERNAL_FACT_PATTERN = /\b(quanto|quantas?|quem|como esta|atrasad[oa]s?|atrasos?|paga|recebe|tarefas?|pendencias?|demandas?|meu dia|minha semana|o que tenho|o que preciso fazer|agenda operacional)\b/i
 export const requiresOperationalRead = (message) => INTERNAL_FACT_PATTERN.test(clean(message, 2000).normalize('NFD').replace(/[\u0300-\u036f]/g, ''))
+
+// Conservative domain gate: a rescue can only read, never infer a write from a mixed request.
+export function safeSecretaryReadRescue(message, { localDate, teamMembers = [] } = {}) {
+  const text = foldText(message)
+  if (!/^(qual|quais|como|o que|quanto|quantas|tenho|tem|ha|minhas? |meu |agenda operacional)/.test(text)) return null
+  if (/\b(cria|criar|crie|adiciona|adicionar|move|mover|muda|mudar|conclui|concluir|registra|registrar|trabalhei|escrever|escreva|envia|enviar|pagar|exclui|apaga)\b/.test(text)) return null
+  const clarify = () => ({reply_mode:'clarify',message:'Você quer consultar seu dia, sua semana ou as tarefas de alguém da equipe?',actions:[],turn_relation:'new_request'})
+  const members = teamMembers.filter((member) => member.active !== false && foldText(member.name).split(' ').some((name) => name.length > 2 && text.split(/[^a-z0-9]+/).includes(name)))
+  const domain = requiresOperationalRead(text) || /\b(hoje|amanha|semana|equipe)\b/.test(text)
+  if (!domain) return null
+  if (/\b(pagamentos?|recebi|recebe|paguei|despesas?|receitas?|cobrancas?|dinheiro|faturas?|reais|valor)\b/.test(text)) return clarify()
+  if (members.length > 1 || /\bou\b/.test(text)) return clarify()
+  const date = normalizeSecretaryDate(message,localDate) || localDate
+  let tool, args
+  if (members.length === 1) {tool='list_team_tasks';args={assignee_name:members[0].name,date}}
+  else if (/\bequipe\b/.test(text)) {tool='list_team_tasks';args={date}}
+  else if (/\b(?:o que [ao]|como esta [ao])\s/.test(text) && !/\b(meu|minha|tenho|preciso)\b/.test(text)) return clarify()
+  else if (/\b(atrasad[oa]s?|atrasos?)\b/.test(text)) {tool='list_my_tasks';args={scope:'overdue',date}}
+  else if (/\bsemana\b/.test(text)) {tool='get_week_summary';args={date}}
+  else if (/\b(dia|hoje|amanha|tenho|preciso fazer|demandas?|tarefas?|agenda operacional)\b/.test(text)) {tool='plan_my_day';args={date}}
+  else return clarify()
+  return {reply_mode:'execute',message:null,actions:[{tool,arguments:args}],turn_relation:'new_request'}
+}
 
 const outputText = (body) => body?.output_text || (body?.output || [])
   .flatMap((item) => item?.content || [])
@@ -276,9 +299,9 @@ const outputText = (body) => body?.output_text || (body?.output || [])
 
 export async function planInternalSecretaryMessage({
   apiKey, model, message, member, now, session = null,
-  operationalContext = {}, fetcher = fetch,
+  operationalContext = {}, fetcher = fetch, onPlannerStatus = () => {},
 }) {
-  if (!clean(apiKey) || !clean(model) || !clean(message)) return null
+  if (!clean(apiKey) || !clean(model) || !clean(message)) { onPlannerStatus('http_error'); return null }
   const system = `Você é a secretária eletrônica interna da Agência Mugô. Entenda português brasileiro natural e planeje ações seguras.
 
 Retorne somente JSON no schema solicitado. Use exclusivamente as tools permitidas. Você nunca escreve no banco: cada action será validada e executada por handlers determinísticos.
@@ -306,7 +329,8 @@ Regras:
 - responda de forma direta, humana e curta, sem mencionar IA, parser, intent ou tool.
 
 Tools: ${INTERNAL_SECRETARY_TOOLS.join(', ')}.`
-  const response = await fetcher('https://api.openai.com/v1/responses', {
+  let response
+  try { response = await fetcher('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -338,24 +362,28 @@ Tools: ${INTERNAL_SECRETARY_TOOLS.join(', ')}.`
       } } },
     }),
     signal: AbortSignal.timeout(15_000),
-  })
-  if (!response.ok) return null
-  const body = await response.json().catch(() => ({}))
+  }) } catch (error) { onPlannerStatus(['TimeoutError','AbortError'].includes(error?.name) ? 'timeout' : 'http_error'); return null }
+  if (!response.ok) { onPlannerStatus('http_error'); return null }
+  let body, decoded
+  try { body = await response.json(); decoded = JSON.parse(clean(outputText(body),12000)) }
+  catch { onPlannerStatus('invalid_json'); return null }
   try {
-    const canonical = canonicalizeSecretaryPlan(JSON.parse(clean(outputText(body), 12000) || '{}'), { operationalContext, authenticatedMember:member })
-    if (!canonical) return { reply_mode:'clarify',message:'Não posso executar essa ação. Confirme os dados e o responsável pelo pedido.',actions:[] }
+    const canonical = canonicalizeSecretaryPlan(decoded, { operationalContext, authenticatedMember:member })
+    if (!canonical) { onPlannerStatus('canonicalization_rejected'); return { reply_mode:'clarify',message:'Não posso executar essa ação. Confirme os dados e o responsável pelo pedido.',actions:[] } }
     const rawPlan = enrichSecretaryPlan(canonical, { message, localDate: now?.local_date, operationalContext })
     const plan = validateSecretaryPlan(rawPlan)
+    onPlannerStatus(plan ? 'ok' : 'validation_rejected')
     if (plan?.turn_relation === 'cancel_plan') return { ...plan, reply_mode: 'answer', actions: [], message: 'Certo, deixei esse plano de lado.' }
     if (!plan && rawPlan?.reply_mode === 'execute') {
       const forbidden = rawPlan.actions?.some((action) => !TOOL_SET.has(action.tool) || ['organization_id','team_member_id','user_id','member_id'].some((key) => key in (action.arguments || {})))
       return { reply_mode: 'clarify', message: forbidden ? 'Não posso executar essa ação. Posso ajudar com outra coisa?' : rawPlan.actions?.some((action) => action.arguments?.date) ? 'Qual data você quer colocar? Use dia, mês e ano para eu confirmar.' : 'Qual tarefa você quer alterar?', actions: [], turn_relation: rawPlan.turn_relation }
     }
     if (plan?.reply_mode === 'answer' && requiresOperationalRead(message)) {
+      onPlannerStatus('validation_rejected')
       return { reply_mode: 'clarify', message: 'Não consegui consultar esse dado agora. Pode tentar novamente?', actions: [] }
     }
     return plan
-  } catch { return null }
+  } catch { onPlannerStatus('validation_rejected'); return null }
 }
 
 const taskReference = (args) => ({
