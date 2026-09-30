@@ -1,4 +1,4 @@
-import { foldText, resolveRelativeDate, parseTaskSchedule } from './internalCommandCore.js'
+import { foldText, hasExplicitWriteSignal, parseInternalCommand, resolveRelativeDate, parseTaskSchedule } from './internalCommandCore.js'
 
 const clean = (value, max = 500) => String(value ?? '').trim().slice(0, max)
 
@@ -325,15 +325,55 @@ export function safeUndoLastCompletionRescue(message, { recentCompletedTasks = [
   return { reply_mode: 'execute', message: null, actions: [{ tool: 'update_task', arguments: { task_short_id: shortId, status: 'pending' } }], turn_relation: 'correct_plan' }
 }
 
+const resolveWriteRescueAssignee = (name, teamMembers) => {
+  if (!clean(name)) return { ok: true, member: null }
+  const needle = foldText(name)
+  const matches = (teamMembers || []).filter((member) => member.active !== false && (foldText(member.name).includes(needle) || needle.includes(foldText(member.name))))
+  return matches.length === 1 ? { ok: true, member: matches[0] } : { ok: false, member: null }
+}
+// Fallback SEGURO de escrita para quando o planner está indisponível: cobre só "cria uma tarefa ... e
+// coloca/cria outra tarefa ..." — várias cláusulas independentes de create_task unidas por " e ",
+// reaproveitando o MESMO parser determinístico já usado em todo o resto do CRM (nunca um segundo LLM
+// improvisado). Qualquer cláusula que não resolva com confiança (sem título, sem data, responsável
+// ambíguo/desconhecido, ou qualquer intenção que não seja create_task) cancela o rescue inteiro — nunca
+// executa parcialmente, nunca adivinha o resto. Mensagens de uma cláusula só não passam por aqui: já
+// resolvem sozinhas pelo parser determinístico normal (ver TASK_CREATE_LEAD_PATTERN).
+export function safeSecretaryWriteRescue(message, { now = new Date(), teamMembers = [] } = {}) {
+  const raw = clean(message, 2000)
+  if (!hasExplicitWriteSignal(raw)) return null
+  const clauses = raw.split(/\s+e\s+(?=\S)/iu).map((part) => clean(part)).filter(Boolean)
+  if (clauses.length < 2) return null
+  const actions = []
+  for (const clause of clauses) {
+    const parsed = parseInternalCommand(clause, { now })
+    if (parsed.intent !== 'CREATE_TASK' || Array.isArray(parsed.items) || !clean(parsed.title) || !parsed.due_date) return null
+    const resolved = resolveWriteRescueAssignee(parsed.assignee_name, teamMembers)
+    if (!resolved.ok) return null
+    actions.push({ tool: 'create_task', arguments: { title: parsed.title, date: parsed.due_date, time: parsed.due_time || undefined, assignee_name: resolved.member ? resolved.member.name : undefined } })
+  }
+  return { reply_mode: 'execute', message: null, actions, turn_relation: 'new_request' }
+}
+
 const outputText = (body) => body?.output_text || (body?.output || [])
   .flatMap((item) => item?.content || [])
   .find((item) => item?.type === 'output_text')?.text || ''
+
+// planner_status sozinho mistura causas demais (config ausente, rede, e qualquer status HTTP viravam o
+// mesmo 'http_error'). httpStatus/errorClass dão o motivo real sem nunca expor prompt, corpo da
+// resposta do modelo ou credenciais — só o número do status e uma classe seca e conhecida.
+const classifyHttpStatus = (status) => {
+  if (status === 401 || status === 403) return 'authentication'
+  if (status === 429) return 'rate_limit'
+  if (status >= 500) return 'provider_5xx'
+  return 'bad_request'
+}
 
 export async function planInternalSecretaryMessage({
   apiKey, model, message, member, now, session = null,
   operationalContext = {}, fetcher = fetch, onPlannerStatus = () => {},
 }) {
-  if (!clean(apiKey) || !clean(model) || !clean(message)) { onPlannerStatus('http_error'); return null }
+  if (!clean(apiKey) || !clean(model)) { onPlannerStatus('http_error', { httpStatus: null, errorClass: 'configuration_missing' }); return null }
+  if (!clean(message)) { onPlannerStatus('http_error', { httpStatus: null, errorClass: 'bad_request' }); return null }
   const system = `Você é a secretária eletrônica interna da Agência Mugô. Entenda português brasileiro natural e planeje ações seguras.
 
 Retorne somente JSON no schema solicitado. Use exclusivamente as tools permitidas. Você nunca escreve no banco: cada action será validada e executada por handlers determinísticos.
@@ -394,8 +434,12 @@ Tools: ${INTERNAL_SECRETARY_TOOLS.join(', ')}.`
       } } },
     }),
     signal: AbortSignal.timeout(15_000),
-  }) } catch (error) { onPlannerStatus(['TimeoutError','AbortError'].includes(error?.name) ? 'timeout' : 'http_error'); return null }
-  if (!response.ok) { onPlannerStatus('http_error'); return null }
+  }) } catch (error) {
+    const timedOut = ['TimeoutError','AbortError'].includes(error?.name)
+    onPlannerStatus(timedOut ? 'timeout' : 'http_error', { httpStatus: null, errorClass: timedOut ? 'timeout' : 'network' })
+    return null
+  }
+  if (!response.ok) { onPlannerStatus('http_error', { httpStatus: response.status, errorClass: classifyHttpStatus(response.status) }); return null }
   let body, decoded
   try { body = await response.json(); decoded = JSON.parse(clean(outputText(body),12000)) }
   catch { onPlannerStatus('invalid_json'); return null }

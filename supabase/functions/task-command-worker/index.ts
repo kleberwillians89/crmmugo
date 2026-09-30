@@ -2,9 +2,9 @@
 // Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TASK_COMMAND_WORKER_KEY,
 // META_ACCESS_TOKEN e, opcionalmente, OPENAI_API_KEY/TASK_COMMAND_MODEL.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
+import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
-import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
+import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeSecretaryWriteRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
 
 const headers = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers })
@@ -849,7 +849,7 @@ async function processEvent(admin: any, event: any) {
   if (claimed.error || !claimed.data) return false
   try {
     let secretaryPlan:any=null,secretaryCommands:any[]=[],processingPath='deterministic_gate'
-    let plannerStatus:string|null=null,secretaryTeam:any[]|null=null
+    let plannerStatus:string|null=null,plannerHttpStatus:number|null=null,plannerErrorClass:string|null=null,secretaryTeam:any[]|null=null
     let command: any = ['document','image'].includes(event.message_type)&&event.media?.id
       ? {intent:'ATTACH_PROPOSAL_FILE',confidence:1}
       : parseInternalCommand(event.raw_text)
@@ -865,7 +865,11 @@ async function processEvent(admin: any, event: any) {
       else await saveAssistantSession(admin,event,{state:event.session.state,active_intent:event.session.active_intent,context:{...event.session.context,secretary_plan:null},pending_action:event.session.pending_action,pending_entity_type:event.session.pending_entity_type,pending_entity_id:event.session.pending_entity_id})
     }
     const previousSecretaryPlan=event.session?.context?.secretary_plan||null
-    const secretaryOwnsTurn=Boolean(previousSecretaryPlan)
+    // Um plano onde TODAS as actions já terminaram (completed) não pode sequestrar o próximo pedido: "qual
+    // minha demanda de hoje?" (leitura já concluída) seguido de "cria uma tarefa..." precisa ser
+    // new_request, nunca "Não consegui continuar esse plano agora." Só um plano com algo GENUINAMENTE
+    // pendente (dado faltando, confirmação, falha recuperável) é dono do próximo turno.
+    const secretaryOwnsTurn=Array.isArray(previousSecretaryPlan?.actions)&&previousSecretaryPlan.actions.some((action:any)=>['needs_input','awaiting_confirmation','failed'].includes(action.status))
     // Tarefas recém-criadas nesta MESMA conversa (mesmo as de outro membro, ex. "Origami pra Julia") e
     // conclusões recém-feitas — nunca uma consulta a qualquer tarefa da organização, só o que este
     // plano específico já tocou. Usado para resolver "e a da Julia deixa amanhã" e desfazer uma
@@ -1027,7 +1031,7 @@ async function processEvent(admin: any, event: any) {
       if(team.error)throw team.error
       secretaryTeam=team.data||[]
       secretaryPlan=await planInternalSecretaryMessage({
-        onPlannerStatus:(status:string)=>{plannerStatus=status},
+        onPlannerStatus:(status:string,meta:any)=>{plannerStatus=status;plannerHttpStatus=meta?.httpStatus??null;plannerErrorClass=meta?.errorClass??null},
         apiKey:secretaryKey,model:secretaryModel,message:event.raw_text,
         member:{...event.team_member,organization_id:event.organization_id},now:{iso:new Date().toISOString(),local_date:today(),timezone:'America/Sao_Paulo'},
         session:event.session?{state:event.session.state,active_intent:event.session.active_intent,pending_action:event.session.pending_action,context:event.session.context}:null,
@@ -1051,7 +1055,30 @@ async function processEvent(admin: any, event: any) {
       if(secretaryCommands.length)command=secretaryCommands[0]
       processingPath='secretary_read_rescue'
     }
-    event.result={...(event.result||{}),planner_status:plannerStatus}
+    // Sem o planner, uma mensagem com verbo de escrita explícito e mais de uma cláusula ("cria ... e
+    // coloca ...") nunca pode cair no comando legado (que só sabe interpretar UMA cláusula por vez) nem
+    // virar uma consulta por acidente. Melhor não fazer nada do que transformar CREATE_TASK em LIST_TODO.
+    else if(!deterministicShortcut&&!operationalReadProbe&&hasExplicitWriteSignal(cleanedRaw)&&/\s+e\s+\S/iu.test(cleanedRaw)&&(!secretaryPlan||plannerStatus&&plannerStatus!=='ok')){
+      if(!secretaryTeam){
+        const members=await admin.from('team_members').select('id,name').eq('organization_id',event.organization_id).eq('active',true)
+        if(members.error)throw members.error
+        secretaryTeam=members.data||[]
+      }
+      const writeRescue=safeSecretaryWriteRescue(event.raw_text,{now:new Date(),teamMembers:secretaryTeam})
+      if(writeRescue){
+        secretaryPlan=writeRescue
+        secretaryCommands=writeRescue.actions.map(secretaryActionToCommand).filter(Boolean)
+        if(secretaryCommands.length)command=secretaryCommands[0]
+        processingPath='secretary_write_rescue'
+      }else{
+        secretaryPlan={reply_mode:'answer',message:'Estou com uma indisponibilidade temporária para interpretar esse pedido completo. Não alterei nada. Pode tentar novamente em instantes.',actions:[],turn_relation:'new_request'}
+        secretaryCommands=[]
+        processingPath='secretary_write_rescue_declined'
+      }
+    }
+    // Nunca prompt, corpo de resposta do modelo, header de autorização ou API key — só status HTTP e uma
+    // classe seca e conhecida, para descobrir por que o planner falhou sem expor nada sensível.
+    event.result={...(event.result||{}),planner_status:plannerStatus,planner_http_status:plannerHttpStatus,planner_error_class:plannerErrorClass}
     if(secretaryOwnsTurn&&!deterministicShortcut&&!secretaryPlan){
       secretaryPlan={reply_mode:'clarify',message:'Não consegui continuar esse plano agora. Pode tentar novamente?',actions:[]}
       processingPath='secretary_agent'

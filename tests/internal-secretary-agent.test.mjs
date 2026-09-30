@@ -378,7 +378,13 @@ test('pending secretary plan tem prioridade e correção nunca vira atividade co
   const plan={actions:[{id:'a1',tool:'create_task',status:'needs_input',arguments:{title:'Revisar Beta'},command:{intent:'CREATE_TASK',title:'Revisar Beta'}}]}
   const session={active_intent:'SECRETARY_PLAN',context:{secretary_plan:plan}}
   assert.ok(session.context.secretary_plan)
-  assert.match(worker,/const secretaryOwnsTurn=Boolean\(previousSecretaryPlan\)/)
+  // secretaryOwnsTurn só é true quando há algo GENUINAMENTE pendente (needs_input/awaiting_confirmation/
+  // failed) — um plano 100% completed não pode mais sequestrar o próximo turno (hotfix de produção:
+  // "qual minha demanda de hoje?" concluído travava "cria uma tarefa..." com "Não consegui continuar").
+  assert.match(worker,/const secretaryOwnsTurn=Array\.isArray\(previousSecretaryPlan\?\.actions\)&&previousSecretaryPlan\.actions\.some\(\(action:any\)=>\['needs_input','awaiting_confirmation','failed'\]\.includes\(action\.status\)\)/)
+  const hasPendingAction=(candidatePlan)=>Array.isArray(candidatePlan?.actions)&&candidatePlan.actions.some((action)=>['needs_input','awaiting_confirmation','failed'].includes(action.status))
+  assert.equal(hasPendingAction(plan),true)
+  assert.equal(hasPendingAction({actions:[{status:'completed'}]}),false)
   assert.match(worker,/!secretaryOwnsTurn&&\(\s*standaloneGreeting/)
   assert.match(worker,/if\(secretaryOwnsTurn&&!deterministicShortcut&&!secretaryPlan\)/)
   assert.doesNotMatch(JSON.stringify(plan),/ACTIVITY_COMPLETE/)

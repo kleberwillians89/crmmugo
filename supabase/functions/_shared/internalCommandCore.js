@@ -160,8 +160,13 @@ const HELP_PATTERN = /^(menu|ajuda|help|comandos|o que (voce|vc) (faz|pode fazer
 // "quero registrar atividade" é uma intenção neutra — não presume início nem fim. A resposta pede o
 // relato livre; a próxima mensagem (com verbo/particípio) resolve para ACTIVITY_START/COMPLETE.
 const ACTIVITY_CAPTURE_PATTERN = /\b(?:quero|vou|preciso)\s+registrar\s+(?:uma\s+)?atividade\b|^registrar\s+(?:uma\s+)?atividade$|^anotar\s+atividade$/
-const TASK_CREATE_LEAD_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|registrar|registre|adicionar|adicione|incluir|inclua)(?:\s+uma)?\s+tarefas?\b|^nova(?:\s+uma)?\s+tarefa\b/iu
-const TASK_CREATE_COMMAND_ONLY_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|registrar|registre|adicionar|adicione|incluir|inclua)(?:\s+uma)?\s+tarefas?[\s.!?]*$|^nova(?:\s+uma)?\s+tarefa[\s.!?]*$/iu
+// Um verbo de escrita explícito no meio da frase sempre vence um sinal de leitura genérico que apareça
+// de carona na mesma mensagem — nunca deixa "cria uma tarefa ... hoje" cair em LIST_TODAY só porque
+// contém "tarefa" e "hoje" em qualquer lugar (ver uso nos gates de leitura abaixo).
+const EXPLICIT_WRITE_SIGNAL = /\b(cria|criar|crie|adicione|adiciona|adicionar|inclua|inclui|incluir|registre|registra|registrar|coloca|colocar|muda|mudar|move|mover|finaliza|finalizar|conclui|concluir|atribui|atribuir|cobra|cobrar)\b/
+export const hasExplicitWriteSignal = (value) => EXPLICIT_WRITE_SIGNAL.test(foldText(value))
+const TASK_CREATE_LEAD_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|crie|registrar|registre|registra|adicionar|adicione|adiciona|incluir|inclua|inclui)(?:\s+uma)?\s+tarefas?\b|^nova(?:\s+uma)?\s+tarefa\b/iu
+const TASK_CREATE_COMMAND_ONLY_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|crie|registrar|registre|registra|adicionar|adicione|adiciona|incluir|inclua|inclui)(?:\s+uma)?\s+tarefas?[\s.!?]*$|^nova(?:\s+uma)?\s+tarefa[\s.!?]*$/iu
 export const isTaskCreationCommandOnly = (value) => TASK_CREATE_COMMAND_ONLY_PATTERN.test(clean(value))
 // TAREFA (crm_tasks) só quando há um sinal explícito: a palavra "tarefa(s)" ou um short id. Sem isso,
 // verbos de conclusão/início descrevem ATIVIDADE (operational_events) — o caso mais comum no dia a dia.
@@ -312,13 +317,16 @@ function parseSingle(rawInput, now) {
   const clientRequest = raw.match(new RegExp(`^${ARTICLE}([\\p{L}][\\p{L}\\s'-]*?)\\s+pediu\\s+(.+)$`, 'iu'))
   if(clientRequest)return{...base,intent:'CLIENT_UPDATE',subject_query:clean(clientRequest[1]),summary:clean(clientRequest[2]),confidence:.9}
   if(/\b(aprovou|reprovou|decidiu|autorizou)\b/.test(text))return{...base,intent:'RECORD_DECISION',summary:raw,confidence:.93}
-  if (/\b(o que|oq|que)\s+(eu\s+)?fiz\s+hoje\b/.test(text)) return { ...base, intent: 'DAY_SUMMARY', confidence: 1 }
-  if (/(o que|oq|que).*tenho hoje|meu dia|minhas tarefas( hoje)?/.test(text)) return { ...base, intent: 'LIST_MINE', confidence: 1 }
+  // EXPLICIT WRITE SIGNAL sempre vence: "cria uma tarefa ... hoje" nunca pode cair nestes gates de
+  // leitura só porque também contém "tarefa"/"hoje"/"equipe" em algum lugar da frase.
+  const explicitWrite = EXPLICIT_WRITE_SIGNAL.test(text)
+  if (!explicitWrite && /\b(o que|oq|que)\s+(eu\s+)?fiz\s+hoje\b/.test(text)) return { ...base, intent: 'DAY_SUMMARY', confidence: 1 }
+  if (!explicitWrite && /(o que|oq|que).*tenho hoje|meu dia|minhas tarefas( hoje)?/.test(text)) return { ...base, intent: 'LIST_MINE', confidence: 1 }
   const memberToday = raw.match(new RegExp(`(?:o que|oq|que)\\s+${ARTICLE}([\\p{L}'-]+)\\s+tem\\s+hoje`, 'iu'))
   if (memberToday) return { ...base, intent: 'LIST_TEAM', assignee_name: memberToday[1], confidence: 1 }
   if (/(?:tarefas?.*)?atrasad[oa]s?|o que esta atrasado|esta atrasado/.test(text)) return { ...base, intent: 'LIST_OVERDUE', confidence: 1 }
-  if (/como esta a equipe|tarefas? da equipe|equipe hoje/.test(text)) return { ...base, intent: 'LIST_TEAM', confidence: 1 }
-  if (/tarefas?.*hoje|o que temos hoje/.test(text)) return { ...base, intent: 'LIST_TODAY', confidence: 1 }
+  if (!explicitWrite && /como esta a equipe|tarefas? da equipe|equipe hoje/.test(text)) return { ...base, intent: 'LIST_TEAM', confidence: 1 }
+  if (!explicitWrite && /tarefas?.*hoje|o que temos hoje/.test(text)) return { ...base, intent: 'LIST_TODAY', confidence: 1 }
   if (/alguem.*(esperando|aguardando).*atendimento|atendimentos? esperando/.test(text)) return { intent: 'LIST_WAITING_ATTENDANCE', confidence: 1 }
   if (/quem (?:esta|ta) atendendo\b/.test(text)) return { intent: 'LIST_WAITING_ATTENDANCE', subject_query: after(raw, /quem (?:está|esta|tá|ta) atendendo\s+(.+)$/iu), confidence: 1 }
   if (/quem esta devendo|quem deve\b/.test(text)) return { ...base, intent: 'QUERY_OVERDUE_RECEIVABLES', confidence: 1 }
@@ -343,17 +351,38 @@ function parseSingle(rawInput, now) {
   if(taskByDate)return{...base,intent:'CREATE_TASK',title:clean(taskByDate[2]),assignee_name:null,priority:priority(text)||'medium',confidence:.98}
   const delegated=raw.match(/^([\p{L}'-]+)\s+precisa\s+(.+)$/iu)
   if(delegated){const title=delegated[2].replace(/\s+(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)$/iu,'');return{...base,intent:'CREATE_TASK',title:clean(title),assignee_name:delegated[1],priority:priority(text)||'medium',confidence:base.due_date?.length?0.98:0.9}}
+  // "coloca/bota/põe pra NOME fazer X" delega uma tarefa sem usar as palavras "tarefa" ou "precisa" —
+  // forma natural comum em pedidos de multi-ação ("cria uma tarefa pra mim X e coloca pra Julia Y").
+  const delegatedPut=raw.match(/^(?:coloca|bota|p[õo]e)\s+(?:para|pra)\s+([\p{L}'-]+)\s*,?\s+(.+)$/iu)
+  if(delegatedPut){
+    const dateWord=/(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)/iu
+    const title=taskTitleFromText(delegatedPut[2].replace(new RegExp(`\\s+${dateWord.source}[\\s.!?]*$`,'iu'),''))
+    const schedule=parseTaskSchedule(raw,now)
+    return{...base,due_date:schedule.due_date,due_time:schedule.due_time,intent:'CREATE_TASK',title:clean(title),assignee_name:delegatedPut[1],priority:priority(text)||'medium',confidence:title?.9:.5}
+  }
   // Pedidos de criação sem conteúdo são intenção, nunca título. O mesmo caminho aceita conteúdo
   // explícito depois do comando, sem depender de IA nem de um telefone específico.
   if (TASK_CREATE_LEAD_PATTERN.test(raw)) {
-    const assignee = raw.match(/\bpara\s+([\p{L}'-]+)(?:\s+.+)?$/iu)?.[1] || null
+    // "pra" é a mesma coisa que "para" na fala natural; "pra mim"/"para mim" é autoatribuição (não é
+    // um responsável de verdade) e nunca vira assignee_name.
+    const assigneeMatch = raw.match(/\b(?:para|pra)\s+([\p{L}'-]+)\s*,?(?:\s+.+)?$/iu)
+    const assignee = assigneeMatch && !['mim', 'eu'].includes(foldText(assigneeMatch[1])) ? assigneeMatch[1] : null
     const dateWord = /(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)/iu
     let title = clean(raw.replace(TASK_CREATE_LEAD_PATTERN, ''))
-      .replace(new RegExp(`^${dateWord.source}\\s+`, 'iu'), '')
-      .replace(new RegExp(`\\s+${dateWord.source}(?=\\s|$).*$`, 'iu'), '')
-    if (assignee) title = title.replace(new RegExp(`^para\\s+${assignee}\\s+`, 'iu'), '').replace(new RegExp(`\\s+para\\s+${assignee}$`, 'iu'), '')
+    title = title.replace(/^\s*,?\s*(?:para|pra)\s+mim\s*,?\s*/iu, '')
+    if (assignee) title = title.replace(new RegExp(`^\\s*,?\\s*(?:para|pra)\\s+${assignee}\\s*,?\\s*`, 'iu'), '').replace(new RegExp(`\\s+(?:para|pra)\\s+${assignee}$`, 'iu'), '')
+    // A data pode vir ANTES do restante do título ("sexta reunião...") ou DEPOIS ("revisar site
+    // amanhã") — nos dois casos ela já foi capturada em base.due_date; aqui só remove a palavra da
+    // data do texto, nunca o conteúdo real da tarefa que vier depois dela.
+    // dateWord.source já tem seu próprio grupo de captura — o restante do título é o grupo 2, não o 1.
+    const leadDateMatch = title.match(new RegExp(`^\\s*,?\\s*${dateWord.source}\\s*,?\\s+(.+)$`, 'iu'))
+    if (leadDateMatch) title = leadDateMatch[2]
+    else title = title.replace(new RegExp(`^${dateWord.source}\\s+`, 'iu'), '').replace(new RegExp(`\\s+${dateWord.source}[\\s.!?]*$`, 'iu'), '')
     title = taskTitleFromText(title)
-    return { ...base, intent: 'CREATE_TASK', title: clean(title), assignee_name: assignee, priority: priority(text) || 'medium', confidence: title ? .95 : .6 }
+    // base.due_date sozinho nunca captura horário ("hoje às 17h") — parseTaskSchedule resolve os dois
+    // juntos, na mesma mensagem, sem inventar horário quando ele não é mencionado.
+    const schedule = parseTaskSchedule(raw, now)
+    return { ...base, due_date: schedule.due_date, due_time: schedule.due_time, intent: 'CREATE_TASK', title: clean(title), assignee_name: assignee, priority: priority(text) || 'medium', confidence: title ? .95 : .6 }
   }
   return { intent: 'UNKNOWN', confidence: 0, raw_text: raw }
 }
