@@ -22,8 +22,19 @@ export function enrichSecretaryPlan(raw, { message, localDate, operationalContex
   if (plan.actions?.some((action) => ['organization_id','team_member_id','user_id','member_id','due_date','due_time'].some((key) => key in (action.arguments || {})))) return plan
   const knownTasks = (operationalContext.my_tasks || []).map((task) => ({ ...task, title: task.title || task.label }))
   const clauses = String(message).split(/[.!?]/).filter(Boolean)
+  const scopes = clauses.flatMap((clause) => {
+    let inherited = null
+    return clause.split(/,|\s+e\s+/i).map((part) => {
+      inherited = normalizeSecretaryDate(part, localDate) || inherited
+      return {text:part,date:inherited}
+    })
+  })
   for (const action of plan.actions || []) {
     const args = action.arguments || {}
+    if (action.tool === 'record_hours' && !args.summary) {
+      const contexts = clauses.map((clause) => clause.match(/\btrabalhei\s+(\d+(?:[.,]\d+)?)\s*(?:horas?|h)\s+(?:no|na|nos|nas|em)\s+(.+)$/i)).filter((match) => match && Number(match[1].replace(',','.')) === args.hours)
+      if (contexts.length === 1) args.summary = clean(contexts[0][2])
+    }
     if (['update_task','complete_task','start_task'].includes(action.tool) && args.task_query && !args.task_short_id) {
       const words = taskWords(args.task_query)
       const tasks = knownTasks.filter((task) => !['completed','cancelled'].includes(task.status))
@@ -36,13 +47,15 @@ export function enrichSecretaryPlan(raw, { message, localDate, operationalContex
       if (target.date) target.date = normalizeSecretaryDate(target.date, localDate) || target.date
       if (localDate && target.time && !/^\d{2}:\d{2}$/.test(target.time)) target.time = parseTaskSchedule(`às ${target.time}`, new Date(`${localDate}T12:00:00Z`)).due_time || target.time
       if (!target.date && ['create_task','record_hours'].includes(action.tool)) {
-        const words = taskWords(target.title || target.summary || args.title || args.summary)
-        const matches = clauses.filter((clause) => words.length && words.every((word) => taskWords(clause).includes(word)) && (action.tool === 'record_hours' ? /\btrabalhei\b/i.test(clause) && /\d+\s*(?:h|horas)/i.test(clause) : !/\btrabalhei\b/i.test(clause)))
-        if (matches.length === 1) target.date = normalizeSecretaryDate(matches[0], localDate)
+        const title = target.title || target.summary || args.title || args.summary
+        const words = taskWords(title).length ? taskWords(title) : foldText(title).split(/\s+/).filter(Boolean)
+        const matches = scopes.filter((scope) => words.length && words.every((word) => foldText(scope.text).split(/[^a-z0-9]+/).includes(word)) && (action.tool === 'record_hours' ? /\btrabalhei\b/i.test(scope.text) : !/\btrabalhei\b/i.test(scope.text)))
+        if (matches.length === 1) target.date = matches[0].date
       }
       if (localDate && !target.time && action.tool === 'create_task') {
-        const words = taskWords(target.title || args.title)
-        const matches = String(message).split(/[,.;]|\s+e\s+/).filter((clause) => words.length && words.every((word) => taskWords(clause).includes(word)))
+        const title = target.title || args.title
+        const words = taskWords(title).length ? taskWords(title) : foldText(title).split(/\s+/).filter(Boolean)
+        const matches = String(message).split(/[,.;]|\s+e\s+/).filter((clause) => words.length && words.every((word) => foldText(clause).split(/[^a-z0-9]+/).includes(word)))
         if (matches.length === 1) target.time = parseTaskSchedule(matches[0], new Date(`${localDate}T12:00:00Z`)).due_time
       }
     }
@@ -102,6 +115,72 @@ const TOOL_ARGUMENTS = Object.freeze({
   assign_conversation: ['subject_query','assignee_name'],
 })
 
+const TASK_ITEM_FIELDS = ['title','date','time','assignee_name','priority','task_type']
+const IDENTITY_FIELDS = ['organization_id','team_member_id','member_id','user_id','assigned_to']
+export const SECRETARY_ARGUMENT_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: Object.fromEntries([...new Set(Object.values(TOOL_ARGUMENTS).flat())].map((key) => [key,
+    key === 'items' ? { type: 'array', maxItems: MAX_SECRETARY_ACTIONS, items: {
+      anyOf: [
+        { type: 'object', additionalProperties: false, properties: Object.fromEntries(TASK_ITEM_FIELDS.map((field) => [field,{type:['string','null']}])), required:['title'] },
+        { type: 'object', additionalProperties: false, properties: {summary:{type:'string'}}, required:['summary'] },
+      ],
+    } } : ['hours','amount'].includes(key) ? {type:'number'} : {type:['string','null']},
+  ])),
+}
+
+// Only this boundary understands legacy aliases. The trusted roster is fetched by tenant + active.
+export function canonicalizeSecretaryPlan(rawPlan, { operationalContext = {}, authenticatedMember = {} } = {}) {
+  if (!rawPlan || !Array.isArray(rawPlan.actions) || rawPlan.actions.length > MAX_SECRETARY_ACTIONS) return null
+  const normalize = (raw, fields) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid arguments')
+    const value = { ...raw }
+    if (IDENTITY_FIELDS.some((field) => field in value)) throw new Error('Forbidden identity')
+    for (const [alias, canonical] of [['due_date','date'],['due_time','time']]) {
+      if (alias in value) {
+        if (canonical in value && value[canonical] !== value[alias]) throw new Error('Conflicting alias')
+        value[canonical] = value[alias]
+        delete value[alias]
+      }
+    }
+    if ('assignee_member_id' in value) {
+      const matches = (operationalContext.team_members || []).filter((member) => member.id === value.assignee_member_id && member.active !== false && (!member.organization_id || member.organization_id === authenticatedMember.organization_id))
+      if (matches.length !== 1 || !clean(matches[0].name)) throw new Error('Unknown member')
+      const name = matches[0].id === authenticatedMember.id ? null : matches[0].name
+      if ('assignee_name' in value && value.assignee_name !== name) throw new Error('Conflicting assignee')
+      value.assignee_name = name
+      delete value.assignee_member_id
+    }
+    if (Object.keys(value).some((field) => !fields.includes(field))) throw new Error('Unknown argument')
+    return value
+  }
+  try {
+    const actions = []
+    for (const action of rawPlan.actions) {
+      if (!TOOL_SET.has(action.tool)) return null
+      const args = normalize(action.arguments || {}, TOOL_ARGUMENTS[action.tool])
+      if (action.tool === 'create_task' && args.items != null) {
+        if (!Array.isArray(args.items) || !args.items.length) return null
+        const {items,...defaults} = args
+        // One action per item also preserves individual priority/type and stable checkpoint order.
+        for (const rawItem of items) {
+          const item = normalize(typeof rawItem === 'string' ? {title:rawItem} : rawItem, TASK_ITEM_FIELDS)
+          const merged = {...defaults,...item}
+          actions.push({tool:action.tool,arguments:{...merged,items:[merged]}})
+        }
+      } else {
+        if (args.items != null) {
+          if (!Array.isArray(args.items)) return null
+          args.items = args.items.map((item) => normalize(typeof item === 'string' ? {summary:item} : item, ['summary']))
+        }
+        actions.push({tool:action.tool,arguments:args})
+      }
+    }
+    if (actions.length > MAX_SECRETARY_ACTIONS) return null
+    return {reply_mode:rawPlan.reply_mode || 'execute',message:rawPlan.message || null,turn_relation:rawPlan.turn_relation,actions}
+  } catch { return null }
+}
+
 const safeValue = (value) => {
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return value
   if (typeof value === 'string') return clean(value, 500)
@@ -115,11 +194,13 @@ export function validateSecretaryPlan(value) {
   const replyMode = ['execute','clarify','answer'].includes(value.reply_mode) ? value.reply_mode : null
   if (!replyMode) return null
   const actions = []
-  for (const candidate of Array.isArray(value.actions) ? value.actions.slice(0, MAX_SECRETARY_ACTIONS) : []) {
+  if (!Array.isArray(value.actions) || value.actions.length > MAX_SECRETARY_ACTIONS) return null
+  for (const candidate of value.actions) {
     const tool = clean(candidate?.tool, 80)
     if (!TOOL_SET.has(tool)) return null
     const allowed = new Set(TOOL_ARGUMENTS[tool])
     const rawArguments = candidate?.arguments && typeof candidate.arguments === 'object' && !Array.isArray(candidate.arguments) ? candidate.arguments : {}
+    if (rawArguments.items != null && (!Array.isArray(rawArguments.items) || rawArguments.items.some((item) => !item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((key) => !(tool === 'create_task' ? TASK_ITEM_FIELDS : ['summary']).includes(key))))) return null
     const args = Object.fromEntries(Object.entries(rawArguments)
       .filter(([key]) => allowed.has(key))
       .map(([key,item]) => [key, safeValue(item)]))
@@ -141,7 +222,7 @@ const hasTaskReference = (args) => Boolean(clean(args.task_query, 240) || /^[a-f
 
 function isValidToolArguments(tool, args, rawArguments) {
   // Campos de identidade nunca são aceitos do modelo. Eles vêm exclusivamente do evento autenticado.
-  for (const key of ['organization_id', 'team_member_id', 'member_id', 'user_id']) {
+  for (const key of [...IDENTITY_FIELDS, 'assignee_member_id']) {
     if (key in rawArguments) return false
   }
   // Falha fechada para aliases de data fora do schema, em vez de transformar uma data inválida em tarefa sem data.
@@ -163,10 +244,13 @@ function isValidToolArguments(tool, args, rawArguments) {
   if (tool === 'create_task') {
     const items = Array.isArray(args.items) ? args.items : []
     if (!clean(args.title, 240) && !items.some((item) => clean(item?.title || item, 240))) return false
-    if (items.some((item) => typeof item !== 'string' && (!item || typeof item !== 'object' || Array.isArray(item)))) return false
+    if (items.some((item) => !item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((key) => !TASK_ITEM_FIELDS.includes(key)) || !clean(item.title))) return false
+    if (items.some((item) => Object.values(item).some((value) => value != null && typeof value !== 'string'))) return false
+    if (items.some((item) => item.priority != null && !['low','medium','high','critical'].includes(item.priority))) return false
     if (items.some((item) => item?.date != null && (typeof item.date !== 'string' || !isIsoDate(item.date)))) return false
     if (items.some((item) => item?.time != null && (typeof item.time !== 'string' || !isClockTime(item.time)))) return false
   }
+  if (tool === 'record_activity' && args.items?.some((item) => !item || typeof item !== 'object' || Object.keys(item).some((key) => key !== 'summary') || typeof item.summary !== 'string')) return false
   if (['complete_task', 'start_task'].includes(tool) && !hasTaskReference(args)) return false
   if (tool === 'update_task' && (!hasTaskReference(args) || !['date', 'time', 'priority', 'assignee_name', 'status'].some((key) => args[key] != null))) return false
   if (tool === 'record_hours' && !isPositiveNumber(args.hours)) return false
@@ -212,6 +296,7 @@ Regras:
 - correções naturais devem atualizar a tarefa existente com update_task, usando os resultados/candidate_items do plano; não crie uma tarefa duplicada;
 - quando faltar um dado realmente obrigatório, reply_mode=clarify, actions=[] e faça uma única pergunta curta;
 - create_task exige título e date; time é opcional. Infira date do escopo temporal inequívoco antes de perguntar. Preserve actions completas mesmo quando outra precisa de data; não use frases como “criar tarefa” como título;
+- argumentos e items usam exclusivamente date, time e assignee_name (nome da pessoa, nunca UUID). Nunca use due_date, due_time, assignee_member_id ou assigned_to. record_hours deve preservar summary com o projeto/contexto mencionado;
 - register_expense/register_receipt/send_collection apenas iniciam handlers que mantêm confirmação explícita;
 - referências como “ela” só podem usar candidate_items inequívocos da sessão;
 - para perguntas operacionais ou fatos internos, escolha uma tool de leitura; se nenhuma tool puder consultar o dado, diga que não conseguiu consultar e não invente;
@@ -245,7 +330,7 @@ Tools: ${INTERNAL_SECRETARY_TOOLS.join(', ')}.`
           message: { type: ['string','null'] },
           actions: { type: 'array', maxItems: MAX_SECRETARY_ACTIONS, items: {
             type: 'object', additionalProperties: false,
-            properties: { tool: { type: 'string', enum: INTERNAL_SECRETARY_TOOLS }, arguments: { type: 'object' } },
+            properties: { tool: { type: 'string', enum: INTERNAL_SECRETARY_TOOLS }, arguments: SECRETARY_ARGUMENT_SCHEMA },
             required: ['tool','arguments'],
           } },
         },
@@ -257,7 +342,9 @@ Tools: ${INTERNAL_SECRETARY_TOOLS.join(', ')}.`
   if (!response.ok) return null
   const body = await response.json().catch(() => ({}))
   try {
-    const rawPlan = enrichSecretaryPlan(JSON.parse(clean(outputText(body), 12000) || '{}'), { message, localDate: now?.local_date, operationalContext })
+    const canonical = canonicalizeSecretaryPlan(JSON.parse(clean(outputText(body), 12000) || '{}'), { operationalContext, authenticatedMember:member })
+    if (!canonical) return { reply_mode:'clarify',message:'Não posso executar essa ação. Confirme os dados e o responsável pelo pedido.',actions:[] }
+    const rawPlan = enrichSecretaryPlan(canonical, { message, localDate: now?.local_date, operationalContext })
     const plan = validateSecretaryPlan(rawPlan)
     if (plan?.turn_relation === 'cancel_plan') return { ...plan, reply_mode: 'answer', actions: [], message: 'Certo, deixei esse plano de lado.' }
     if (!plan && rawPlan?.reply_mode === 'execute') {
@@ -283,6 +370,7 @@ const safeTaskStatus = (value) => ['pending','in_progress','waiting_approval','w
 
 export function secretaryActionToCommand(action) {
   const args = action?.arguments || {}
+  if (action?.tool === 'create_task' && (!isValidToolArguments(action.tool,args,args) || args.items?.some((item) => ['assignee_name','priority','task_type'].some((key) => item[key] != null && item[key] !== args[key])))) throw new Error('Non-canonical create_task; canonicalize before adapting')
   switch (action?.tool) {
     case 'create_task': {
       const items = Array.isArray(args.items) ? args.items.map((item) => ({

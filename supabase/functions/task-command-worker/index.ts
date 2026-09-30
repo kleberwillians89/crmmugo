@@ -4,7 +4,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
-import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, secretaryActionToCommand, secretaryCommandInputRequest } from '../_shared/internalSecretaryAgent.js'
+import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
 
 const headers = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers })
@@ -990,9 +990,13 @@ async function processEvent(admin: any, event: any) {
     const secretaryKey=Deno.env.get('OPENAI_API_KEY')||'',secretaryModel=Deno.env.get('TASK_COMMAND_MODEL')||Deno.env.get('OPENAI_MODEL')||''
     const savedSecretaryPlan=event.parsed_command?.orchestrator==='internal_secretary'?event.parsed_command:null
     if(savedSecretaryPlan?.plan?.reply_mode==='execute'&&Array.isArray(savedSecretaryPlan.commands)&&savedSecretaryPlan.commands.length&&!deterministicShortcut){
-      secretaryPlan=savedSecretaryPlan.plan
-      secretaryCommands=compactSecretaryCommands(savedSecretaryPlan.commands.map((item:any)=>({...item,secretary_direct:true})))
-      command=secretaryCommands[0]
+      // Never reinterpret/split a legacy retry: that would shift completed action checkpoints.
+      secretaryPlan=validateSecretaryPlan(savedSecretaryPlan.plan)
+      try{
+        secretaryCommands=secretaryPlan?secretaryPlan.actions.map(secretaryActionToCommand).filter(Boolean).map((item:any)=>({...item,secretary_direct:true})):[]
+      }catch{secretaryCommands=[]}
+      if(!secretaryCommands.length)secretaryPlan={reply_mode:'clarify',message:'Esse pedido salvo tem um formato incompatível. Confira o que já foi registrado antes de reenviar apenas o que falta.',actions:[]}
+      else command=secretaryCommands[0]
       processingPath='secretary_agent'
     }else if(secretaryKey&&secretaryModel&&!deterministicShortcut){
       const [memberModel,team]=await Promise.all([
@@ -1002,7 +1006,7 @@ async function processEvent(admin: any, event: any) {
       if(team.error)throw team.error
       secretaryPlan=await planInternalSecretaryMessage({
         apiKey:secretaryKey,model:secretaryModel,message:event.raw_text,
-        member:event.team_member,now:{iso:new Date().toISOString(),local_date:today(),timezone:'America/Sao_Paulo'},
+        member:{...event.team_member,organization_id:event.organization_id},now:{iso:new Date().toISOString(),local_date:today(),timezone:'America/Sao_Paulo'},
         session:event.session?{state:event.session.state,active_intent:event.session.active_intent,pending_action:event.session.pending_action,context:event.session.context}:null,
         operationalContext:{my_tasks:memberModel.candidateItems,team_members:(team.data||[]).map((item:any)=>({id:item.id,name:item.name}))},
       })

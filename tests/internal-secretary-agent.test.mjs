@@ -231,7 +231,7 @@ test('prompt injection não expõe segredo nem ganha tools ou passos extras',asy
   assert.equal(effects,0)
   assert.equal(MAX_SECRETARY_ACTIONS,6)
   const oversized=validateSecretaryPlan({reply_mode:'execute',message:null,actions:Array.from({length:20},(_,index)=>({tool:'record_observation',arguments:{summary:`item ${index}`}}))})
-  assert.equal(oversized.actions.length,MAX_SECRETARY_ACTIONS)
+  assert.equal(oversized,null) // Fail closed instead of silently dropping demands.
 })
 
 test('worker persiste path e checkpoints sem entregar identidade do tenant ao modelo',()=>{
@@ -299,9 +299,9 @@ test('contexto natural mantém a mesma tarefa, usa candidate_items e separa trê
   const first=await planInternalSecretaryMessage({apiKey:'test',model:'test-model',message:'tenho três coisas amanhã',fetcher:responseFor({reply_mode:'clarify',message:'Quais são?',actions:[]})})
   assert.equal(first.reply_mode,'clarify')
   const continuation=await planInternalSecretaryMessage({apiKey:'test',model:'test-model',message:'Roove, Origami e Cafifa',session:{active_intent:'SECRETARY_CLARIFICATION',context:{request:'tenho três coisas amanhã'}},fetcher:responseFor({reply_mode:'execute',message:null,actions:[{tool:'create_task',arguments:{items:[{title:'Roove',date:'2026-10-01'},{title:'Origami',date:'2026-10-01'},{title:'Cafifa',date:'2026-10-01'}]}}]})})
-  const create=secretaryActionToCommand(continuation.actions[0])
-  assert.equal(create.items.length,3)
-  assert.deepEqual(create.items.map((item)=>item.title),['Roove','Origami','Cafifa'])
+  const creates=continuation.actions.map(secretaryActionToCommand)
+  assert.equal(creates.length,3)
+  assert.deepEqual(creates.flatMap((command)=>command.items.map((item)=>item.title)),['Roove','Origami','Cafifa'])
 })
 
 test('comandos destrutivos genéricos têm zero pagamento e zero mutação',async()=>{
