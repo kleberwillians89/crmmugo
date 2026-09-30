@@ -19,7 +19,7 @@ export const isBusinessDay = (zone = 'America/Sao_Paulo', date = new Date()) => 
 export async function getMemberTaskReadModel(admin, organizationId, teamMemberId, day, options = {}) {
   const limit = Number(options.limit || 100)
   const result = await admin.from('crm_tasks')
-    .select('id,title,status,priority,due_date,planned_hours,assigned_to')
+    .select('id,title,status,priority,due_date,due_time,planned_hours,assigned_to,clients(company_name,trade_name)')
     .eq('organization_id', organizationId)
     .eq('assigned_to', teamMemberId)
     .not('status', 'in', '(completed,cancelled)')
@@ -38,7 +38,9 @@ export async function getMemberTaskReadModel(admin, organizationId, teamMemberId
     task_id: item.id,
     label: clean(item.title),
     due_date: item.due_date,
+    due_time: item.due_time,
     priority: item.priority,
+    client_name: item.clients?.trade_name || item.clients?.company_name || null,
   }))
   return {
     day,

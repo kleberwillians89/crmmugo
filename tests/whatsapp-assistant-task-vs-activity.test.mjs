@@ -83,7 +83,7 @@ test('10: "criar tarefas:\\nrevisar Roove\\najustar Origami" produz exatamente 2
   assert.equal(command.items[0].title, 'revisar Roove')
   assert.equal(command.items[1].title, 'ajustar Origami')
   // Cada item vira 1 insert em crm_tasks com source_ref individual — nunca uma tarefa genérica.
-  assert.match(worker, /const sourceRef = items\.length > 1 \? `\$\{event\.id\}:\$\{index\}` : event\.id/)
+  assert.match(worker, /const sourceRef = items\.length > 1 \? `\$\{event\.id\}\$\{actionPart\}:\$\{index\}` : `\$\{event\.id\}\$\{actionPart\}`/)
   assert.match(worker, /await admin\.from\('crm_tasks'\)\.insert\(\{ organization_id: org, title: clean\(item\.title, 240\)/)
 })
 
@@ -436,7 +436,7 @@ test('10: ACTIVITY_CAPTURE + "1. ajustes de latina 2. origami 3. posts roove" ge
   assert.match(worker, /if\(inlineActivities\)command=\{intent:'ACTIVITY_COMPLETE',items:inlineActivities\.items\.map\(\(summary:string\)=>\(\{summary:clean\(summary,240\)\}\)\),summary:clean\(inlineActivities\.items\[0\],240\),contextual:true,confidence:1\}/)
   // Cada item de ACTIVITY_COMPLETE já grava 1 operational_event individual (mecanismo existente,
   // reaproveitado sem alteração) com idempotency_key por índice.
-  assert.match(worker, /idempotencyKey=itemIndex===null\?`command:\$\{event\.id\}:\$\{type\}`:`command:\$\{event\.id\}:\$\{type\}:\$\{itemIndex\}`/)
+  assert.match(worker, /idempotencyKey=itemIndex===null\?`command:\$\{event\.id\}\$\{actionPart\}:\$\{type\}`:`command:\$\{event\.id\}\$\{actionPart\}:\$\{type\}:\$\{itemIndex\}`/)
 })
 
 // --- 11: resolução de membro por telefone (Liliu) permanece intocada -------------------------------
