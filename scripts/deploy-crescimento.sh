@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 git pull --ff-only
-for fn in prospecting newsletter; do
+for fn in prospecting newsletter email-campaigns; do
   echo "→ publicando $fn"
   npx supabase functions deploy "$fn"
 done
