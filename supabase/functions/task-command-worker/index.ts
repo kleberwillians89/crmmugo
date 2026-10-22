@@ -548,6 +548,28 @@ async function execute(admin: any, event: any, command: any) {
     const opportunity=context.data.commercial_opportunities,lead=context.data.whatsapp_contacts?.display_name||context.data.whatsapp_contacts?.profile_name||opportunity?.name||'Lead'
     return [`Contexto de ${lead}:`,opportunity?.conversation_summary||'Resumo ainda não disponível.',opportunity?.service_interests?.length?`Interesses: ${opportunity.service_interests.join(' + ')}`:null,opportunity?.next_action?`Próximo passo: ${opportunity.next_action}`:null].filter(Boolean).join('\n')
   }
+  if(command.intent==='ACK_CONVERSATION'){
+    let conversationId=clean(command.conversation_id,80)||null
+    const open=await admin.from('whatsapp_conversations').select('id,connection_id,handoff_at,whatsapp_contacts(display_name,profile_name)').eq('organization_id',org).eq('attendance_mode','human').not('handoff_at','is',null).neq('status','closed').order('handoff_at',{ascending:false}).limit(50)
+    if(open.error)throw open.error
+    const rows=open.data||[],nameOf=(row:any)=>clean(row?.whatsapp_contacts?.display_name||row?.whatsapp_contacts?.profile_name)
+    const words=foldText(command.name_hint).split(/\s+/).filter((word:string)=>word.length>=4&&!['atendi','atendida','atendido','respondi','resolvi','resolvida','resolvido','falei','conversei','chamei','ja','foi'].includes(word))
+    const byName=rows.filter((row:any)=>words.some((word:string)=>foldText(nameOf(row)).split(/\s+/).includes(word)))
+    if(byName.length===1)conversationId=byName[0].id
+    else if(!conversationId&&rows.length===1)conversationId=rows[0].id
+    const target=rows.find((row:any)=>row.id===conversationId)
+    if(!target){
+      if(!rows.length)return 'Não tem nenhum atendimento aguardando o time agora. 👍'
+      await saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'CONVERSATION_BROWSE',context:{candidate_items:rows.slice(0,8).map((row:any,index:number)=>({index:index+1,type:'conversation',conversation_id:row.id,label:nameOf(row)||'Contato'}))},pending_action:'select_item',pending_entity_type:'whatsapp_conversations',pending_entity_id:null})
+      return `Qual atendimento você já fez?\n\n${rows.slice(0,8).map((row:any,index:number)=>`${index+1}. ${nameOf(row)||'Contato'}`).join('\n')}\n\nResponda "já atendi" + o nome.`
+    }
+    const changed=await admin.from('whatsapp_conversations').update({assigned_to:event.team_member?.auth_profile_id||null,assigned_team_member_id:event.team_member_id,assigned_at:new Date().toISOString()}).eq('id',target.id).eq('organization_id',org)
+    if(changed.error)throw changed.error
+    await admin.from('whatsapp_conversation_events').insert({organization_id:org,connection_id:target.connection_id,conversation_id:target.id,event_type:'handoff_acknowledged',actor_id:event.team_member?.auth_profile_id||null,details:{source:'whatsapp_command',command_event_id:event.id}})
+    await admin.from('team_notification_outbox').update({status:'completed',last_error:'ACKNOWLEDGED'}).eq('organization_id',org).in('status',['pending','failed']).eq('payload->>conversation_id',target.id)
+    await clearAssistantSession(admin,event)
+    return `Certo, ${nameOf(target)||'esse contato'} ficou como atendido por você ✓ Não vou mais mandar lembrete sobre esse atendimento.`
+  }
   if(command.intent==='TAKE_CONVERSATION_BY_ID'){
     const conversationId=clean(command.conversation_id,80),conversation=await admin.from('whatsapp_conversations').select('id,connection_id').eq('organization_id',org).eq('id',conversationId).neq('status','closed').maybeSingle()
     if(conversation.error)throw conversation.error
@@ -1100,11 +1122,17 @@ async function processEvent(admin: any, event: any) {
     else if(command.intent==='ACTIVITY_COMPLETE'&&!clean(command.summary)&&event.session?.active_intent==='ACTIVITY_START'&&clean(event.session.context?.activity_summary)){command={...command,summary:clean(event.session.context.activity_summary,240),contextual:true,confidence:1}}
     // 4) linguagem natural primeiro: a secretária planeja somente tools allowlisted. Ela recebe um
     // read model resumido e nunca toca o banco; execute() continua sendo a única camada de efeito.
-    if(command.intent==='UNKNOWN'&&!event.session?.pending_action&&cleanedRaw&&event.message_type!=='document'){
+    if(command.intent==='UNKNOWN'&&(!event.session?.pending_action||['select_item','select_task'].includes(event.session?.pending_action))&&cleanedRaw&&event.message_type!=='document'){
       const names=await admin.from('team_members').select('name').eq('organization_id',event.organization_id).eq('active',true)
       const delegation=names.error?null:parseNamedDelegation(cleanedRaw,(names.data||[]).map((item:any)=>item.name))
       if(delegation)command=delegation
       else{const own=parseSelfTask(cleanedRaw);if(own)command=own}
+    }
+    // "já atendi", "Gabriela já foi atendida", "respondi ela": marca a conversa do alerta como atendida
+    // (a pessoa pode ter respondido pelo celular, fora do CRM) e para os lembretes/escalonamentos.
+    if(!['CREATE_TASK','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE'].includes(command.intent)&&/\b(atendi|atendid[oa]|respondi|resolvi|resolvid[oa])\b/.test(foldedRaw)&&cleanedRaw.split(/\s+/).length<=10){
+      const fromSession=candidateItems.find((item:any)=>item.conversation_id)?.conversation_id||null
+      command={intent:'ACK_CONVERSATION',conversation_id:fromSession,name_hint:cleanedRaw,confidence:1}
     }
     const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
     const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4
@@ -1114,7 +1142,7 @@ async function processEvent(admin: any, event: any) {
     // reabertura de tarefa, ação sensível o bastante para não arriscar na confiabilidade de um LLM).
     const undoCompletionProbe=safeUndoLastCompletionRescue(event.raw_text,{recentCompletedTasks})
     const deterministicShortcut=['document','image'].includes(event.message_type)
-      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE'].includes(command.intent)
+      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE','ACK_CONVERSATION'].includes(command.intent)
       // Tarefa única, com título e data entendidos pelo parser: vai direto (o handler sempre pede confirmação
       // antes de gravar). Pedidos com mais de uma ação ("... e coloca pra Julia ...") continuam com a IA.
       || (command.intent==='CREATE_TASK'&&clean(command.title)&&command.due_date&&Number(command.confidence)>=.95&&!(Array.isArray(command.items)&&command.items.length>1)&&!/\b(?:e|tamb[eé]m)\s+(?:cria|crie|coloca|bota|registra|marca|anota|lan[cç]a)\b/iu.test(cleanedRaw))
@@ -1218,7 +1246,7 @@ async function processEvent(admin: any, event: any) {
     const contextualActivity=command.intent==='ACTIVITY_COMPLETE'&&['ACTIVITY_START','ACTIVITY_CAPTURE'].includes(event.session?.active_intent)&&command.contextual
     // Uma saudação solta ("oi") não deve derrubar um fluxo pendente (lista aguardando escolha, tarefa
     // aguardando título...) — só um novo comando de verdade cancela o contexto anterior.
-    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
+    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','ACK_CONVERSATION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
     const turnRelation=secretaryPlan?.turn_relation||'new_request'
     event.result={...(event.result||{}),turn_relation:turnRelation}
     if(turnRelation==='cancel_plan')await clearAssistantSession(admin,event)
