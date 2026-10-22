@@ -87,3 +87,24 @@ export const FOLLOWUP_SCHEMA = Object.freeze({
   properties: { send: { type: 'boolean' }, text: { type: 'string' } },
   required: ['send', 'text'],
 })
+
+/**
+ * Botão de triagem: no repasse para o time, a mensagem sai com um botão que abre o WhatsApp da equipe Mugô.
+ * Se o link for wa.me, já leva uma mensagem pronta com o assunto, para a equipe saber quem é e o que precisa.
+ * Limites da Meta: texto do botão até 20 caracteres, corpo até 1024.
+ */
+export function buildTriageCta(settings = {}, { summary = '', contactName = '' } = {}) {
+  const url = clean(settings.triage_cta_url, 500)
+  if (!/^https:\/\//i.test(url)) return null
+  const label = clean(settings.triage_cta_label, 20) || 'Falar com a equipe'
+  let finalUrl = url
+  if (/^https:\/\/(wa\.me|api\.whatsapp\.com)\//i.test(url) && !/[?&]text=/.test(url)) {
+    const intro = [contactName ? `Oi! Aqui é ${clean(contactName, 60)}` : 'Oi!', 'vim do atendimento da Mugô', summary ? `Assunto: ${clean(summary, 200)}` : ''].filter(Boolean).join(' — ')
+    finalUrl = `${url}${url.includes('?') ? '&' : '?'}text=${encodeURIComponent(intro)}`
+  }
+  return { label, url: finalUrl }
+}
+
+export function interactiveCtaBody(text, cta) {
+  return { type: 'cta_url', body: { text: clean(text, 1024) }, action: { name: 'cta_url', parameters: { display_text: cta.label, url: cta.url } } }
+}

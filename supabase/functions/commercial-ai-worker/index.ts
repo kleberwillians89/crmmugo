@@ -3,7 +3,7 @@ import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {brazilianPhoneCandidates} from '../_shared/internalCommandCore.js'
 import {getOperationalWindow} from '../_shared/operationalCalendar.js'
 import {generateStructured,transcribeAudio} from '../_shared/aiProvider.js'
-import {FOLLOWUP_FALLBACK,FOLLOWUP_SCHEMA,buildKnowledgePrompt,composeHandoffResponse,followupDue,pendingInboundText,stripUnauthorizedLinks} from '../_shared/attendanceCore.js'
+import {FOLLOWUP_FALLBACK,FOLLOWUP_SCHEMA,buildKnowledgePrompt,buildTriageCta,interactiveCtaBody,composeHandoffResponse,followupDue,pendingInboundText,stripUnauthorizedLinks} from '../_shared/attendanceCore.js'
 import {CONVERSATION_PRINCIPLES,UNDERSTANDING_SCHEMA,conversationModelInput,conversationTrace,scopedConversationState,advanceConversationState} from '../_shared/conversationKernel.js'
 import {COMMERCIAL_INTENTS,COMMERCIAL_LEAD_KINDS,COMMERCIAL_SYSTEM_PROMPT,applyInterestCorrection,assessCommercialTemperature,buildCommercialSummary,classifyConversationKind,defaultCommercialDecision,enforceCommercialHandoffPolicy,enforceCommercialPrivacyPolicy,enforceCommercialResponsePolicy,hasMinimumCommercialContext,qualificationClassification,validateCommercialDecision} from '../_shared/commercialAgentCore.js'
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}})
@@ -46,13 +46,13 @@ async function askAI(event:any,messages:any[],qualification:any,opportunity:any,
   return result
 }
 
-async function sendMessage(admin:any,event:any,conversation:any,text:string,idempotencyKey?:string){
+async function sendMessage(admin:any,event:any,conversation:any,text:string,idempotencyKey?:string,cta?:any){
   const token=Deno.env.get('META_ACCESS_TOKEN')||'';if(!token)throw Object.assign(new Error('Meta não configurada.'),{code:'META_CONFIGURATION_MISSING'})
   const connection=await admin.from('whatsapp_connections').select('phone_number_id').eq('id',event.connection_id).eq('organization_id',event.organization_id).single();if(connection.error)throw connection.error
   const key=idempotencyKey||`commercial-ai:${event.id}`,existing=await admin.from('whatsapp_messages').select('provider_message_id').eq('connection_id',event.connection_id).eq('idempotency_key',key).maybeSingle();if(existing.error)throw existing.error;if(existing.data?.provider_message_id)return existing.data.provider_message_id
-  const response=await fetch(`https://graph.facebook.com/${Deno.env.get('GRAPH_API_VERSION')||'v23.0'}/${connection.data.phone_number_id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:conversation.wa_id,type:'text',text:{preview_url:false,body:text}}),signal:AbortSignal.timeout(20_000)})
+  const response=await fetch(`https://graph.facebook.com/${Deno.env.get('GRAPH_API_VERSION')||'v23.0'}/${connection.data.phone_number_id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(cta?{messaging_product:'whatsapp',recipient_type:'individual',to:conversation.wa_id,type:'interactive',interactive:interactiveCtaBody(text,cta)}:{messaging_product:'whatsapp',recipient_type:'individual',to:conversation.wa_id,type:'text',text:{preview_url:false,body:text}}),signal:AbortSignal.timeout(20_000)})
   const body=await response.json().catch(()=>({}));if(!response.ok||!body?.messages?.[0]?.id)throw Object.assign(new Error(clean(body?.error?.message)||'Falha no envio comercial.'),{code:response.status===429||response.status>=500?'META_TEMPORARY_ERROR':'META_SEND_FAILED'})
-  const saved=await admin.from('whatsapp_messages').insert({organization_id:event.organization_id,connection_id:event.connection_id,conversation_id:event.conversation_id,provider_message_id:body.messages[0].id,idempotency_key:key,direction:'out',message_type:'text',status:'accepted',text_content:text,sent_at:new Date().toISOString()});if(saved.error&&saved.error.code!=='23505')throw saved.error
+  const saved=await admin.from('whatsapp_messages').insert({organization_id:event.organization_id,connection_id:event.connection_id,conversation_id:event.conversation_id,provider_message_id:body.messages[0].id,idempotency_key:key,direction:'out',message_type:cta?'interactive':'text',status:'accepted',media:cta?{cta}:{},text_content:cta?`${text}\n[Botão: ${cta.label}]`:text,sent_at:new Date().toISOString()});if(saved.error&&saved.error.code!=='23505')throw saved.error
   await admin.from('whatsapp_conversations').update({last_message_at:new Date().toISOString(),last_outbound_at:new Date().toISOString()}).eq('id',event.conversation_id).eq('organization_id',event.organization_id)
   return body.messages[0].id
 }
@@ -87,10 +87,10 @@ async function transcribePendingAudio(admin:any,event:any){
 }
 
 // Modo copiloto: a IA escreve, uma pessoa aprova no CRM. Modo automático: envia.
-async function deliver(admin:any,event:any,conversation:any,text:string,mode:string){
-  if(mode!=='copilot')return sendMessage(admin,event,conversation,text)
+async function deliver(admin:any,event:any,conversation:any,text:string,mode:string,cta:any=null){
+  if(mode!=='copilot')return sendMessage(admin,event,conversation,text,undefined,cta)
   await admin.from('commercial_reply_drafts').update({status:'superseded',decided_at:new Date().toISOString()}).eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).eq('status','pending')
-  const draft=await admin.from('commercial_reply_drafts').insert({organization_id:event.organization_id,conversation_id:event.conversation_id,event_id:event.id,draft_text:text})
+  const draft=await admin.from('commercial_reply_drafts').insert({organization_id:event.organization_id,conversation_id:event.conversation_id,event_id:event.id,draft_text:cta?`${text}\n\n${cta.label}: ${cta.url}`:text})
   if(draft.error&&draft.error.code!=='23505')throw draft.error
   return null
 }
@@ -204,7 +204,7 @@ async function processEvent(admin:any,event:any){
         const task=await admin.from('crm_tasks').upsert({organization_id:event.organization_id,title:`${currentKind.kind==='finance'?'Financeiro':'Suporte'} — ${client.contact_name||client.company_name}`,status:'pending',priority:'medium',due_date:today(),assigned_to:settingsResult.data.commercial_owner_id||null,client_id:client.id,task_type:'general',source:'automation',source_ref:handoffRef,notes:`Mensagem: ${clean(inbound,500)}\nTelefone: +${contact.wa_id}\nClassificação: ${currentKind.kind}`,metadata:{origin:'automation',sync_external:true,existing_client_handoff:true,kind:currentKind.kind}},{onConflict:'organization_id,source_ref'})
         if(task.error)throw task.error
         const response=commercialOwnerName?`Perfeito. Vou passar esse contexto para ${commercialOwnerName.split(' ')[0]} continuar com você.`:'Certo. Vou encaminhar o contexto desta conversa para a pessoa responsável continuar com você.'
-        const providerMessageId=await deliver(admin,event,conversation,response,aiMode)
+        const providerMessageId=await deliver(admin,event,conversation,response,aiMode,buildTriageCta(settingsResult.data,{summary:`${currentKind.kind==='finance'?'financeiro':currentKind.kind==='support'?'suporte':'atendimento'} — ${clean(inbound,120)}`,contactName:client.contact_name}))
         await admin.from('commercial_ai_events').update({status:'completed',decision:{reason:'existing_client_non_commercial',kind:currentKind.kind,provider_message_id:providerMessageId,conversation_trace:trace(semanticDecision,response,{handoff:true})},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id)
         return true
       }
@@ -318,7 +318,8 @@ async function processEvent(admin:any,event:any){
       decision.response=composeHandoffResponse({modelResponse:decision.response,ownerFirstName:attendance.ownerFirstName,operationalOpen:operationalWindow.open})
     }
 
-    const providerMessageId=await deliver(admin,event,conversation,finalize(decision.response),aiMode)
+    const triageCta=decision.handoff?buildTriageCta(settingsResult.data,{summary:interests.length?interests.join(' + ').toLowerCase():clean(inbound,120),contactName:client.contact_name}):null
+    const providerMessageId=await deliver(admin,event,conversation,finalize(decision.response),aiMode,triageCta)
     await admin.from('commercial_ai_events').update({status:'completed',decision:{...decision,temperature,lead_kind:leadKind,provider_message_id:providerMessageId,opportunity_id:opportunity.id,conversation_trace:trace(decision,decision.response,{opportunity_id:opportunity.id,handoff:decision.handoff})},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id)
     return true
   }catch(error:any){const attempts=Number(event.attempts||0)+1,terminal=attempts>=6||['META_CONFIGURATION_MISSING','AI_REQUEST_FAILED'].includes(error?.code);await admin.from('commercial_ai_events').update({decision:{...(event.decision||{}),conversation_trace:conversationTrace({identityType:'external',understanding:null,state:event.conversation_state,plannerStatus:event.planner_status||'error',path:'failed',response:null,startedAt,error:error?.code||error?.name})},status:terminal?'dead_letter':'failed',next_attempt_at:new Date(Date.now()+Math.min(3600,2**attempts*30)*1000).toISOString(),error_code:clean(error?.code||error?.name,100),error_message:clean(error?.message,500),processed_at:terminal?new Date().toISOString():null}).eq('id',event.id);return false}
