@@ -25,7 +25,7 @@ test('não confunde seleção única nem frases comuns', () => {
 
 test('worker usa a seleção múltipla antes do planner e lista com prazo/responsável', () => {
   const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
-  assert.match(worker, /\['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI'\]\.includes\(command\.intent\)/)
+  assert.match(worker, /\['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI'[^\]]*\]\.includes\(command\.intent\)/)
   assert.match(worker, /command\.intent==='SESSION_SELECTION_MULTI'[\s\S]*applyTaskAction/)
   assert.match(worker, /mine\.length === 1\) return \{ kind: 'one'/)
   assert.match(worker, /hour<12\?'Bom dia':hour<18\?'Boa tarde':'Boa noite'/)
