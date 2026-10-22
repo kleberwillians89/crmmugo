@@ -666,8 +666,18 @@ async function execute(admin: any, event: any, command: any) {
     ])
     if(events.error||promises.error)throw events.error||promises.error
     const rows=events.data||[],started=rows.filter((row:any)=>row.event_type==='activity_started').length,completed=rows.filter((row:any)=>row.event_type==='activity_completed').length,hours=rows.filter((row:any)=>row.event_type==='time_recorded').reduce((sum:number,row:any)=>sum+Number(row.metadata?.hours||0),0),ongoing=Math.max(started-completed,0),followUps=promises.data?.length||0
-    await saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'TASK_BROWSE',context:{candidate_items:taskModel.candidateItems},pending_action:'select_task',pending_entity_type:'crm_tasks',pending_entity_id:null})
-    const taskList=taskModel.candidateItems.length?`\n\n${taskModel.candidateItems.map((item:any)=>`${item.index}. ${item.label}${item.due_date<queryDay?' — atrasada':''}`).join('\n')}`:`\n\nVocê não tem tarefas para ${isToday?'hoje':'essa data'} nem atrasadas.`
+    // Próximos 14 dias também entram (numerados em sequência), senão a tarefa que alguém acabou de
+    // criar para amanhã "some" da lista de quem pergunta.
+    const horizon=new Date(`${queryDay}T12:00:00Z`);horizon.setUTCDate(horizon.getUTCDate()+14)
+    const upcomingResult=isToday?await admin.from('crm_tasks').select('id,title,due_date,due_time,priority,metadata').eq('organization_id',org).eq('assigned_to',event.team_member_id).is('archived_at',null).not('status','in','(completed,cancelled)').gt('due_date',queryDay).lte('due_date',horizon.toISOString().slice(0,10)).order('due_date').order('due_time').limit(10):{data:[],error:null}
+    if(upcomingResult.error)throw upcomingResult.error
+    const base=taskModel.candidateItems.length
+    const upcoming=(upcomingResult.data||[]).map((item:any,position:number)=>({index:base+position+1,type:'task',task_id:item.id,label:clean(item.title),due_date:item.due_date,due_time:item.due_time,priority:item.priority}))
+    const allItems=[...taskModel.candidateItems,...upcoming]
+    await saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'TASK_BROWSE',context:{candidate_items:allItems},pending_action:'select_task',pending_entity_type:'crm_tasks',pending_entity_id:null})
+    const when=(item:any)=>`${['dom','seg','ter','qua','qui','sex','sáb'][new Date(`${item.due_date}T12:00:00Z`).getUTCDay()]} ${item.due_date.slice(8,10)}/${item.due_date.slice(5,7)}${item.due_time?` ${String(item.due_time).slice(0,5)}`:''}`
+    const currentList=taskModel.candidateItems.length?`\n\n${taskModel.candidateItems.map((item:any)=>`${item.index}. ${item.label}${item.due_date<queryDay?' — atrasada':item.due_time?` — ${String(item.due_time).slice(0,5)}`:''}`).join('\n')}`:`\n\nNada para ${isToday?'hoje':'essa data'} nem atrasado.`
+    const taskList=`${currentList}${upcoming.length?`\n\nPróximos dias:\n${upcoming.map((item:any)=>`${item.index}. ${item.label} — ${when(item)}`).join('\n')}`:''}`
     // Atividades/horas/cobranças são leitura do que já aconteceu — só fazem sentido para o dia de hoje.
     const activitySuffix=isToday?`\n\n${ongoing} atividade${ongoing===1?'':'s'} em andamento · ${completed} concluída${completed===1?'':'s'} · ${hours}h registradas · ${followUps} cobrança${followUps===1?'':'s'} para acompanhar.`:''
     const heading=isToday?'Hoje você tem:':`Em ${queryDay} você tem:`
@@ -846,6 +856,10 @@ async function execute(admin: any, event: any, command: any) {
       const inserted = existing.data ? { data: existing.data, error: null } : await admin.from('crm_tasks').insert({ organization_id: org, title: clean(item.title, 240), category: 'Trabalho', client_id: client?.id || null, assigned_to: assignee?.id || event.team_member_id, due_date: item.due_date || null, due_time: item.due_time || null, task_type: item.task_type || command.task_type || 'general', priority: command.priority || 'medium', source: 'whatsapp', source_ref: sourceRef, metadata: { origin: 'whatsapp', command_event_id: event.id, ...(item.participant_name ? { participant_name: item.participant_name } : {}) } }).select('id,title,due_date,due_time,created_at').single()
       if (inserted.error) throw inserted.error
       created.push({ ...inserted.data, client })
+      if (!existing.data && assignee?.id && assignee.id !== event.team_member_id) {
+        const notified = await admin.from('team_notification_outbox').insert({ organization_id: org, team_member_id: assignee.id, notification_type: 'operational_alert', idempotency_key: `task-assigned:${inserted.data.id}`, payload: { kind: 'task_assigned', task_id: inserted.data.id, title: inserted.data.title, due_date: inserted.data.due_date, due_time: inserted.data.due_time, requester_name: clean(event.team_member?.name, 120), candidate_items: [{ index: 1, type: 'task', task_id: inserted.data.id, label: inserted.data.title, due_date: inserted.data.due_date }] } })
+        if (notified.error && notified.error.code !== '23505') console.log(JSON.stringify({ event: 'task_assigned_notify_failed', code: notified.error.code }))
+      }
     }
     await clearAssistantSession(admin, event)
     event.entity_type='crm_tasks';event.entity_id=created[0].id
@@ -853,7 +867,8 @@ async function execute(admin: any, event: any, command: any) {
       return `Prontinho. Criei ${created.length} tarefas ✓\n\n${created.map((t: any, i: number) => `${i + 1}. ${taskShortId(t.id)} ${t.title}${t.due_date ? ` — ${ddmmyyyy(t.due_date)}` : ''}`).join('\n')}\n\nRegistradas: ${formatRegisteredAt(created[0].created_at)}`
     }
     const task = created[0]
-    return `Tarefa criada ✓\n${taskShortId(task.id)} ${task.title}${task.client ? ` — ${task.client.trade_name||task.client.company_name}` : ''}${task.due_date ? `\nPrazo: ${ddmmyyyy(task.due_date)}${task.due_time ? ` às ${String(task.due_time).slice(0,5)}` : ''}` : ''}\nRegistrada: ${formatRegisteredAt(task.created_at)}`
+    const notice = assignee?.id && assignee.id !== event.team_member_id ? `\nJá mandei o aviso para ${clean(assignee.name).split(' ')[0]} no WhatsApp, e no dia o lembrete sai de manhã.` : ''
+    return `Tarefa criada ✓\n${taskShortId(task.id)} ${task.title}${task.client ? ` — ${task.client.trade_name||task.client.company_name}` : ''}${task.due_date ? `\nPrazo: ${ddmmyyyy(task.due_date)}${task.due_time ? ` às ${String(task.due_time).slice(0,5)}` : ''}` : ''}\nRegistrada: ${formatRegisteredAt(task.created_at)}${notice}`
   }
   if (['REOPEN_TASK','COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK'].includes(command.intent)) {
     const found = await findTask(admin, event, command)
@@ -1009,6 +1024,10 @@ async function processEvent(admin: any, event: any) {
       command={intent:'SESSION_SELECTION_MULTI',selections:all,task_intent:'COMPLETE_TASK',confidence:1}
     }
     const taskCandidates=candidateItems.filter((item:any)=>item.task_id)
+    // Aviso de uma tarefa só ("Kleber criou uma tarefa para você") + resposta curta "feito/pronto": conclui essa.
+    if(command.intent!=='SESSION_SELECTION_MULTI'&&taskCandidates.length===1&&event.session?.active_intent==='TASK_BROWSE'&&cleanedRaw.split(/\s+/).length<=4&&/^(?:ja\s+)?(?:(?:ta|esta|foi)\s+)?(?:feito|feita|pronto|pronta|terminei|finalizei|finalizado|finalizada|conclui|concluido|concluida|entregue|fiz|ja fiz)\b/.test(foldedRaw)){
+      command={intent:'SESSION_SELECTION_MULTI',selections:[taskCandidates[0].index],task_intent:'COMPLETE_TASK',confidence:1}
+    }
     if(command.intent!=='SESSION_SELECTION_MULTI'&&command.intent!=='BULK_COMPLETE_MINE'&&taskCandidates.length>1&&['TASK_SELECTION','TASK_BROWSE'].includes(event.session?.active_intent)){
       const picks=parseMultiSelection(cleanedRaw,taskCandidates.length)
       if(picks){
@@ -1193,7 +1212,7 @@ async function processEvent(admin: any, event: any) {
     const contextualActivity=command.intent==='ACTIVITY_COMPLETE'&&['ACTIVITY_START','ACTIVITY_CAPTURE'].includes(event.session?.active_intent)&&command.contextual
     // Uma saudação solta ("oi") não deve derrubar um fluxo pendente (lista aguardando escolha, tarefa
     // aguardando título...) — só um novo comando de verdade cancela o contexto anterior.
-    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
+    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
     const turnRelation=secretaryPlan?.turn_relation||'new_request'
     event.result={...(event.result||{}),turn_relation:turnRelation}
     if(turnRelation==='cancel_plan')await clearAssistantSession(admin,event)

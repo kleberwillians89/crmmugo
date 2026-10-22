@@ -221,6 +221,10 @@ function messageFor(item: any, memberName = '') {
   }
   if (item.notification_type === 'midday_digest') return `Prioridades do meio-dia: ${p.overdue?.length||0} atrasada(s) e ${(p.today||[]).filter((task:any)=>['high','critical'].includes(task.priority)).length} prioridade(s) para hoje.`
   if (item.notification_type === 'last_digest') return `Último resumo do dia: ${p.today?.length||0} tarefa(s) de hoje ainda visíveis e ${p.overdue?.length||0} atrasada(s). Depois das 20h não enviaremos novas rotinas automáticas.`
+  if (p.kind === 'task_assigned') {
+    const due = p.due_date ? `${String(p.due_date).slice(8, 10)}/${String(p.due_date).slice(5, 7)}${p.due_time ? ` até ${String(p.due_time).slice(0, 5)}` : ''}` : 'sem prazo'
+    return `${p.requester_name ? clean(p.requester_name, 120).split(' ')[0] : 'Alguém do time'} criou uma tarefa para você:\n\n“${clean(p.title, 240)}”\nPrazo: ${due}\n\nQuando terminar, é só me responder “feito”.`
+  }
   if (p.kind === 'overdue_tasks') return `Você tem ${p.count} tarefa${p.count === 1 ? '' : 's'} vencida${p.count === 1 ? '' : 's'}.`
   if (p.kind === 'receivable_due_tomorrow') return `${p.client || 'Cliente'} vence amanhã — ${brl(p.amount)}.`
   if (p.kind === 'pending_confirmation') return `Existe${p.count === 1 ? '' : 'm'} ${p.count} lançamento${p.count === 1 ? '' : 's'} financeiro${p.count === 1 ? '' : 's'} aguardando confirmação.`

@@ -67,3 +67,13 @@ test('"Júlia me enviar layout até segunda 17h" vira tarefa da Julia; campos nu
   plan.actions[0].arguments.team_member_id = 'x'
   assert.equal(canonicalizeSecretaryPlan(plan, { operationalContext: { team_members: [] }, authenticatedMember: { id: 'k' } }), null)
 })
+
+test('equipe: sessão não é apagada antes da seleção, aviso para quem recebe a tarefa e próximas na lista', () => {
+  const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
+  assert.match(worker, /'SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','GREETING'/)
+  assert.match(worker, /kind: 'task_assigned'/)
+  assert.match(worker, /Próximos dias:/)
+  assert.match(worker, /feito\|feita\|pronto/)
+  const notifier = fs.readFileSync('supabase/functions/team-notification-worker/index.ts', 'utf8')
+  assert.match(notifier, /p\.kind === 'task_assigned'/)
+})
