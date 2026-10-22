@@ -81,3 +81,22 @@ test('Claude devolve a saída da ferramenta forçada', async () => {
   await assert.rejects(generateStructured({ provider: 'anthropic', anthropicKey: 'k', system: 's', user: 'u', schema: {}, fetchImpl: failing }), { code: 'AI_TEMPORARY_ERROR' })
   await assert.rejects(generateStructured({ provider: 'anthropic', anthropicKey: '', system: 's', user: 'u', schema: {} }), { code: 'AI_NOT_CONFIGURED' })
 })
+
+test('GPT: schema estrito sem palavras-chave recusadas, busca na web com recuo', async () => {
+  const { openAiStrictSchema } = await import('../supabase/functions/_shared/aiProvider.js')
+  const { PROSPECT_RESEARCH_SCHEMA } = await import('../supabase/functions/_shared/prospectingCore.js')
+  const cleaned = JSON.stringify(openAiStrictSchema(PROSPECT_RESEARCH_SCHEMA))
+  assert.doesNotMatch(cleaned, /"(minimum|maximum|maxItems|minItems)"/)
+  assert.equal(JSON.parse(cleaned).required.length, Object.keys(JSON.parse(cleaned).properties).length)
+  const bodies = []
+  const fetchImpl = async (_url, init) => {
+    const body = JSON.parse(init.body); bodies.push(body)
+    if (body.tools) return new Response('{}', { status: 400 })
+    return new Response(JSON.stringify({ output_text: JSON.stringify({ ok: true }) }), { status: 200 })
+  }
+  const result = await generateStructured({ provider: 'openai', openaiKey: 'k', model: 'gpt-x', system: 's', user: 'u', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false }, webSearch: true, fetchImpl })
+  assert.deepEqual(result.data, { ok: true })
+  assert.equal(result.provider, 'openai')
+  assert.deepEqual(bodies[0].tools, [{ type: 'web_search' }])
+  assert.equal(bodies[1].tools, undefined)
+})

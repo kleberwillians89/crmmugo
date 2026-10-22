@@ -43,17 +43,30 @@ async function callAnthropic({ key, model, system, user, schema, schemaName, max
   return { data: block.input, usage: body.usage || null, model: body.model || model }
 }
 
-async function callOpenAI({ key, model, system, user, schema, schemaName, fetchImpl, timeoutMs }) {
-  const response = await fetchImpl('https://api.openai.com/v1/responses', {
+// O modo estrito da OpenAI recusa algumas palavras-chave de validação; removemos só para a OpenAI
+// (a validação continua no nosso código depois da resposta).
+const OPENAI_UNSUPPORTED = new Set(['minimum', 'maximum', 'minItems', 'maxItems', 'minLength', 'maxLength'])
+export function openAiStrictSchema(node) {
+  if (Array.isArray(node)) return node.map(openAiStrictSchema)
+  if (!node || typeof node !== 'object') return node
+  return Object.fromEntries(Object.entries(node).filter(([key]) => !OPENAI_UNSUPPORTED.has(key)).map(([key, value]) => [key, openAiStrictSchema(value)]))
+}
+
+async function callOpenAI({ key, model, system, user, schema, schemaName, fetchImpl, timeoutMs, webSearch = false }) {
+  const request = (withSearch) => fetchImpl('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model,
       input: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      text: { format: { type: 'json_schema', name: schemaName, strict: true, schema } },
+      text: { format: { type: 'json_schema', name: schemaName, strict: true, schema: openAiStrictSchema(schema) } },
+      ...(withSearch ? { tools: [{ type: 'web_search' }] } : {}),
     }),
     signal: AbortSignal.timeout(timeoutMs),
   })
+  let response = await request(webSearch)
+  // modelo sem suporte a busca na web: tenta de novo sem a ferramenta
+  if (webSearch && response.status === 400) response = await request(false)
   if (!response.ok) throw fail(`OpenAI respondeu ${response.status}.`, temporary(response.status) ? 'AI_TEMPORARY_ERROR' : 'AI_REQUEST_FAILED')
   const body = await response.json()
   const text = body?.output_text || (body?.output || []).flatMap((item) => item?.content || []).find((item) => item?.type === 'output_text')?.text
@@ -61,7 +74,7 @@ async function callOpenAI({ key, model, system, user, schema, schemaName, fetchI
 }
 
 /**
- * @param {{system:string,user:string,schema:object,schemaName?:string,maxTokens?:number,timeoutMs?:number,provider?:string,model?:string,fetchImpl?:any,anthropicKey?:string,openaiKey?:string}} options
+ * @param {{system:string,user:string,schema:object,schemaName?:string,maxTokens?:number,timeoutMs?:number,provider?:string,model?:string,fetchImpl?:any,anthropicKey?:string,openaiKey?:string,webSearch?:boolean}} options
  */
 export async function generateStructured(options) {
   const config = resolveAiProvider(options)
@@ -75,6 +88,7 @@ export async function generateStructured(options) {
     maxTokens: options.maxTokens || 1500,
     timeoutMs: options.timeoutMs || 25_000,
     fetchImpl: options.fetchImpl || fetch,
+    webSearch: Boolean(options.webSearch),
   }
   const result = config.provider === 'anthropic' ? await callAnthropic(args) : await callOpenAI(args)
   return { ...result, provider: config.provider }

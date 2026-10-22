@@ -57,7 +57,7 @@ async function researchOne(admin:any,prospect:any){
     const prompt=buildResearchPrompt({prospect,settings:settings.data||{},knowledge:knowledge.data||[],siteSignals,cnpjData})
     let raw
     if(Deno.env.get('ANTHROPIC_API_KEY'))raw=(await researchWithWebSearch({system:prompt.system,user:prompt.user,schema:PROSPECT_RESEARCH_SCHEMA,maxSearches:4})).data
-    else raw=(await generateStructured({system:prompt.system,user:prompt.user,schema:PROSPECT_RESEARCH_SCHEMA,schemaName:'save_research',maxTokens:2500,timeoutMs:60_000})).data
+    else raw=(await generateStructured({system:prompt.system,user:prompt.user,schema:PROSPECT_RESEARCH_SCHEMA,schemaName:'save_research',maxTokens:2500,timeoutMs:90_000,webSearch:true})).data
     const result=normalizeResearch(raw)
     const patch:any={
       research_status:'done',fit_score:result.fit_score,fit_reason:result.fit_reason,hook:result.hook,
