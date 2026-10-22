@@ -817,7 +817,7 @@ async function execute(admin: any, event: any, command: any) {
     const forOther=assignee&&assignee.id!==event.team_member?.id
     const tidyTitle=(value:any)=>{let title=clean(value);if(forOther&&/^me\s+/iu.test(title))title=`${title.replace(/^me\s+/iu,'')} para ${clean(event.team_member?.name).split(' ')[0]||'mim'}`;return title?title[0].toLocaleUpperCase('pt-BR')+title.slice(1):title}
     if(clean(command.title))command={...command,title:tidyTitle(command.title)}
-    const items = Array.isArray(command.items) && command.items.length ? command.items : [{ title: command.title, due_date: command.due_date, due_time: command.due_time, task_type: command.task_type, participant_name: command.participant_name }]
+    const items = Array.isArray(command.items) && command.items.length ? command.items.map((item:any)=>({...item,title:tidyTitle(item.title)})) : [{ title: command.title, due_date: command.due_date, due_time: command.due_time, task_type: command.task_type, participant_name: command.participant_name }]
     if (items.some((item:any)=>!clean(item.title)||isTaskCreationCommandOnly(item.title))) {
       await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:'CREATE_TASK',context:{},pending_action:'describe_tasks',pending_entity_type:null,pending_entity_id:null})
       return 'Claro. Qual é a tarefa?'

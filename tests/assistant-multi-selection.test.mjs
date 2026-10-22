@@ -51,4 +51,5 @@ test('criar tarefa para outra pessoa: parser entende e worker não manda para a 
   const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
   assert.match(worker, /command\.intent==='CREATE_TASK'&&clean\(command\.title\)&&command\.due_date/)
   assert.match(worker, /Responda \*sim\* para criar/)
+  assert.match(worker, /command.items.map\(\(item:any\)=>\(\{...item,title:tidyTitle\(item.title\)\}\)\)/)
 })
