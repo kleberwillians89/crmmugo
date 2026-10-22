@@ -28,7 +28,7 @@ export const PROSPECT_RESEARCH_SCHEMA = Object.freeze({
   required: ['fit_score', 'fit_reason', 'summary', 'signals', 'hook', 'decision_maker', 'linkedin_note', 'linkedin_message', 'email_subject', 'email_body', 'followups'],
 })
 
-export function buildResearchPrompt({ prospect, settings = {}, knowledge = [], siteSignals = null, cnpjData = null }) {
+export function buildResearchPrompt({ prospect, settings = {}, knowledge = [], siteSignals = null, cnpjData = null, newsHooks = [] }) {
   const offers = knowledge.filter((entry) => ['empresa', 'servicos', 'cases'].includes(entry.category))
     .map((entry) => `- ${clean(entry.title, 120)}: ${clean(entry.content, 600)}`).join('\n')
   const system = [
@@ -42,6 +42,7 @@ export function buildResearchPrompt({ prospect, settings = {}, knowledge = [], s
     settings.icp ? `\nCliente ideal (ICP) definido pelo time:\n${clean(settings.icp, 1500)}` : '',
     settings.offer ? `\nO que oferecemos nesta abordagem:\n${clean(settings.offer, 1500)}` : '',
     offers ? `\nServiços e cases autorizados (cite só se fizer sentido):\n${offers}` : '',
+    'Se alguma notícia da semana do setor (lista fornecida) se conectar de verdade com a empresa, você pode usá-la como gancho de atualidade — com naturalidade, sem forçar.',
     '\nAo terminar, chame a ferramenta de saída com o resultado.',
   ].filter(Boolean).join('\n')
   const facts = {
@@ -49,6 +50,7 @@ export function buildResearchPrompt({ prospect, settings = {}, knowledge = [], s
     cnpj: prospect.cnpj, segmento: prospect.segment, cidade: [prospect.city, prospect.state].filter(Boolean).join('/'),
     contato: { nome: prospect.contact_name, cargo: prospect.contact_role, linkedin: prospect.contact_linkedin_url },
     sinais_do_site: siteSignals, dados_cnpj: cnpjData, observacoes_do_time: prospect.notes,
+    noticias_da_semana_no_setor: newsHooks.length ? newsHooks : undefined,
   }
   return { system, user: `Prospect:\n${JSON.stringify(facts, null, 2)}` }
 }

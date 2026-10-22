@@ -12,6 +12,7 @@ import {generateStructured,researchWithWebSearch} from '../_shared/aiProvider.js
 import {PROSPECT_RESEARCH_SCHEMA,buildResearchPrompt,extractSiteSignals,isValidEmail,normalizeResearch,personalize,planSequence,renderOutreachHtml} from '../_shared/prospectingCore.js'
 import {buildMimeMessage,gmailAccessToken,gmailSend,gmailThreadStatus} from '../_shared/gmail.js'
 import {convertProspectToLead} from '../_shared/prospectConversion.js'
+import {newsHooksFor} from '../_shared/newsletterCore.js'
 
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-prospecting-worker-key','Content-Type':'application/json'}
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors})
@@ -48,13 +49,15 @@ async function researchOne(admin:any,prospect:any){
   const claim=await admin.from('prospects').update({research_status:'running',research_attempts:Number(prospect.research_attempts||0)+1,research_error:null}).eq('id',prospect.id).in('research_status',['queued','failed','idle','done']).select('id').maybeSingle()
   if(claim.error||!claim.data)return false
   try{
-    const [settings,knowledge,siteSignals,cnpjData]=await Promise.all([
+    const [settings,knowledge,siteSignals,cnpjData,news]=await Promise.all([
       admin.from('outreach_settings').select('*').eq('organization_id',org).maybeSingle(),
       admin.from('ai_knowledge_entries').select('category,title,content').eq('organization_id',org).eq('active',true).limit(40),
       fetchSite(prospect.website),
       fetchCnpj(prospect.cnpj),
+      admin.from('industry_news').select('title,url,summary_pt,impact_pt,segments').eq('organization_id',org).not('summary_pt','is',null).gte('published_at',new Date(Date.now()-14*86_400_000).toISOString()).order('published_at',{ascending:false}).limit(20),
     ])
-    const prompt=buildResearchPrompt({prospect,settings:settings.data||{},knowledge:knowledge.data||[],siteSignals,cnpjData})
+    const newsHooks=newsHooksFor(news.error?[]:(news.data||[]),prospect.segment||'',3)
+    const prompt=buildResearchPrompt({prospect,settings:settings.data||{},knowledge:knowledge.data||[],siteSignals,cnpjData,newsHooks})
     let raw
     if(Deno.env.get('ANTHROPIC_API_KEY'))raw=(await researchWithWebSearch({system:prompt.system,user:prompt.user,schema:PROSPECT_RESEARCH_SCHEMA,maxSearches:4})).data
     else raw=(await generateStructured({system:prompt.system,user:prompt.user,schema:PROSPECT_RESEARCH_SCHEMA,schemaName:'save_research',maxTokens:2500,timeoutMs:90_000,webSearch:true})).data

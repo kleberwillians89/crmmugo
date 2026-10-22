@@ -4,6 +4,7 @@ import { Clock, MailPlus, RefreshCw, Send, UserPlus, Users } from 'lucide-react'
 import { PageHeader } from './PageHeader'
 import { FeedbackMessage } from './FeedbackMessage'
 import { useAuth } from '../contexts/AuthContext'
+import { NewsletterPanel } from './NewsletterPanel'
 import {
   addEmailContact, campaignAudienceCount, listCampaigns, listEmailContacts, refreshCampaignStats, saveCampaign, scheduleCampaign,
   sendCampaignNow, sendCampaignTest, syncContactsFromCrm, unscheduleCampaign, updateEmailContact,
@@ -54,13 +55,14 @@ export function EmailCampaignsPage() {
 
   return <div className="g-page">
     <PageHeader eyebrow="Comercial" title="E-mail marketing" description="Newsletter e campanhas pelo Resend, só para quem já tem relação com a Mugô. Descadastro automático em todo envio."
-      actions={tab === 'campaigns' ? <button className="button" onClick={() => openEditor({ name: '', subject: '', preheader: '', html: STARTER, from_name: 'Mugô', from_email: '', reply_to: '', audience: { tags: [], sources: [] } })}><MailPlus size={15} /> Nova campanha</button>
+      actions={tab === 'newsletter' ? null : tab === 'campaigns' ? <button className="button" onClick={() => openEditor({ name: '', subject: '', preheader: '', html: STARTER, from_name: 'Mugô', from_email: '', reply_to: '', audience: { tags: [], sources: [] } })}><MailPlus size={15} /> Nova campanha</button>
         : <button className="button" onClick={() => setNewContact({ email: '', name: '', tags: '' })}><UserPlus size={15} /> Contato</button>} />
     {error && <FeedbackMessage type="error">{error}</FeedbackMessage>}
     {feedback && <FeedbackMessage type="success">{feedback}</FeedbackMessage>}
 
     <nav className="section-tabs" aria-label="E-mail marketing">
       <button type="button" className={tab === 'campaigns' ? 'active' : ''} onClick={() => setTab('campaigns')}>Campanhas ({campaigns.length})</button>
+      <button type="button" className={tab === 'newsletter' ? 'active' : ''} onClick={() => { setTab('newsletter'); setEditing(null) }}>Newsletter automática</button>
       <button type="button" className={tab === 'contacts' ? 'active' : ''} onClick={() => setTab('contacts')}>Contatos ({subscribed} inscritos)</button>
     </nav>
 
@@ -104,6 +106,8 @@ export function EmailCampaignsPage() {
         </div>
       </form>
     </section>}
+
+    {tab === 'newsletter' && <NewsletterPanel />}
 
     {tab === 'contacts' && <section className="dashboard-panel">
       <div className="g-toolbar">

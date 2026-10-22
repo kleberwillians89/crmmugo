@@ -14,7 +14,7 @@ SELECT jobid, jobname, schedule, active FROM cron.job WHERE command ILIKE '%comm
 do $scheduler$
 declare job record;
 begin
-  for job in select jobid from cron.job where jobname in('crmugo-commercial-ai-worker','crmugo-prospecting-worker','crmugo-email-campaigns-worker') loop
+  for job in select jobid from cron.job where jobname in('crmugo-commercial-ai-worker','crmugo-prospecting-worker','crmugo-email-campaigns-worker','crmugo-newsletter-worker') loop
     perform cron.unschedule(job.jobid);
   end loop;
 
@@ -51,6 +51,18 @@ begin
         'X-Email-Worker-Key',(select decrypted_secret from vault.decrypted_secrets where name='email_worker_key' limit 1)),
       body := jsonb_build_object('source','cron'),
       timeout_milliseconds := 120000
+    );
+  $command$);
+
+  -- Newsletter: coleta notícias (a cada 6h por fonte) e gera a edição no dia/hora configurados. A cada 15 minutos.
+  perform cron.schedule('crmugo-newsletter-worker','*/15 * * * *',$command$
+    select net.http_post(
+      url := (select decrypted_secret from vault.decrypted_secrets where name='project_url' limit 1) || '/functions/v1/newsletter',
+      headers := jsonb_build_object('Content-Type','application/json',
+        'Authorization','Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name='service_role_key' limit 1),
+        'X-Email-Worker-Key',(select decrypted_secret from vault.decrypted_secrets where name='email_worker_key' limit 1)),
+      body := jsonb_build_object('source','cron'),
+      timeout_milliseconds := 150000
     );
   $command$);
 end
