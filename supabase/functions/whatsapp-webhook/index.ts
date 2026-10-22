@@ -18,6 +18,7 @@ import {
 } from '../_shared/whatsappWebhookCore.js'
 import { findInternalMemberByPhone } from '../_shared/internalCommandCore.js'
 import { classifyConversationKind, extractLeadAttribution } from '../_shared/commercialAgentCore.js'
+import { SECOND_CTA_TEXT, WAITING_CTA_TEXT, buildTriageCtas, interactiveCtaBody, isWaitingNudge } from '../_shared/attendanceCore.js'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: jsonHeaders })
@@ -220,6 +221,40 @@ const handleFinanceCheckAmount = async (admin: any, connection: any, conversatio
   const inserted = await admin.from('whatsapp_messages').insert({ organization_id: org, connection_id: connection.id, conversation_id: conversation.id, provider_message_id: providerId, idempotency_key: idempotencyKey, direction: 'out', message_type: 'text', status: 'accepted', text_content: reply, sent_at: now, metadata })
   if (inserted.error && inserted.error.code !== '23505') throw inserted.error
   await admin.from('whatsapp_conversations').update({ last_message_at: now, last_outbound_at: now, last_outbound_source: 'finance' }).eq('id', conversation.id)
+}
+
+// Cliente em atendimento humano pede contato ou pergunta "?" e ninguém do time respondeu ainda:
+// responde na hora com os botões da equipe (no máximo 1 vez a cada 15 min). Nunca retoma a IA.
+const sendWaitingButtons = async (admin: any, connection: any, conversation: any, waId: string, providerMessageId: string, phoneNumberId: string, inboundText: string, contactName: string | null) => {
+  if (!isWaitingNudge(inboundText)) return
+  const token = Deno.env.get('META_ACCESS_TOKEN') || ''
+  if (!token || !phoneNumberId) return
+  const org = connection.organization_id
+  const settings = await admin.from('commercial_settings').select('triage_cta_url,triage_cta_label,triage_cta_url_2,triage_cta_label_2').eq('organization_id', org).maybeSingle()
+  if (settings.error) return
+  const ctas = buildTriageCtas(settings.data || {}, { summary: text(inboundText, 120), contactName })
+  if (!ctas.length) return
+  const since = conversation.handoff_at || new Date(Date.now() - 86_400_000).toISOString()
+  const recent = await admin.from('whatsapp_messages').select('idempotency_key,created_at').eq('organization_id', org).eq('conversation_id', conversation.id).eq('direction', 'out').gt('created_at', since)
+  if (recent.error) return
+  const automated = ['commercial-ai:', 'team-notify:', 'commercial-notify:', 'automation:', 'handoff-client-sla-15:', 'waiting-cta:', 'commercial-followup:']
+  // alguém do time já respondeu: deixa com a pessoa
+  if ((recent.data || []).some((row: any) => !automated.some((prefix) => String(row.idempotency_key || '').startsWith(prefix)))) return
+  if ((recent.data || []).some((row: any) => String(row.idempotency_key || '').startsWith('waiting-cta:') && Date.now() - Date.parse(row.created_at) < 15 * 60_000)) return
+  const send = async (body: string, cta: any, key: string) => {
+    const response = await fetch(`https://graph.facebook.com/${Deno.env.get('GRAPH_API_VERSION') || 'v23.0'}/${phoneNumberId}/messages`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to: waId, type: 'interactive', interactive: interactiveCtaBody(body, cta) }),
+      signal: AbortSignal.timeout(20_000),
+    }).catch(() => null)
+    const payload = await response?.json().catch(() => ({}))
+    const providerId = text(payload?.messages?.[0]?.id, 240)
+    const now = new Date().toISOString()
+    await admin.from('whatsapp_messages').insert({ organization_id: org, connection_id: connection.id, conversation_id: conversation.id, provider_message_id: providerId || null, idempotency_key: key, direction: 'out', message_type: 'interactive', status: providerId ? 'accepted' : 'failed', ...(providerId ? { sent_at: now } : { failed_at: now, error_message: text(payload?.error?.message, 300) || 'Falha ao enviar botões.' }), media: { cta }, text_content: `${body}\n[Botão: ${cta.label}]` })
+    if (providerId) await admin.from('whatsapp_conversations').update({ last_message_at: now, last_outbound_at: now }).eq('id', conversation.id)
+  }
+  await send(WAITING_CTA_TEXT, ctas[0], `waiting-cta:${providerMessageId}`)
+  if (ctas[1]) await send(SECOND_CTA_TEXT, ctas[1], `waiting-cta:${providerMessageId}:2`)
 }
 
 // "Já realizei o pagamento" é uma ALEGAÇÃO, nunca uma confirmação — jamais escreve em
@@ -438,6 +473,7 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
       const notified=await admin.from('team_notification_outbox').insert({organization_id:connection.organization_id,team_member_id:responsibleId,notification_type:'human_mode_message',idempotency_key:`human-mode-message:${providerMessageId}`,payload:{kind:'human_mode_message',conversation_id:conversationResult.data.id,opportunity_id:conversationResult.data.opportunity_id,lead_name:profileName||null,lead_phone:waId,preview:content.body||content.type,commercial_signal:commercialSignal,candidate_items:[{index:1,type:'conversation',conversation_id:conversationResult.data.id,label:profileName||`Contato final ${waId.slice(-4)}`}]}})
       if(notified.error&&notified.error.code!=='23505')throw notified.error
     }
+    await sendWaitingButtons(admin, connection, conversationResult.data, waId, providerMessageId, digits(value?.metadata?.phone_number_id), content.body || '', null).catch(() => null)
     await completeWebhookEvent(admin, ledger.id)
     return true
   }
