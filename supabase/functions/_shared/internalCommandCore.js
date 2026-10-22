@@ -530,3 +530,21 @@ export function selectionActionIntent(rawInput) {
   if (/\b(reabr|volta)/.test(folded)) return 'REOPEN_TASK'
   return null
 }
+
+// "Júlia me enviar o layout até segunda 17h" / "pode criar Julia revisar X terça": começa com o nome de
+// alguém do time e tem data → é tarefa para essa pessoa (o worker sempre confirma antes de gravar).
+export function parseNamedDelegation(rawInput, memberNames = [], now = new Date()) {
+  const raw = clean(rawInput)
+  const match = raw.match(/^(?:(?:pode|por\s+favor)\s+)?(?:(?:criar|cria|crie|anota|anotar|coloca|colocar)\s+)?(?:(?:uma\s+)?tarefa\s+)?(?:(?:para|pra)\s+)?(?:(?:a|o)\s+)?([\p{L}'-]+)\s*[,:]?\s+(.+)$/iu)
+  if (!match) return null
+  const name = foldText(match[1])
+  if (NOT_A_PERSON.has(name)) return null
+  const hits = memberNames.filter((full) => foldText(full).split(' ')[0] === name)
+  if (hits.length !== 1) return null
+  const schedule = parseTaskSchedule(raw, now)
+  if (!schedule.due_date) return null
+  let title = taskTitleFromText(match[2])
+  for (let index = 0; index < 2; index += 1) title = taskTitleFromText(title.replace(/\s+(?:at[eé]|para|pra|no|na|dia|em)\s*$/iu, ''))
+  if (!title || title.split(/\s+/).length < 2) return null
+  return { intent: 'CREATE_TASK', raw_text: raw, title, assignee_name: clean(match[1]), due_date: schedule.due_date, due_time: schedule.due_time || null, priority: 'medium', confidence: .95 }
+}
