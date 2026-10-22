@@ -88,7 +88,7 @@ test('webhook cria contato/conversa e roteia IA comercial sem competir com autom
   assert.match(webhook,/whatsapp_contacts'\)\.upsert/)
   assert.match(webhook,/whatsapp_conversations'\)\.upsert/)
   assert.match(webhook,/commercial_ai_events/)
-  assert.match(webhook,/ai_mode === 'controlled_auto'[\s\S]+return true[\s\S]+automation_events/)
+  assert.match(webhook,/\['controlled_auto', 'copilot'\]\.includes\(commercial\.data\?\.ai_mode\)[\s\S]+return true[\s\S]+automation_events/)
   assert.match(webhook,/classifyConversationKind/)
   // Webhook enqueues every opt-in external conversation; worker owns support-vs-sale policy.
   const worker=fs.readFileSync('supabase/functions/commercial-ai-worker/index.ts','utf8')

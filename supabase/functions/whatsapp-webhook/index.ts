@@ -460,13 +460,16 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
   }
 
   const conversationKind = classifyConversationKind(content.body || '', { hasExistingClient: Boolean(contactResult.data.client_id) })
-  const commercial = await admin.from('commercial_settings').select('ai_mode').eq('organization_id', connection.organization_id).maybeSingle()
+  const commercial = await admin.from('commercial_settings').select('ai_mode,debounce_seconds').eq('organization_id', connection.organization_id).maybeSingle()
   if (commercial.error && !['42P01','PGRST205'].includes(commercial.error.code)) throw commercial.error
   // A classificação vai como CONTEXTO para o worker (que a recalcula com mais dados: cliente
   // existente, kind anterior, IA) — nunca é usada aqui como filtro que decide se o atendimento
   // acontece. Qualquer contato externo em modo bot recebe um evento de atendimento comercial.
-  if (commercial.data?.ai_mode === 'controlled_auto') {
-    const queuedCommercial = await admin.from('commercial_ai_events').insert({ organization_id: connection.organization_id, connection_id: connection.id, conversation_id: conversationResult.data.id, message_id: saved.data?.id || null, provider_message_id: providerMessageId })
+  if (['controlled_auto', 'copilot'].includes(commercial.data?.ai_mode)) {
+    // Agrupamento: espera alguns segundos antes de responder; se o lead mandar outra mensagem nesse meio-tempo,
+    // o evento mais novo responde tudo junto (o worker descarta os anteriores).
+    const debounceSeconds = Math.max(0, Math.min(30, Number(commercial.data?.debounce_seconds ?? 8)))
+    const queuedCommercial = await admin.from('commercial_ai_events').insert({ organization_id: connection.organization_id, connection_id: connection.id, conversation_id: conversationResult.data.id, message_id: saved.data?.id || null, provider_message_id: providerMessageId, next_attempt_at: new Date(Date.now() + debounceSeconds * 1000).toISOString() })
     if (queuedCommercial.error && queuedCommercial.error.code !== '23505') throw queuedCommercial.error
     // Dispatch imediato é best-effort: falha aqui não perde o evento (ele já está pending, durável) —
     // o cron a cada minuto cobre a indisponibilidade transitória, igual ao padrão do task-command-worker.

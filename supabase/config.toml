@@ -415,3 +415,16 @@ s3_region = "env(S3_REGION)"
 s3_access_key = "env(S3_ACCESS_KEY)"
 # Configures AWS_SECRET_ACCESS_KEY for S3 bucket
 s3_secret_key = "env(S3_SECRET_KEY)"
+
+# CRM enxuto 2026-10-22: autenticam a própria requisição (chave de worker, JWT do usuário dentro da função ou assinatura).
+[functions.prospecting]
+verify_jwt = false
+
+[functions.email-campaigns]
+verify_jwt = false
+
+[functions.resend-webhook]
+verify_jwt = false
+
+[functions.email-unsubscribe]
+verify_jwt = false

@@ -61,6 +61,10 @@ export const APP_ROUTES = {
   "client-duplicates": "/administracao/duplicidades-clientes",
   "financial-sanitation": "/administracao/saneamento-financeiro",
   "monthly-closing": "/financeiro/fechamento-mensal",
+  advanced: "/configuracoes/avancado",
+  "ai-knowledge": "/configuracoes/base-ia",
+  prospecting: "/comercial/prospeccao",
+  "email-campaigns": "/comercial/email-marketing",
 };
 
 export const ROUTE_ALIASES = {

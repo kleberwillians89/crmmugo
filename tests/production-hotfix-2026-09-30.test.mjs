@@ -146,7 +146,7 @@ test('CAUSA 6: operationalCalendar.js existe e getOperationalWindow tem o contra
 test('CAUSA 6: commercial-ai-worker importa getOperationalWindow e usa .open para decidir a mensagem de handoff', () => {
   assert.match(commercialWorker, /import\s*\{getOperationalWindow\}\s*from\s*'\.\.\/_shared\/operationalCalendar\.js'/)
   assert.match(commercialWorker, /const operationalWindow=await getOperationalWindow\(admin,event\.organization_id\)/)
-  assert.match(commercialWorker, /if\(!operationalWindow\.open\)decision\.response=/)
+  assert.match(commercialWorker, /composeHandoffResponse\(\{modelResponse:decision\.response,ownerFirstName:attendance\.ownerFirstName,operationalOpen:operationalWindow\.open\}\)/)
 })
 test('CAUSA 6: nenhum import de commercial-ai-worker/whatsapp-webhook/task-command-worker aponta para arquivo inexistente', () => {
   for (const file of ['supabase/functions/commercial-ai-worker/index.ts', 'supabase/functions/whatsapp-webhook/index.ts', 'supabase/functions/task-command-worker/index.ts']) {

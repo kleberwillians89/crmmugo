@@ -4,6 +4,7 @@ import "./operations.css";
 import "./operations-hub.css";
 import "./commercial.css";
 import "./today-commercial.css";
+import "./growth.css";
 import {
   listProposals as getProposals,
   createProposal,
@@ -54,7 +55,11 @@ import { useAuth } from "./contexts/AuthContext";
 import { WhatsAppPage } from "./components/WhatsAppPage";
 import { NotFoundPage } from "./components/NotFoundPage";
 import { IntegrationsPage } from "./components/IntegrationsPage";
-import { ProductBreadcrumbs } from "./components/ProductBreadcrumbs";
+import { SectionTabs } from "./components/SectionTabs";
+import { AdvancedToolsPage } from "./components/AdvancedToolsPage";
+import { ProspectingPage } from "./components/ProspectingPage";
+import { EmailCampaignsPage } from "./components/EmailCampaignsPage";
+import { AiKnowledgePage } from "./components/AiKnowledgePage";
 import { VersionBadge } from "./components/VersionBadge";
 import { GlobalSearch } from "./components/GlobalSearch";
 import { OperationsHubPage } from "./components/OperationsHubPage";
@@ -573,7 +578,7 @@ export default function App() {
           <span aria-hidden="true" />
         </div>
         <div className="content-container">
-          {!whatsappDomainSection && <ProductBreadcrumbs page={activePage} />}
+          {(!whatsappDomainSection || ["contacts","collections"].includes(activePage)) && <SectionTabs page={activePage} onNavigate={handleNavigate} force={Boolean(whatsappDomainSection)} />}
           {!whatsappDomainSection && (
             <GlobalSearch
               clients={clients}
@@ -789,6 +794,10 @@ export default function App() {
               {activePage === "backup" && <BackupPage />}
               {activePage === "restore" && <RestorePage />}
               {activePage === "not-found" && <NotFoundPage />}
+              {activePage === "advanced" && (isAdmin?<AdvancedToolsPage onNavigate={handleNavigate} />:<FeedbackMessage type="error">Ferramentas avançadas são restritas a administradores.</FeedbackMessage>)}
+              {activePage === "ai-knowledge" && <AiKnowledgePage />}
+              {activePage === "prospecting" && <ProspectingPage onNavigate={handleNavigate} />}
+              {activePage === "email-campaigns" && <EmailCampaignsPage />}
               {activePage === "intelligence-attention" && (
                 <PulseAlertsPage
                   alerts={pulseAlerts}

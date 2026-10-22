@@ -1,7 +1,7 @@
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { resolveSupabasePublicConfig } from './config.js'
 
-export const dataProvider = import.meta.env.VITE_DATA_PROVIDER || 'legacy'
+export const dataProvider = import.meta.env.VITE_DATA_PROVIDER || 'supabase'
 const STATE_KEY=Symbol.for('mugo.supabase.bootstrap.v1')
 const state=globalThis[STATE_KEY]||(globalThis[STATE_KEY]={client:null,config:null,logged:false})
 

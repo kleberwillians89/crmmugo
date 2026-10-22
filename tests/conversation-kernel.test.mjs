@@ -86,9 +86,9 @@ test('feedback tem RLS, escopo de evento e UI sem treinamento automático',()=>{
 
 test('Comercial interpreta antes de criar e revalida prioridade humana após modelo',()=>{
   const code=fs.readFileSync('supabase/functions/commercial-ai-worker/index.ts','utf8')
-  const semantic=code.indexOf('const semanticDecision=await askOpenAI'),gate=code.indexOf('const humanGate='),create=code.indexOf("const created=await admin.from('commercial_opportunities').insert")
+  const semantic=code.indexOf('const semanticDecision=await askAI'),gate=code.indexOf('const humanGate='),create=code.indexOf("const created=await admin.from('commercial_opportunities').insert")
   assert.ok(semantic<gate&&gate<create)
   const discovery=code.slice(code.indexOf("if(currentKind.kind!=='new_business')"),create)
   assert.match(discovery,/return true/)
-  assert.match(code,/ai_mode!=='controlled_auto'/)
+  assert.match(code,/aiMode!=='controlled_auto'&&aiMode!=='copilot'/)
 })

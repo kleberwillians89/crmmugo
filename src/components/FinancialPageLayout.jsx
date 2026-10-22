@@ -4,6 +4,7 @@ export function FinancialPageLayout({ children, active, onNavigate }) {
     ["finance-month", "Calendário"],
     ["finance", "Receitas"],
     ["accounts-payable", "Despesas"],
+    ["collections", "Cobranças"],
     ["financial-debts", "Dívidas"],
     ["freelance-cash", "Caixa Freela"],
     ["financial-goals", "Metas & Reservas"],

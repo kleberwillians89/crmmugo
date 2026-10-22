@@ -11,7 +11,7 @@ assert.match(proposal,/structuredClients\?<Field label="Cliente" name="client_id
 assert.doesNotMatch(proposal,/structuredClients\?<[^]*Telefone[^]*E-mail/)
 assert.match(app,/clients=\{clients\}/)
 assert.match(sidebar,/NAVIGATION_GROUPS/)
-for(const label of['Operação','CRM','Comunicação','Financeiro','Administração'])assert.match(navigation,new RegExp(label))
+for(const label of['Hoje','Conversas','Comercial','Financeiro','Configurações'])assert.match(navigation,new RegExp(label))
 for(const entity of['Clientes','Propostas','Contratos','Parcelas'])assert.match(search,new RegExp(entity))
 for(const label of['Receita prevista','Receita recebida','Receita vencida','Contas a pagar','Resultado operacional','Clientes ativos','Próximos recebimentos','Próximas despesas','Alertas importantes'])assert.match(dashboard,new RegExp(label))
 for(const column of['primary_responsible_id','delivery_responsible_id','financial_responsible_id','assigned_to','client_id','proposal_id','contract_id','installment_id'])assert.match(architecture,new RegExp(column))
