@@ -120,3 +120,9 @@ export const SECOND_CTA_TEXT = 'Se preferir, você também pode falar com a gent
 // A mensagem fala em passar para o time? Então os botões da equipe vão junto.
 const TEAM_MENTION = /\b(nosso time|do time|o time|nossa equipe|da equipe|a equipe|pessoa respons[aá]vel|algu[eé]m (?:do|da) (?:time|equipe)|vou encaminhar|vou passar|encaminhei|especialista|consultor|comercial (?:vai|continua|te chama))/i
 export const mentionsTeam = (text) => TEAM_MENTION.test(String(text || ''))
+
+// Cliente esperando o time pede contato ou cutuca ("?", "e aí?", "alguém?"): respondemos com os botões.
+const CONTACT_REQUEST = /(contato|n[uú]mero|telefone|whats|zap|falar com|atendente|algu[eé]m|\btime\b|equipe|respons[aá]vel|humano|pessoa)/i
+const NUDGE = /^\s*(\?+|oi+\s*\?*|ol[aá]\s*\?*|e a[ií]\s*\?*|al[oô]+\s*\?*|tem algu[eé]m.*|\.{2,})\s*$/i
+export const isWaitingNudge = (text) => CONTACT_REQUEST.test(String(text || '')) || NUDGE.test(String(text || ''))
+export const WAITING_CTA_TEXT = 'Já avisei o nosso time e alguém te responde por aqui. Se preferir falar agora, é só tocar no botão:'

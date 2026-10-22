@@ -130,3 +130,11 @@ test('mensagem que fala do time leva os botões; pergunta de qualificação não
   for (const text of ['Hoje vocês já fazem anúncios ou seria começar do zero?', 'O site já está pronto para vender?'])
     assert.equal(mentionsTeam(text), false, text)
 })
+
+test('cliente esperando o time: pedido de contato ou "?" recebe os botões; conversa normal não', async () => {
+  const { isWaitingNudge } = await import('../supabase/functions/_shared/attendanceCore.js')
+  for (const text of ['Qual contato para falar com o time', '?', 'e aí?', 'Oi?', 'tem alguém aí?', 'me passa o número de vocês', 'quero falar com uma pessoa'])
+    assert.equal(isWaitingNudge(text), true, text)
+  for (const text of ['Combinado, aguardo!', 'https://www.roove.com.br/', 'Obrigado'])
+    assert.equal(isWaitingNudge(text), false, text)
+})
