@@ -84,3 +84,24 @@ test('aprovação atrasada não empurra o envio para a semana seguinte', async (
   assert.equal(at('2026-10-20T15:00:00Z'), '2026-10-21T12:00:00.000Z') // ter 12h (atrasou) → qua 9h
   assert.equal(at('2026-10-23T18:00:00Z'), '2026-10-26T12:00:00.000Z') // sex 15h → seg 9h
 })
+
+test('lembrete 1h15 antes do envio e validade até quarta 12h', async () => {
+  const { reminderDue, expiryDue, FLASH_SCHEMA } = await import('../supabase/functions/_shared/newsletterCore.js')
+  const s = { send_weekday: 2, send_time: '09:00' }
+  const edition = { status: 'draft', week_start: '2026-10-19', reminded_at: null }
+  assert.equal(reminderDue(s, edition, new Date('2026-10-20T10:40:00Z')), false) // ter 07:40
+  assert.equal(reminderDue(s, edition, new Date('2026-10-20T10:46:00Z')), true)  // ter 07:46
+  assert.equal(reminderDue(s, { ...edition, reminded_at: 'x' }, new Date('2026-10-20T11:00:00Z')), false)
+  assert.equal(reminderDue(s, { ...edition, status: 'approved' }, new Date('2026-10-20T11:00:00Z')), false)
+  assert.equal(expiryDue(s, edition, new Date('2026-10-21T14:59:00Z')), false) // qua 11:59
+  assert.equal(expiryDue(s, edition, new Date('2026-10-21T15:00:00Z')), true)  // qua 12:00
+  assert.equal(expiryDue(s, { ...edition, status: 'approved' }, new Date('2026-10-22T15:00:00Z')), false)
+  assert.deepEqual(FLASH_SCHEMA.required, ['title_pt', 'summary_pt', 'impact_pt', 'linkedin_post'])
+})
+
+test('cron pula a semana não aprovada e escala a tarefa para o resumo do WhatsApp', () => {
+  const fn = fs.readFileSync('supabase/functions/newsletter/index.ts', 'utf8')
+  assert.match(fn, /expiryDue\(settings,current\.data\)[\s\S]*status:'skipped'/)
+  assert.match(fn, /reminderDue\(settings,current\.data\)[\s\S]*priority:'critical',due_date:today\(\)/)
+  assert.match(fn, /action==='approve_now'[\s\S]*approveEdition\(admin,config,edition\.data,user\.data\.user\.id,true\)/)
+})

@@ -70,6 +70,7 @@ create table if not exists public.newsletter_editions(
   error_message text,
   approved_by uuid references auth.users(id) on delete set null,
   approved_at timestamptz,
+  reminded_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(organization_id,week_start)

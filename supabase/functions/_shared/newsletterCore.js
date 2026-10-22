@@ -94,6 +94,38 @@ export function sendAtAfterApproval(settings, now = new Date()) {
   return new Date(`${date}T${hh}:${mm}:00-03:00`)
 }
 
+function slotOfWeek(weekStartDate, weekday, minutes) {
+  const offset = (Number(weekday) + 6) % 7 // segunda = 0
+  const hh = String(Math.floor(minutes / 60)).padStart(2, '0'), mm = String(minutes % 60).padStart(2, '0')
+  return new Date(`${addDays(weekStartDate, offset)}T${hh}:${mm}:00-03:00`)
+}
+
+/** Lembrete: 1h antes do envio da semana, se ainda não aprovada (cai no resumo das 8h no WhatsApp). */
+export function reminderDue(settings, edition, now = new Date()) {
+  if (!edition || edition.status !== 'draft' || edition.reminded_at) return false
+  const slot = slotOfWeek(edition.week_start, settings?.send_weekday ?? 2, toMinutes(settings?.send_time, 9 * 60))
+  return now.getTime() >= slot.getTime() - 75 * 60_000
+}
+
+/** Validade: sem aprovação até o meio-dia do dia seguinte ao envio, a semana é pulada (notícia velha não sai). */
+export function expiryDue(settings, edition, now = new Date()) {
+  if (!edition || edition.status !== 'draft') return false
+  const deadline = slotOfWeek(edition.week_start, (Number(settings?.send_weekday ?? 2) + 1) % 7, 12 * 60)
+  const sameWeekDeadline = deadline.getTime() > Date.parse(`${edition.week_start}T00:00:00-03:00`) ? deadline : new Date(deadline.getTime() + 7 * 86_400_000)
+  return now.getTime() >= sameWeekDeadline.getTime()
+}
+
+export const FLASH_SCHEMA = Object.freeze({
+  type: 'object', additionalProperties: false,
+  properties: {
+    title_pt: { type: 'string', description: 'Título curto em português para o slide.' },
+    summary_pt: { type: 'string', description: 'Resumo próprio em 2-3 frases, só com fatos do material.' },
+    impact_pt: { type: 'string', description: 'O que muda na prática para marcas, 1-2 frases.' },
+    linkedin_post: { type: 'string', description: 'Post da página da Mugô (voz "nós"), até 1.000 caracteres: gancho na 1ª linha, o que aconteceu, o que muda, pergunta final. Sem hashtags.' },
+  },
+  required: ['title_pt', 'summary_pt', 'impact_pt', 'linkedin_post'],
+})
+
 export const CURATION_SCHEMA = Object.freeze({
   type: 'object', additionalProperties: false,
   properties: {

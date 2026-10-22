@@ -1,12 +1,12 @@
 /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, Copy, Download, Newspaper, Plus, RefreshCw, Save, Settings2, SkipForward, Sparkles, Trash2 } from 'lucide-react'
+import { CheckCircle2, Copy, Download, Newspaper, Plus, RefreshCw, Save, Send, Settings2, SkipForward, Sparkles, Trash2, Zap } from 'lucide-react'
 import { toPng } from 'html-to-image'
 import { FeedbackMessage } from './FeedbackMessage'
 import { composeLinkedinPost, renderLinkedinSlides, renderNewsletterHtml } from '../../supabase/functions/_shared/newsletterCore.js'
 import {
   NEWS_CATEGORIES, addNewsletterSource, deleteNewsletterSource, getNewsletterSettings, listEditions, listNewsletterSources,
-  listRecentNews, newsletterAction, saveNewsletterSettings, updateEdition, updateNewsletterSource,
+  listRecentNews, newsletterAction, newsletterFlash, saveNewsletterSettings, updateEdition, updateNewsletterSource,
 } from '../services/data/growthRepository'
 
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
@@ -52,7 +52,7 @@ export function NewsletterPanel() {
     {!settings.enabled && <FeedbackMessage type="info">Geração automática desligada. Ligue em Configuração — ou gere a edição desta semana manualmente para testar.</FeedbackMessage>}
 
     <nav className="section-tabs" aria-label="Newsletter">
-      {[['edition', 'Edição da semana'], ['sources', `Fontes (${sources.filter((s) => s.active).length})`], ['settings', 'Configuração e layouts']].map(([id, label]) => <button key={id} type="button" className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}
+      {[['edition', 'Edição da semana'], ['flash', 'Edição extra (LinkedIn)'], ['sources', `Fontes (${sources.filter((s) => s.active).length})`], ['settings', 'Configuração e layouts']].map(([id, label]) => <button key={id} type="button" className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}</button>)}
     </nav>
 
     {view === 'edition' && <>
@@ -83,6 +83,7 @@ export function NewsletterPanel() {
           <div className="row-actions">
             {editable && <button className="button secondary" disabled={!dirty || Boolean(busy)} onClick={saveDraft}><Save size={14} /> Salvar</button>}
             {editable && <button className="button" disabled={dirty || draft.items.length < 3 || Boolean(busy)} title={dirty ? 'Salve antes de aprovar' : ''} onClick={() => window.confirm(`Aprovar e agendar o envio para ${WEEKDAYS[settings.send_weekday].toLowerCase()} às ${String(settings.send_time).slice(0, 5)}?`) && run('approve', async () => { const r = await newsletterAction('approve', draft.id); await load(); return r }, (r) => `Aprovada. Envio agendado para ${new Date(r.scheduled_for).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.`)}><CheckCircle2 size={14} /> Aprovar newsletter</button>}
+            {editable && <button className="button secondary" disabled={dirty || draft.items.length < 3 || Boolean(busy)} onClick={() => window.confirm('Aprovar e ENVIAR AGORA para toda a base?') && run('now', async () => { await newsletterAction('approve_now', draft.id); await load() }, 'Aprovada e enviando agora. As métricas aparecem em Campanhas.')}><Send size={14} /> Aprovar e enviar agora</button>}
             {editable && <button className="button secondary" disabled={Boolean(busy)} onClick={() => window.confirm('Pular a newsletter desta semana?') && run('skip', async () => { await newsletterAction('skip', draft.id); await load() }, 'Semana pulada.')}><SkipForward size={14} /> Pular semana</button>}
           </div>
         </section>
@@ -95,13 +96,15 @@ export function NewsletterPanel() {
       {draft && draft.items?.length > 0 && <LinkedinBlock draft={draft} setDraft={setDraft} editable={editable} settings={settings} onCopied={() => setFeedback('Post copiado.')} onError={setError} />}
     </>}
 
+    {view === 'flash' && <FlashBlock news={news} settings={settings} run={run} busy={busy} onCopied={() => setFeedback('Post copiado.')} onError={setError} />}
     {view === 'sources' && <SourcesBlock sources={sources} run={run} reload={() => load()} busy={busy} />}
     {view === 'settings' && <SettingsBlock settings={settings} run={run} onSaved={(row) => setSettings({ ...DEFAULTS, ...row })} busy={busy} />}
   </div>
 }
 
-function LinkedinBlock({ draft, setDraft, editable, settings, onCopied, onError }) {
-  const slides = renderLinkedinSlides({ coverTemplate: settings.linkedin_cover_html, slideTemplate: settings.linkedin_slide_html, edition: draft })
+function LinkedinBlock({ draft, setDraft, editable, settings, onCopied, onError, skipCover = false, title = 'LinkedIn — página da Mugô' }) {
+  const allSlides = renderLinkedinSlides({ coverTemplate: settings.linkedin_cover_html, slideTemplate: settings.linkedin_slide_html, edition: draft })
+  const slides = skipCover ? allSlides.slice(1) : allSlides
   const holder = useRef(null)
   const [exporting, setExporting] = useState(false)
   async function download() {
@@ -119,7 +122,7 @@ function LinkedinBlock({ draft, setDraft, editable, settings, onCopied, onError 
     } catch (cause) { onError(`Não consegui gerar as imagens: ${cause.message}`) } finally { setExporting(false) }
   }
   return <section className="dashboard-panel g-settings">
-    <header><Download size={18} /><div><strong>LinkedIn — página da Mugô</strong><small>Post pronto + {slides.length} imagens (capa + 1 por notícia). Publique como post com várias imagens.</small></div></header>
+    <header><Download size={18} /><div><strong>{title}</strong><small>Post pronto + {slides.length} {slides.length === 1 ? 'imagem' : 'imagens (capa + 1 por notícia). Publique como post com várias imagens'}.</small></div></header>
     <label>Texto do post<textarea rows="10" value={draft.linkedin_post || ''} onChange={(e) => setDraft({ ...draft, linkedin_post: e.target.value })} disabled={!editable} /></label>
     <div className="row-actions">
       <button className="button secondary" onClick={() => copy(composeLinkedinPost(draft, settings.linkedin_hashtags), onCopied)}><Copy size={14} /> Copiar post com hashtags</button>
@@ -191,4 +194,23 @@ function SettingsBlock({ settings, run, onSaved, busy }) {
     </div>
     <div className="row-actions"><button className="button" type="submit" disabled={Boolean(busy)}><Save size={14} /> Salvar configuração</button></div>
   </form>
+}
+
+function FlashBlock({ news, settings, run, busy, onCopied, onError }) {
+  const [form, setForm] = useState({ news_id: '', url: '', note: '' }), [result, setResult] = useState(null)
+  return <>
+    <form className="dashboard-panel g-settings" onSubmit={(e) => { e.preventDefault(); run('flash', async () => {
+      const data = await newsletterFlash(form)
+      setResult({ week_start: data.week_start, subject: data.title_pt, intro: '', linkedin_post: data.linkedin_post, items: [{ url: data.url, source_name: data.source_name, title_pt: data.title_pt, summary_pt: data.summary_pt, impact_pt: data.impact_pt }] })
+    }, 'Post e slide prontos. Revise antes de publicar.') }}>
+      <header><Zap size={18} /><div><strong>Notícia quente no meio da semana</strong><small>Gera na hora o post e o slide para a página da Mugô no LinkedIn. Não envia e-mail.</small></div></header>
+      <div className="form-grid">
+        <label className="g-wide">Escolha uma notícia já coletada<select value={form.news_id} onChange={(e) => setForm({ ...form, news_id: e.target.value, url: '' })}><option value="">—</option>{news.slice(0, 80).map((n) => <option key={n.id} value={n.id}>{n.source_name} — {n.title.slice(0, 100)}</option>)}</select></label>
+        <label className="g-wide">…ou cole o link da notícia<input type="url" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value, news_id: '' })} placeholder="https://…" /></label>
+        <label className="g-wide">Observação do time (opcional)<textarea rows="2" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="Ex.: focar no impacto para lojas de moda; citar que já estamos testando com clientes." /></label>
+      </div>
+      <div className="row-actions"><button className="button" type="submit" disabled={Boolean(busy) || (!form.news_id && !form.url && !form.note)}><Sparkles size={14} /> {busy === 'flash' ? 'Gerando…' : 'Gerar post e slide'}</button></div>
+    </form>
+    {result && <LinkedinBlock draft={result} setDraft={setResult} editable settings={settings} onCopied={onCopied} onError={onError} skipCover title="Edição extra — LinkedIn" />}
+  </>
 }

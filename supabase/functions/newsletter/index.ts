@@ -4,7 +4,8 @@
 // O envio em si é feito pela função email-campaigns (campanha agendada).
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {generateStructured} from '../_shared/aiProvider.js'
-import {CURATION_SCHEMA,buildCurationPrompt,generationDue,parseFeed,renderNewsletterHtml,sendAtAfterApproval,validateCuration,weekStart} from '../_shared/newsletterCore.js'
+import {extractSiteSignals} from '../_shared/prospectingCore.js'
+import {CURATION_SCHEMA,FLASH_SCHEMA,buildCurationPrompt,expiryDue,generationDue,parseFeed,reminderDue,renderNewsletterHtml,sendAtAfterApproval,validateCuration,weekStart} from '../_shared/newsletterCore.js'
 
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-email-worker-key','Content-Type':'application/json'}
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors})
@@ -85,10 +86,10 @@ async function upsertCampaign(admin:any,settings:any,edition:any){
   return created.data.id
 }
 
-async function approveEdition(admin:any,settings:any,edition:any,userId:string|null){
+async function approveEdition(admin:any,settings:any,edition:any,userId:string|null,sendNow=false){
   if(!['draft','failed'].includes(edition.status))throw Object.assign(new Error('Esta edição não está mais em rascunho.'),{code:'INVALID_STATE'})
   const campaignId=await upsertCampaign(admin,settings,edition)
-  const when=sendAtAfterApproval(settings)
+  const when=sendNow?new Date():sendAtAfterApproval(settings)
   const scheduled=await admin.from('email_campaigns').update({status:'scheduled',scheduled_for:when.toISOString()}).eq('id',campaignId).select('id').single()
   if(scheduled.error)throw scheduled.error
   await admin.from('newsletter_editions').update({status:'approved',approved_by:userId,approved_at:new Date().toISOString()}).eq('id',edition.id)
@@ -118,7 +119,19 @@ Deno.serve(async request=>{
           const retry=existing.data?.status==='failed'&&Date.now()-Date.parse(existing.data.updated_at)>3*3_600_000
           if(!existing.data||retry)generated=(await generateEdition(admin,settings,{force:retry})).id
         }
-        report.push({organization_id:settings.organization_id,added,generated})
+        const current=await admin.from('newsletter_editions').select('*').eq('organization_id',settings.organization_id).eq('week_start',weekStart()).maybeSingle()
+        let reminded=false,expired=false
+        if(current.data&&expiryDue(settings,current.data)){
+          await admin.from('newsletter_editions').update({status:'skipped',error_message:'Pulada automaticamente: não foi aprovada a tempo.'}).eq('id',current.data.id).eq('status','draft')
+          await admin.from('crm_tasks').update({status:'cancelled'}).eq('organization_id',settings.organization_id).eq('source_ref',`newsletter:${current.data.id}`).in('status',['pending','in_progress'])
+          expired=true
+        }else if(current.data&&reminderDue(settings,current.data)){
+          // vira tarefa crítica de hoje: entra no topo do resumo diário que o time recebe no WhatsApp às 8h
+          await admin.from('crm_tasks').update({title:'URGENTE — aprovar a newsletter antes do envio',priority:'critical',due_date:today()}).eq('organization_id',settings.organization_id).eq('source_ref',`newsletter:${current.data.id}`).in('status',['pending','in_progress'])
+          await admin.from('newsletter_editions').update({reminded_at:new Date().toISOString()}).eq('id',current.data.id)
+          reminded=true
+        }
+        report.push({organization_id:settings.organization_id,added,generated,reminded,expired})
       }catch(error:any){
         const week=weekStart(),current=await admin.from('newsletter_editions').select('id,status').eq('organization_id',settings.organization_id).eq('week_start',week).maybeSingle()
         if(!current.data)await admin.from('newsletter_editions').insert({organization_id:settings.organization_id,week_start:week,status:'failed',error_message:clean(error?.message,300)})
@@ -140,6 +153,23 @@ Deno.serve(async request=>{
     const settings=await admin.from('newsletter_settings').select('*').eq('organization_id',org).maybeSingle()
     const config=settings.data||{organization_id:org,items_count:5,send_weekday:2,send_time:'09:00'}
     if(action==='refresh_feeds')return json({ok:true,data:{added:await refreshFeeds(admin,org,true)}})
+    if(action==='flash'){
+      // Edição extra: uma notícia quente vira post + slide para o LinkedIn na hora (sem e-mail).
+      let material:any=null
+      const newsId=clean(body.news_id,60),link=clean(body.url,1000),note=clean(body.note,2000)
+      if(newsId){const row=await admin.from('industry_news').select('title,excerpt,url,source_name').eq('organization_id',org).eq('id',newsId).single();if(row.error)throw row.error;material={titulo:row.data.title,trecho:row.data.excerpt,link:row.data.url,fonte:row.data.source_name}}
+      else if(/^https?:\/\//.test(link)){
+        const page=await fetch(link,{headers:{'User-Agent':'Mozilla/5.0 (compatible; MugoNewsletter/1.0)'},signal:AbortSignal.timeout(15_000)}).then(r=>r.ok?r.text():'').catch(()=>'')
+        const signals=extractSiteSignals(page,{url:link})
+        material={titulo:signals.title,trecho:signals.meta_description||signals.text_excerpt?.slice(0,1500),link,fonte:new URL(link).hostname.replace(/^www\./,'')}
+      }
+      if(!material&&!note)return json({ok:false,code:'INVALID',message:'Escolha uma notícia, cole um link ou descreva o que aconteceu.'},400)
+      const knowledge=await admin.from('ai_knowledge_entries').select('content').eq('organization_id',org).eq('category','tom').eq('active',true).limit(3)
+      const result=await generateStructured({schemaName:'flash_post',schema:FLASH_SCHEMA,maxTokens:1200,timeoutMs:45_000,
+        system:`Você escreve para a página da Mugô (agência brasileira de marketing digital) no LinkedIn. Uma notícia importante acabou de sair. Escreva em português do Brasil, com resumo próprio (nunca copie frases), só com fatos do material, e o impacto prático para marcas e e-commerces.${knowledge.data?.length?`\nTom de voz: ${knowledge.data.map((k:any)=>k.content).join(' ')}`:''}`,
+        user:JSON.stringify({material,observacao_do_time:note||undefined})})
+      return json({ok:true,data:{...result.data,url:material?.link||null,source_name:material?.fonte||'',week_start:new Date().toISOString().slice(0,10)}})
+    }
     if(action==='generate_now'){
       const existing=await admin.from('newsletter_editions').select('status').eq('organization_id',org).eq('week_start',weekStart()).maybeSingle()
       return json({ok:true,data:await generateEdition(admin,{...config,auto_send:false},{force:Boolean(existing.data)})})
@@ -147,6 +177,13 @@ Deno.serve(async request=>{
     const edition=await admin.from('newsletter_editions').select('*').eq('organization_id',org).eq('id',clean(body.edition_id,60)).single()
     if(edition.error)return json({ok:false,code:'NOT_FOUND',message:'Edição não encontrada.'},404)
     if(action==='approve')return json({ok:true,data:await approveEdition(admin,config,edition.data,user.data.user.id)})
+    if(action==='approve_now'){
+      const result=await approveEdition(admin,config,edition.data,user.data.user.id,true)
+      // dispara o envio já (sem esperar o próximo minuto do cron)
+      const key=Deno.env.get('EMAIL_WORKER_KEY')||''
+      if(key)await fetch(`${url}/functions/v1/email-campaigns`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${service}`,'X-Email-Worker-Key':key},body:JSON.stringify({source:'newsletter-now'}),signal:AbortSignal.timeout(60_000)}).catch(()=>null)
+      return json({ok:true,data:result})
+    }
     if(action==='skip'){
       await admin.from('newsletter_editions').update({status:'skipped'}).eq('id',edition.data.id)
       if(edition.data.campaign_id)await admin.from('email_campaigns').update({status:'draft',scheduled_for:null}).eq('id',edition.data.campaign_id).eq('status','scheduled')

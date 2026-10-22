@@ -107,3 +107,4 @@ export const listEditions = async () => unwrap(await db().from('newsletter_editi
 export const updateEdition = async (id, patch) => unwrap(await db().from('newsletter_editions').update(patch).eq('id', id).select().single())
 export const listRecentNews = async (days = 9) => unwrap(await db().from('industry_news').select('id,url,title,excerpt,source_name,category,published_at,edition_id').gte('published_at', new Date(Date.now() - days * 86_400_000).toISOString()).order('published_at', { ascending: false }).limit(150))
 export const newsletterAction = (action, editionId) => invoke('newsletter', { action, edition_id: editionId })
+export const newsletterFlash = ({ news_id, url, note }) => invoke('newsletter', { action: 'flash', news_id: news_id || null, url: url || null, note: note || null })
