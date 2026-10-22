@@ -349,7 +349,7 @@ test('regressão Liliu: "to finalizando agora" (sem palavra de data) durante ACT
   // ACTIVITY_DATE_RESOLUTION já está isento do auto-clear por divergência de intenção — a sessão
   // continua aberta para uma nova tentativa (nenhum loop infinito: "cancela" ainda funciona a qualquer
   // momento pelo bloco genérico de CANCEL_FINANCIAL, e a sessão expira em 30min de qualquer forma).
-  assert.match(worker, /'CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'\]\.includes\(command\.intent\)/)
+  assert.match(worker, /'CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION',(?:'SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE',)?'GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'\]\.includes\(command\.intent\)/)
 })
 
 // ===================================================================================================
