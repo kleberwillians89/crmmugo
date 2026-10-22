@@ -14,7 +14,7 @@ import {buildMimeMessage,gmailAccessToken,gmailSend,gmailThreadStatus} from '../
 import {convertProspectToLead} from '../_shared/prospectConversion.js'
 import {newsHooksFor} from '../_shared/newsletterCore.js'
 
-const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-prospecting-worker-key','Content-Type':'application/json'}
+const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type, x-prospecting-worker-key','Content-Type':'application/json'}
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors})
 const clean=(value:unknown,max=500)=>String(value??'').trim().slice(0,max)
 const OPERATORS=['admin','manager','operations','commercial']
