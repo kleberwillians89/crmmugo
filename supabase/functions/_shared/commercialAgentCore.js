@@ -1,3 +1,4 @@
+import {normalizeUnderstanding} from './conversationKernel.js'
 const clean = value => String(value ?? '').trim()
 const fold = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 
@@ -212,6 +213,7 @@ export function hasMinimumCommercialContext(qualification = {}) {
   return Boolean(identity && need && interest)
 }
 
+/** @param {any} options */
 export function assessCommercialTemperature({ text = '', interests = [], qualification = {}, leadKind = 'new_business' } = {}) {
   if (['support', 'finance', 'existing_client', 'partnership'].includes(leadKind)) return { temperature: 'cold', reason: `Classificação ${leadKind}; não é um lead comercial quente.` }
   const value = fold(text)
@@ -225,6 +227,7 @@ export function assessCommercialTemperature({ text = '', interests = [], qualifi
   return { temperature: 'cold', reason: 'Contato ainda exploratório ou com necessidade pouco definida.' }
 }
 
+/** @param {any} options */
 export function buildCommercialSummary({ client = {}, qualification = {}, opportunity = {}, interests = [] } = {}) {
   const fields = [
     ['Empresa', qualification.company_name || client.company_name],
@@ -368,6 +371,7 @@ export function validateCommercialDecision(value) {
   if (!response) return null
   const safeObject = input => input && typeof input === 'object' && !Array.isArray(input) ? input : {}
   return {
+    ...(value.understanding?{understanding:normalizeUnderstanding(value.understanding,'external')} : {}),
     // A IA pode propor a classificação da conversa a partir do histórico; só é aceita se vier de
     // dentro do enum conhecido — caso contrário o worker usa a classificação determinística.
     conversation_kind: COMMERCIAL_LEAD_KINDS.includes(value.conversation_kind) ? value.conversation_kind : null,

@@ -88,7 +88,7 @@ test('contexto, membro e tenant permanecem vinculados em todas as leituras e esc
   assert.match(worker,/eq\('id', event\.team_member_id\)\.eq\('organization_id', event\.organization_id\)\.eq\('active', true\)/)
   assert.match(worker,/getMemberTaskReadModel\(admin,event\.organization_id,event\.team_member_id,today\(\)\)/)
   assert.match(worker,/organization_id: org,[\s\S]{0,300}assigned_to: assignee\?\.id \|\| event\.team_member_id/)
-  assert.match(worker,/session:event\.session\?\{state:event\.session\.state,active_intent:event\.session\.active_intent/)
+  assert.match(worker,/session:\{state:event\.session\?\.state\|\|'idle',active_intent:event\.session\?\.active_intent/)
   assert.match(worker,/active_intent:priorPlan\?'SECRETARY_PLAN':'SECRETARY_CLARIFICATION'/)
   assert.match(worker,/secretary_plan:updatedSecretaryPlan/)
 })

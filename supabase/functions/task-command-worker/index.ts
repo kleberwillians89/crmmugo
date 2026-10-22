@@ -4,6 +4,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
+import {advanceConversationState,scopedConversationState,conversationTrace} from '../_shared/conversationKernel.js'
 import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeSecretaryWriteRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
 
 const headers = { 'Content-Type': 'application/json' }
@@ -93,7 +94,9 @@ const findTask = async (admin: any, event: any, command: any) => {
   }
   const needle = foldText(command.task_query)
   if (!needle) return { kind: 'none', items: [] }
-  const result = await admin.from('crm_tasks').select('id,title,status,due_date,priority,metadata').eq('organization_id', event.organization_id).not('status', 'in', '(completed,cancelled)').limit(500)
+  let query=admin.from('crm_tasks').select('id,title,status,due_date,priority,metadata').eq('organization_id', event.organization_id).is('archived_at',null)
+  query=command.intent==='REOPEN_TASK'?query.eq('status','completed'):query.not('status','in','(completed,cancelled)')
+  const result = await query.limit(500)
   if (result.error) throw result.error
   const rows = result.data || []
   const exact = rows.filter((item: any) => foldText(item.title) === needle)
@@ -107,6 +110,7 @@ async function applyTaskAction(admin: any, event: any, task: any, intent: string
   const patch: any = { metadata: { ...(task.metadata || {}), origin: 'whatsapp', command_event_id: event.id } }
   if (intent === 'COMPLETE_TASK') { patch.status = 'completed'; patch.completed_at = new Date().toISOString() }
   if (intent === 'START_TASK') patch.status = 'in_progress'
+  if (intent === 'REOPEN_TASK') {patch.status='pending';patch.completed_at=null}
   if (intent === 'CANCEL_TASK') patch.status = 'cancelled'
   if (intent === 'UPDATE_TASK_STATUS') patch.status = fields.task_status
   if (intent === 'MOVE_TASK') {
@@ -119,10 +123,13 @@ async function applyTaskAction(admin: any, event: any, task: any, intent: string
     if (!member) return { status:'awaiting_context',reply: 'Não encontrei um único responsável ativo com esse nome.' }
     patch.assigned_to = member.id
   }
-  const changed = await admin.from('crm_tasks').update(patch).eq('id', task.id).eq('organization_id', event.organization_id)
+  let mutation=admin.from('crm_tasks').update(patch).eq('id',task.id).eq('organization_id',event.organization_id).is('archived_at',null)
+  if(intent==='REOPEN_TASK')mutation=mutation.eq('status','completed')
+  const changed = await mutation.select('id').maybeSingle()
   if (changed.error) throw changed.error
+  if(!changed.data)return{status:'awaiting_context',reply:'A tarefa não está mais disponível para alteração. Posso consultar novamente.'}
   event.entity_type = 'crm_tasks'; event.entity_id = task.id
-  return { reply: `${taskShortId(task.id)} atualizada ✓` }
+  return { reply: `${taskShortId(task.id)} ${intent==='REOPEN_TASK'?'reaberta':'atualizada'} ✓` }
 }
 const taskLines = (items: any[]) => items.length ? items.slice(0, 15).map((item: any) => `${item.priority === 'high' || item.priority === 'critical' ? '🔴' : '•'} ${taskShortId(item.id)} ${item.title}${item.due_date ? ` — ${item.due_date}` : ''}`).join('\n') : 'Nenhuma tarefa encontrada.'
 // Mantém uma action por demanda. Além de preservar prazo/horário/responsável, isso deixa cada criação
@@ -293,6 +300,25 @@ async function confirmCommercial(admin:any,event:any,pending:any,cancel=false){
 
 async function execute(admin: any, event: any, command: any) {
   const org = event.organization_id
+  if(command.intent==='SEARCH_TASKS'){
+    const owner=await findMember(admin,event,command.assignee_name||null)
+    if(!owner)return{status:'awaiting_context',reply:'Qual membro da equipe você quer consultar?'}
+    let query=admin.from('crm_tasks').select('id,title,status,due_date,due_time,assigned_to').eq('organization_id',org).eq('assigned_to',owner.id).is('archived_at',null)
+    if(command.task_query)query=query.ilike('title',`%${clean(command.task_query,240).replaceAll('%','\\%').replaceAll('_','\\_')}%`)
+    if(command.task_status)query=query.eq('status',command.task_status)
+    if(command.due_date)query=query.eq('due_date',command.due_date)
+    const rows=await query.order('due_date').limit(20)
+    if(rows.error)throw rows.error
+    const candidates=(rows.data||[]).map((item:any,index:number)=>({index:index+1,type:'task',task_id:item.id,label:item.title,status:item.status,due_date:item.due_date,due_time:item.due_time}))
+    await saveAssistantSession(admin,event,{state:'idle',active_intent:'TASK_BROWSE',context:{candidate_items:candidates},pending_action:null,pending_entity_type:null,pending_entity_id:null})
+    return candidates.length?`${owner.name}:\n${candidates.map((item:any)=>`${item.index}. ${item.label} — ${item.status}${item.due_date?` — ${item.due_date}`:''}${item.due_time?` ${item.due_time.slice(0,5)}`:''}`).join('\n')}`:'Não encontrei tarefas com esses filtros.'
+  }
+  if(command.intent==='SEARCH_CLIENTS'){
+    if(!command.subject_query)return{status:'awaiting_context',reply:'Qual cliente você quer consultar?'}
+    const rows=await admin.from('clients').select('id,company_name,trade_name,status').eq('organization_id',org).neq('status','archived').ilike('company_name',`%${clean(command.subject_query,240).replaceAll('%','\\%').replaceAll('_','\\_')}%`).limit(10)
+    if(rows.error)throw rows.error
+    return rows.data?.length?rows.data.map((item:any)=>`${item.trade_name||item.company_name} — ${item.status}`).join('\n'):'Não encontrei esse cliente pelo nome cadastrado.'
+  }
   if (command.intent === 'HELP') return HELP_TEXT
   if (command.intent === 'GREETING') {
     const firstName = clean(event.team_member?.name).split(' ')[0]
@@ -795,7 +821,7 @@ async function execute(admin: any, event: any, command: any) {
     const task = created[0]
     return `Tarefa criada ✓\n${taskShortId(task.id)} ${task.title}${task.client ? ` — ${task.client.trade_name||task.client.company_name}` : ''}${task.due_date ? `\nPrazo: ${ddmmyyyy(task.due_date)}${task.due_time ? ` às ${String(task.due_time).slice(0,5)}` : ''}` : ''}\nRegistrada: ${formatRegisteredAt(task.created_at)}`
   }
-  if (['COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK'].includes(command.intent)) {
+  if (['REOPEN_TASK','COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK'].includes(command.intent)) {
     const found = await findTask(admin, event, command)
     if (found.kind === 'ambiguous') {
       const candidateItems = found.items.slice(0, 8).map((item: any, index: number) => ({ index: index + 1, type: 'task', task_id: item.id, label: item.title }))
@@ -803,9 +829,10 @@ async function execute(admin: any, event: any, command: any) {
       return `Encontrei mais de uma:\n\n${candidateItems.map((c: any) => `${c.index}. ${c.label}`).join('\n')}\n\nQual delas?`
     }
     if (found.kind !== 'one') return {status:'awaiting_context',reply:'Não encontrei essa tarefa. Pode me dizer o nome como está no CRM, ou usar o código curto se tiver (ex.: #A1B2C3).'}
+    if(command.intent==='REOPEN_TASK'&&found.item.status!=='completed')return{status:'awaiting_context',reply:'Essa tarefa não está concluída. Quer consultar o estado atual?'}
     const outcome = await applyTaskAction(admin, event, found.item, command.intent, { due_date: command.due_date, due_time: command.due_time, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status })
     await saveAssistantSession(admin,event,{state:'idle',active_intent:'TASK_BROWSE',context:{candidate_items:[{index:1,type:'task',task_id:found.item.id,label:found.item.title}],selected_task:{index:1,type:'task',task_id:found.item.id,label:found.item.title}},pending_action:null,pending_entity_type:'crm_tasks',pending_entity_id:found.item.id})
-    return outcome.reply
+    return outcome
   }
   if (command.intent === 'LIST_WAITING_ATTENDANCE') {
     if(command.subject_query){const result=await admin.from('whatsapp_conversations').select('assigned_team_member_id,whatsapp_contacts!inner(display_name,profile_name)').eq('organization_id',org).neq('status','closed').limit(200);if(result.error)throw result.error;const needle=foldText(command.subject_query),matches=(result.data||[]).filter((item:any)=>foldText(item.whatsapp_contacts?.display_name||item.whatsapp_contacts?.profile_name).includes(needle));if(matches.length!==1)return 'Não encontrei uma única conversa com esse nome.';if(!matches[0].assigned_team_member_id)return `${clean(command.subject_query)} ainda não tem responsável.`;const owner=await admin.from('team_members').select('name').eq('id',matches[0].assigned_team_member_id).eq('organization_id',org).maybeSingle();if(owner.error)throw owner.error;return owner.data?.name?`${clean(command.subject_query)} está com ${owner.data.name}.`:`${clean(command.subject_query)} ainda não tem responsável.`}
@@ -845,6 +872,7 @@ async function execute(admin: any, event: any, command: any) {
 }
 
 async function processEvent(admin: any, event: any) {
+  const turnStartedAt=Date.now()
   const claimed = await admin.from('task_command_events').update({ status: 'processing', attempts: Number(event.attempts || 0) + 1 }).eq('id', event.id).in('status', ['pending','failed']).select('id').maybeSingle()
   if (claimed.error || !claimed.data) return false
   try {
@@ -859,6 +887,11 @@ async function processEvent(admin: any, event: any) {
     const member = await admin.from('team_members').select('id,name,auth_profile_id').eq('id', event.team_member_id).eq('organization_id', event.organization_id).eq('active', true).single()
     if (member.error) throw Object.assign(new Error('Membro interno não está mais ativo.'), { code: 'TEAM_MEMBER_INACTIVE' })
     event.team_member = member.data
+    const conversationScope=`${event.organization_id}:${event.team_member_id}:${event.conversation_id||event.wa_id}`
+    const conversationState=scopedConversationState(event.session?.context?.conversation_state,conversationScope)
+    const conversationHistory=await admin.from('whatsapp_messages').select('direction,text_content,created_at').eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).order('created_at',{ascending:false}).limit(16)
+    if(conversationHistory.error)throw conversationHistory.error
+    if(event.session)event.session.context={...event.session.context,conversation_state:conversationState}
     const cleanedRaw=clean(event.raw_text),foldedRaw=foldText(cleanedRaw)
     if(event.session?.context?.secretary_plan?.interrupted_at && Date.now()-event.session.context.secretary_plan.interrupted_at>=30*60*1000){
       if(event.session.active_intent==='SECRETARY_PLAN')await clearAssistantSession(admin,event)
@@ -995,6 +1028,7 @@ async function processEvent(admin: any, event: any) {
     // read model resumido e nunca toca o banco; execute() continua sendo a única camada de efeito.
     const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
     const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4
+    const secretaryKey=Deno.env.get('OPENAI_API_KEY')||'',secretaryModel=Deno.env.get('TASK_COMMAND_MODEL')||Deno.env.get('OPENAI_MODEL')||''
     const operationalReadProbe=safeSecretaryReadRescue(event.raw_text,{localDate:today()})
     // Correção determinística de alta prioridade: nunca depende do planner estar disponível (é uma
     // reabertura de tarefa, ação sensível o bastante para não arriscar na confiabilidade de um LLM).
@@ -1005,9 +1039,8 @@ async function processEvent(admin: any, event: any) {
         standaloneGreeting
         || ['HELP','ACTIVITY_DATE_RESOLUTION','SESSION_SELECTION','TASK_CONTEXT_LIST','CREATE_TASK_DATE_UNRESOLVED','TAKE_CONVERSATION_BY_ID','CONVERSATION_CONTEXT'].includes(command.intent)
         || Boolean(command.task_short_id)
-        || protectedPendingActions.has(event.session?.pending_action)
+        || (!(secretaryKey&&secretaryModel)&&protectedPendingActions.has(event.session?.pending_action))
       )&&!operationalReadProbe&&!undoCompletionProbe)
-    const secretaryKey=Deno.env.get('OPENAI_API_KEY')||'',secretaryModel=Deno.env.get('TASK_COMMAND_MODEL')||Deno.env.get('OPENAI_MODEL')||''
     const savedSecretaryPlan=event.parsed_command?.orchestrator==='internal_secretary'?event.parsed_command:null
     if(!deterministicShortcut&&undoCompletionProbe){
       secretaryPlan=undoCompletionProbe
@@ -1034,7 +1067,7 @@ async function processEvent(admin: any, event: any) {
         onPlannerStatus:(status:string,meta:any)=>{plannerStatus=status;plannerHttpStatus=meta?.httpStatus??null;plannerErrorClass=meta?.errorClass??null},
         apiKey:secretaryKey,model:secretaryModel,message:event.raw_text,
         member:{...event.team_member,organization_id:event.organization_id},now:{iso:new Date().toISOString(),local_date:today(),timezone:'America/Sao_Paulo'},
-        session:event.session?{state:event.session.state,active_intent:event.session.active_intent,pending_action:event.session.pending_action,context:event.session.context}:null,
+        session:{state:event.session?.state||'idle',active_intent:event.session?.active_intent||null,pending_action:event.session?.pending_action||null,context:{...(event.session?.context||{}),conversation_state:conversationState,recent_messages:(conversationHistory.data||[]).reverse()}},
         operationalContext:{my_tasks:memberModel.candidateItems,team_members:(team.data||[]).map((item:any)=>({id:item.id,name:item.name})),recent_plan_tasks:recentPlanTasks},
       })
       if(secretaryPlan)processingPath='secretary_agent'
@@ -1155,6 +1188,19 @@ async function processEvent(admin: any, event: any) {
       outcome=command.intent === 'UNKNOWN' ? CLARIFY_TEXT : await execute(admin, event, command)
     }
     const reply=typeof outcome==='string'?outcome:outcome.reply
+    const verifiedEntities=(event.session?.context?.candidate_items||[]).filter((item:any)=>item.task_id).map((item:any)=>({id:item.task_id,kind:'task',label:item.label}))
+    const successfulActions:any[]=[]
+    for(const [index,toolCommand] of secretaryCommands.entries()){
+      const key=Object.keys(outcome?.tool_call_results||{}).find(key=>key.includes(`:action:${index}:`))
+      const result=key?outcome.tool_call_results[key]:null
+      if(result?.entity_type==='crm_tasks'&&result.entity_id&&!result.pending){
+        verifiedEntities.push({id:result.entity_id,kind:'task',label:toolCommand.title||toolCommand.task_query||toolCommand.items?.[0]?.title,owner_name:toolCommand.assignee_name})
+        successfulActions.push({tool:secretaryPlan.actions[index]?.tool,status:'completed',entity_ref:`task:${result.entity_id}`})
+      }
+    }
+    const nextState=advanceConversationState(conversationState,{scope:conversationScope,understanding:secretaryPlan?.understanding,entities:verifiedEntities,actions:successfulActions,pending:secretaryPlan?.reply_mode==='clarify'?reply:null})
+    await saveAssistantSession(admin,event,{state:event.session?.state||'idle',active_intent:event.session?.active_intent||null,context:{...(event.session?.context||{}),conversation_state:nextState},pending_action:event.session?.pending_action||null,pending_entity_type:event.session?.pending_entity_type||null,pending_entity_id:event.session?.pending_entity_id||null})
+    event.result={...(event.result||{}),conversation_trace:conversationTrace({identityType:'internal',understanding:secretaryPlan?.understanding,state:conversationState,plannerStatus, path:processingPath,actions:secretaryPlan?.actions||[],results:outcome?.tool_call_results||{},response:reply,startedAt:turnStartedAt})}
     const providerMessageId = await sendReply(admin, event, reply)
     await admin.from('task_command_events').update({ status: outcome?.status||'completed', parsed_command: secretaryPlan?{orchestrator:'internal_secretary',plan:secretaryPlan,commands:secretaryCommands}:command, entity_type: event.entity_type||null, entity_id: event.entity_id||null, result: { ...(event.result||{}),completed_tool_calls:outcome?.completed_tool_calls||event.result?.completed_tool_calls||[],pending_tool_calls:outcome?.pending_tool_calls||event.result?.pending_tool_calls||[],tool_call_results:outcome?.tool_call_results||event.result?.tool_call_results||{},processing_path:processingPath,reply,provider_message_id:providerMessageId }, processed_at: new Date().toISOString(), error_code: null, error_message: null }).eq('id', event.id)
     return true
@@ -1169,7 +1215,7 @@ async function processEvent(admin: any, event: any) {
     }
     const attempts = Number(event.attempts || 0) + 1
     const terminal = attempts >= 6 || ['TEAM_MEMBER_INACTIVE','META_CONFIGURATION_MISSING'].includes(error?.code)
-    await admin.from('task_command_events').update({ status: terminal ? 'dead_letter' : 'failed', next_attempt_at: new Date(Date.now() + Math.min(3600, 2 ** attempts * 30) * 1000).toISOString(), error_code: clean(error?.code || error?.name, 100), error_message: clean(error?.message, 500), processed_at: terminal ? new Date().toISOString() : null }).eq('id', event.id)
+    await admin.from('task_command_events').update({ result:{...(event.result||{}),conversation_trace:conversationTrace({identityType:'internal',understanding:event.parsed_command?.plan?.understanding,state:event.session?.context?.conversation_state,plannerStatus:event.result?.planner_status||'error',path:'failed',actions:event.parsed_command?.plan?.actions||[],results:event.result?.tool_call_results||{},response:null,startedAt:turnStartedAt,error:error?.code||error?.name})},status: terminal ? 'dead_letter' : 'failed', next_attempt_at: new Date(Date.now() + Math.min(3600, 2 ** attempts * 30) * 1000).toISOString(), error_code: clean(error?.code || error?.name, 100), error_message: clean(error?.message, 500), processed_at: terminal ? new Date().toISOString() : null }).eq('id', event.id)
     return false
   }
 }

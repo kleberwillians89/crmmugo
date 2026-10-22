@@ -143,14 +143,14 @@ test('NÃO REGRESSÃO: preço autorizado continua passando intacto', () => {
   assert.equal(enforceCommercialResponsePolicy(real, 'quanto custa um site?', ctx).response, real.response)
 })
 test('NÃO REGRESSÃO: cliente existente + support/finance/existing_client nunca cria opportunity de venda', () => {
-  assert.match(worker, /if\(!resolvedClient\.created&&\['support','finance','existing_client'\]\.includes\(currentKind\.kind\)\)\{/)
-  const skipIdx = worker.indexOf("if(!resolvedClient.created&&['support','finance','existing_client']")
+  assert.match(worker, /if\(\['support','finance','existing_client'\]\.includes\(currentKind\.kind\)/)
+  const skipIdx = worker.indexOf("if(['support','finance','existing_client']")
   const returnIdx = worker.indexOf('return true', skipIdx)
   const skipBlock = worker.slice(skipIdx, returnIdx)
   assert.doesNotMatch(skipBlock, /from\('commercial_opportunities'\)\.insert/)
 })
 test('NÃO REGRESSÃO: classificação determinística roda antes da criação de opportunity', () => {
-  const classifyIdx = worker.indexOf('const currentKind=classifyConversationKind(inbound')
+  const classifyIdx = worker.indexOf('const currentKind=semanticDecision?.conversation_kind')
   const createIdx = worker.indexOf("const created=await admin.from('commercial_opportunities').insert(")
   assert.ok(classifyIdx > -1 && createIdx > -1 && classifyIdx < createIdx)
 })

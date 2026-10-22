@@ -62,21 +62,21 @@ test('8: histórico antigo nunca decide — só a mensagem atual (mesmo com prev
 // ===================================================================================================
 
 test('ordem: classifyConversationKind roda ANTES do insert em commercial_opportunities', () => {
-  const classifyIdx = worker.indexOf('const currentKind=classifyConversationKind(inbound')
+  const classifyIdx = worker.indexOf('const currentKind=semanticDecision?.conversation_kind')
   const createIdx = worker.indexOf("const created=await admin.from('commercial_opportunities').insert(")
   assert.ok(classifyIdx > -1 && createIdx > -1 && classifyIdx < createIdx)
 })
 
 test('regra: só new_business (e não support/finance/existing_client) chega ao bloco de criação de opportunity', () => {
-  assert.match(worker, /if\(!resolvedClient\.created&&\['support','finance','existing_client'\]\.includes\(currentKind\.kind\)\)\{/)
+  assert.match(worker, /if\(\['support','finance','existing_client'\]\.includes\(currentKind\.kind\)/)
   // O branch de skip sempre "return true" antes de qualquer insert em commercial_opportunities.
-  const skipIdx = worker.indexOf("if(!resolvedClient.created&&['support','finance','existing_client']")
+  const skipIdx = worker.indexOf("if(['support','finance','existing_client']")
   const returnIdx = worker.indexOf('return true', skipIdx)
   const createIdx = worker.indexOf("const created=await admin.from('commercial_opportunities').insert(")
   assert.ok(skipIdx > -1 && returnIdx > -1 && createIdx > returnIdx)
 })
 
-const skipIndex = worker.indexOf("if(!resolvedClient.created&&['support','finance','existing_client']")
+const skipIndex = worker.indexOf("if(['support','finance','existing_client']")
 const skipBlockEnd = worker.indexOf('return true', skipIndex) + 'return true'.length
 const skipBlock = worker.slice(skipIndex, skipBlockEnd)
 
@@ -107,7 +107,7 @@ test('9: handoff humano continua impedindo a IA de responder por cima (gates pre
   assert.match(worker, /if\(recheck\.data\.attendance_mode==='human'\|\|recheck\.data\.automation_paused===true\)\{/)
   // O novo branch de skip roda DEPOIS desse gate — nunca sobrepõe um humano já ativo.
   const humanGateIdx = worker.indexOf("if(conversationResult.data.attendance_mode==='human'")
-  const skipIdx = worker.indexOf("if(!resolvedClient.created&&['support','finance','existing_client']")
+  const skipIdx = worker.indexOf("if(['support','finance','existing_client']")
   assert.ok(humanGateIdx > -1 && skipIdx > humanGateIdx)
 })
 
