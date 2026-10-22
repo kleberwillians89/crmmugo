@@ -100,3 +100,8 @@ test('"já atendi" para os lembretes do atendimento e tarefa funciona depois de 
   const notifier = fs.readFileSync('supabase/functions/team-notification-worker/index.ts', 'utf8')
   assert.match(notifier, /\['handoff_acknowledged','take_conversation'\]/)
 })
+
+test('botão "Feito" do alerta de atendimento marca o contato como atendido', () => {
+  const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
+  assert.match(worker, /\^\(feito\|pronto\|ok feito\)\[\.!\]\*\$\/\.test\(foldedRaw\)&&event\.session\?\.active_intent==='CONVERSATION_BROWSE'/)
+})

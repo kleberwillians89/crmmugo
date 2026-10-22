@@ -1148,6 +1148,10 @@ async function processEvent(admin: any, event: any) {
       const fromSession=candidateItems.find((item:any)=>item.conversation_id)?.conversation_id||null
       command={intent:'ACK_CONVERSATION',conversation_id:fromSession,name_hint:cleanedRaw,confidence:1}
     }
+    // Botão "Feito" de um alerta de atendimento: marca aquele contato como atendido.
+    else if(/^(feito|pronto|ok feito)[.!]*$/.test(foldedRaw)&&event.session?.active_intent==='CONVERSATION_BROWSE'&&candidateItems[0]?.conversation_id){
+      command={intent:'ACK_CONVERSATION',conversation_id:candidateItems[0].conversation_id,name_hint:'',confidence:1}
+    }
     const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
     const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4
     const secretaryKey=Deno.env.get('OPENAI_API_KEY')||'',secretaryModel=Deno.env.get('TASK_COMMAND_MODEL')||Deno.env.get('OPENAI_MODEL')||''
