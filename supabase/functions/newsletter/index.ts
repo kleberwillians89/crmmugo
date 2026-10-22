@@ -124,6 +124,14 @@ Deno.serve(async request=>{
   if(workerKey&&request.headers.get('X-Email-Worker-Key')===workerKey){
     const configs=await admin.from('newsletter_settings').select('*').eq('enabled',true)
     const report:any[]=[]
+    // A coleta roda para toda organização com fonte ativa, mesmo com a newsletter desligada: as notícias
+    // também alimentam os ganchos da prospecção e a tela de fontes mostra se cada uma está funcionando.
+    const enabledOrgs=new Set((configs.data||[]).map((row:any)=>row.organization_id))
+    const sourceOrgs=await admin.from('newsletter_sources').select('organization_id').eq('active',true)
+    for(const org of new Set<string>((sourceOrgs.data||[]).map((row:any)=>row.organization_id))){
+      if(enabledOrgs.has(org))continue
+      try{report.push({organization_id:org,added:await refreshFeeds(admin,org),newsletter:'disabled'})}catch{/* próxima rodada */}
+    }
     for(const settings of configs.data||[]){
       try{
         const added=await refreshFeeds(admin,settings.organization_id)
