@@ -548,3 +548,21 @@ export function parseNamedDelegation(rawInput, memberNames = [], now = new Date(
   if (!title || title.split(/\s+/).length < 2) return null
   return { intent: 'CREATE_TASK', raw_text: raw, title, assignee_name: clean(match[1]), due_date: schedule.due_date, due_time: schedule.due_time || null, priority: 'medium', confidence: .95 }
 }
+
+// "Fazer post Mugô até sexta às 16hrs" / "preciso enviar a proposta amanhã": verbo no infinitivo + data,
+// sem outro comando reconhecido → tarefa para a própria pessoa (o worker sempre confirma antes de gravar).
+const SELF_TASK_LEAD = /^(?:(?:eu\s+)?(?:preciso|tenho\s+que|vou|devo)\s+)?([\p{L}]+(?:ar|er|ir|or))\s+(.+)$/iu
+const NOT_TASK_VERBS = new Set(['finalizar', 'concluir', 'terminar', 'cancelar', 'apagar', 'excluir', 'marcar', 'listar', 'ver', 'mostrar', 'iniciar', 'comecar', 'pausar', 'retomar', 'atribuir', 'mover', 'registrar', 'cobrar', 'assumir', 'por', 'por'])
+export function parseSelfTask(rawInput, now = new Date()) {
+  const raw = clean(rawInput)
+  if (raw.includes('?') || raw.split(/\s+/).length < 3) return null
+  const match = raw.match(SELF_TASK_LEAD)
+  if (!match || NOT_TASK_VERBS.has(foldText(match[1]))) return null
+  const schedule = parseTaskSchedule(raw, now)
+  if (!schedule.due_date) return null
+  const lead = raw.replace(/^(?:(?:eu\s+)?(?:preciso|tenho\s+que|vou|devo)\s+)/iu, '')
+  let title = taskTitleFromText(lead)
+  for (let index = 0; index < 2; index += 1) title = taskTitleFromText(title.replace(/\s+(?:at[eé]|para|pra|no|na|dia|em)\s*$/iu, ''))
+  if (!title || title.split(/\s+/).length < 2) return null
+  return { intent: 'CREATE_TASK', raw_text: raw, title, assignee_name: null, due_date: schedule.due_date, due_time: schedule.due_time || null, priority: 'medium', confidence: .95 }
+}

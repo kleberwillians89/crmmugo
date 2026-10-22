@@ -77,3 +77,17 @@ test('equipe: sessão não é apagada antes da seleção, aviso para quem recebe
   const notifier = fs.readFileSync('supabase/functions/team-notification-worker/index.ts', 'utf8')
   assert.match(notifier, /p\.kind === 'task_assigned'/)
 })
+
+test('tarefa própria sem "cria": verbo + data vira tarefa; alertas velhos e reações não vão para o time', async () => {
+  const { parseSelfTask } = await import('../supabase/functions/_shared/internalCommandCore.js')
+  const now = new Date('2026-10-22T19:28:00Z')
+  const own = parseSelfTask('Fazer post Mugô até sexta às 16hrs', now)
+  assert.deepEqual([own.title, own.due_date, own.due_time, own.assignee_name], ['Fazer post Mugô', '2026-10-23', '16:00', null])
+  assert.equal(parseSelfTask('finalizar site amanhã', now), null)
+  assert.equal(parseSelfTask('fazer o que hoje?', now), null)
+  const notifier = fs.readFileSync('supabase/functions/team-notification-worker/index.ts', 'utf8')
+  assert.match(notifier, /EXPIRED_STALE/)
+  assert.doesNotMatch(notifier, /Atualização da Mugô/)
+  const webhook = fs.readFileSync('supabase/functions/whatsapp-webhook/index.ts', 'utf8')
+  assert.match(webhook, /\['reaction','unsupported','sticker','system','unknown'\]\.includes\(content\.type\)/)
+})
