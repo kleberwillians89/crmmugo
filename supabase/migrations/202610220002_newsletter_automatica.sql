@@ -8,7 +8,7 @@ create table if not exists public.newsletter_settings(
   generate_weekday integer not null default 1 check(generate_weekday between 0 and 6),  -- 1 = segunda
   generate_time time not null default '07:00',
   send_weekday integer not null default 2 check(send_weekday between 0 and 6),          -- 2 = terça
-  send_time time not null default '09:00',
+  send_time time not null default '07:45',
   items_count integer not null default 5 check(items_count between 3 and 8),
   focus text,                                          -- público e temas prioritários
   template_html text,                                  -- HTML do Kleber com {{intro}}, {{itens}}, {{nome}}, {{descadastro}}

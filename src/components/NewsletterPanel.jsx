@@ -12,7 +12,7 @@ import {
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 const statusLabel = { draft: 'Aguardando aprovação', approved: 'Aprovada — agendada', sent: 'Enviada', skipped: 'Pulada', failed: 'Falhou' }
 const dateBr = (iso) => String(iso || '').split('-').reverse().join('/')
-const DEFAULTS = { enabled: false, auto_send: false, generate_weekday: 1, generate_time: '07:00', send_weekday: 2, send_time: '09:00', items_count: 5, focus: '', template_html: '', item_template_html: '', from_name: 'Mugô', from_email: '', reply_to: 'mugo.agencia@gmail.com', linkedin_cover_html: '', linkedin_slide_html: '', linkedin_hashtags: '#marketingdigital #trafegopago #ecommerce' }
+const DEFAULTS = { enabled: false, auto_send: false, generate_weekday: 1, generate_time: '07:00', send_weekday: 2, send_time: '07:45', items_count: 5, focus: '', template_html: '', item_template_html: '', from_name: 'Mugô', from_email: '', reply_to: 'mugo.agencia@gmail.com', linkedin_cover_html: '', linkedin_slide_html: '', linkedin_hashtags: '#marketingdigital #trafegopago #ecommerce' }
 
 function copy(text, done) { navigator.clipboard?.writeText(text || '').then(done, () => window.prompt('Copie o texto:', text || '')) }
 

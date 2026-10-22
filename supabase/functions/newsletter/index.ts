@@ -67,7 +67,7 @@ async function generateEdition(admin:any,settings:any,{force=false}={}){
   await upsertCampaign(admin,settings,saved.data)
   const owner=await admin.from('commercial_settings').select('commercial_owner_id').eq('organization_id',org).maybeSingle()
   if(!settings.auto_send){
-    await admin.from('crm_tasks').upsert({organization_id:org,title:'Aprovar a newsletter da semana',status:'pending',priority:'medium',due_date:today(),assigned_to:owner.data?.commercial_owner_id||null,task_type:'general',source:'automation',source_ref:`newsletter:${saved.data.id}`,notes:`${edition.subject}\nComercial → E-mail marketing → Newsletter automática.`},{onConflict:'organization_id,source_ref'})
+    await admin.from('crm_tasks').upsert({organization_id:org,title:'Aprovar a newsletter da semana (sai terça cedo)',status:'pending',priority:'high',due_date:today(),assigned_to:owner.data?.commercial_owner_id||null,task_type:'general',source:'automation',source_ref:`newsletter:${saved.data.id}`,notes:`${edition.subject}\nComercial → E-mail marketing → Newsletter automática.`},{onConflict:'organization_id,source_ref'})
   }else await approveEdition(admin,settings,saved.data,null)
   return {...saved.data,ids}
 }
@@ -151,7 +151,7 @@ Deno.serve(async request=>{
   const org=profile.data.organization_id,action=clean(body.action,40)
   try{
     const settings=await admin.from('newsletter_settings').select('*').eq('organization_id',org).maybeSingle()
-    const config=settings.data||{organization_id:org,items_count:5,send_weekday:2,send_time:'09:00'}
+    const config=settings.data||{organization_id:org,items_count:5,send_weekday:2,send_time:'07:45'}
     if(action==='refresh_feeds')return json({ok:true,data:{added:await refreshFeeds(admin,org,true)}})
     if(action==='flash'){
       // Edição extra: uma notícia quente vira post + slide para o LinkedIn na hora (sem e-mail).
