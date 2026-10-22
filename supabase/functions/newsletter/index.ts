@@ -5,7 +5,7 @@
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {generateStructured} from '../_shared/aiProvider.js'
 import {extractSiteSignals} from '../_shared/prospectingCore.js'
-import {CURATION_SCHEMA,FLASH_SCHEMA,buildCurationPrompt,expiryDue,generationDue,parseFeed,reminderDue,renderNewsletterHtml,sendAtAfterApproval,validateCuration,weekStart} from '../_shared/newsletterCore.js'
+import {CURATION_SCHEMA,FLASH_SCHEMA,buildCurationPrompt,expiryDue,extractArticleText,generationDue,parseFeed,reminderDue,renderNewsletterHtml,sendAtAfterApproval,validateCuration,weekStart} from '../_shared/newsletterCore.js'
 
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-email-worker-key','Content-Type':'application/json'}
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors})
@@ -34,6 +34,18 @@ async function refreshFeeds(admin:any,org:string,force=false){
   return added
 }
 
+async function enrichShortExcerpts(admin:any,items:any[]){
+  const short=items.filter((item:any)=>clean(item.excerpt,2000).length<220)
+  await Promise.all(short.map(async(item:any)=>{
+    try{
+      const response=await fetch(item.url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; MugoNewsletter/1.0)','Accept':'text/html'},redirect:'follow',signal:AbortSignal.timeout(8_000)})
+      if(!response.ok)return
+      const text=extractArticleText((await response.text()).slice(0,400_000))
+      if(text.length>clean(item.excerpt,2000).length){item.excerpt=text;await admin.from('industry_news').update({excerpt:text}).eq('id',item.id)}
+    }catch{/* sem página: fica com o trecho do feed */}
+  }))
+}
+
 async function generateEdition(admin:any,settings:any,{force=false}={}){
   const org=settings.organization_id,week=weekStart()
   const existing=await admin.from('newsletter_editions').select('*').eq('organization_id',org).eq('week_start',week).maybeSingle()
@@ -49,6 +61,9 @@ async function generateEdition(admin:any,settings:any,{force=false}={}){
   const perSource=new Map<string,number>()
   const candidates=(news.data||[]).filter((item:any)=>!item.edition_id||item.edition_id===existing.data?.id).filter((item:any)=>{const n=(perSource.get(item.source_name)||0)+1;perSource.set(item.source_name,n);return n<=12}).slice(0,60)
   if(candidates.length<3)throw Object.assign(new Error('Poucas notícias novas nas fontes nesta semana.'),{code:'NOT_ENOUGH_NEWS'})
+  // Feed com trecho curto (só título): abre a página da notícia e traz descrição + primeiros parágrafos,
+  // para a IA resumir com conteúdo de verdade. Fica salvo, então cada notícia é buscada uma vez só.
+  await enrichShortExcerpts(admin,candidates.slice(0,25))
   const count=Number(settings.items_count||5)
   const prompt=buildCurationPrompt({candidates,settings,count,knowledge:knowledge.data||[]})
   const result=await generateStructured({system:prompt.system,user:prompt.user,schema:CURATION_SCHEMA,schemaName:'newsletter_edition',maxTokens:3000,timeoutMs:90_000})

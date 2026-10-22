@@ -14,6 +14,31 @@ function tag(block, name) {
   return match ? match[1] : ''
 }
 
+// Rodapé automático de WordPress/feeds ("The post X appeared first on Y", "Leia mais", "Continue reading").
+const FEED_BOILERPLATE = /(the post .{0,300}? appeared first on .{0,120}?\.?$|o post .{0,300}? apareceu primeiro em .{0,120}?\.?$|\[(?:…|\.\.\.)\]|continue reading.*$|leia mais.*$|read more.*$)/gi
+const cleanExcerpt = (raw) => stripTags(raw).replace(FEED_BOILERPLATE, '').replace(/\s+/g, ' ').trim()
+/** Usa o trecho mais completo que o feed oferecer (content:encoded costuma ter o texto inteiro). */
+export function bestExcerpt(candidates = []) {
+  return candidates.map(cleanExcerpt).filter(Boolean).sort((a, b) => b.length - a.length)[0] || ''
+}
+
+/**
+ * Texto útil de uma página de notícia: descrição (og/meta) + primeiros parágrafos do artigo.
+ * Serve para a IA resumir com substância quando o feed só traz o título.
+ */
+export function extractArticleText(html = '', { max = 1500 } = {}) {
+  const page = String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<!--[\s\S]*?-->/g, ' ')
+  const meta = (name) => (page.match(new RegExp(`<meta[^>]+(?:property|name)=["']${name}["'][^>]*content=["']([^"']+)["']`, 'i')) || page.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${name}["']`, 'i')) || [])[1] || ''
+  const description = stripTags(meta('og:description') || meta('description') || meta('twitter:description'))
+  const scope = (page.match(/<article[\s\S]*?<\/article>/i) || page.match(/<main[\s\S]*?<\/main>/i) || [page])[0]
+  const paragraphs = [...scope.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)].map((m) => stripTags(m[1]))
+    .filter((text) => text.length >= 60 && !/(cookie|newsletter|assine|inscreva|todos os direitos|all rights reserved|publicidade|subscribe)/i.test(text))
+  const parts = [description, ...paragraphs.filter((text) => text !== description)]
+  let out = ''
+  for (const part of parts) { if (!part) continue; if ((out + ' ' + part).length > max) break; out = out ? `${out} ${part}` : part }
+  return out.slice(0, max)
+}
+
 /** Lê RSS 2.0 e Atom. Tolera feed truncado (ignora o último item incompleto). */
 export function parseFeed(xml, { limit = 30 } = {}) {
   const source = String(xml || '')
@@ -26,7 +51,7 @@ export function parseFeed(xml, { limit = 30 } = {}) {
     if (atom) link = (block.match(/<link[^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["']/i) || block.match(/<link[^>]*href=["']([^"']+)["']/i) || [])[1] || ''
     else link = stripTags(tag(block, 'link')) || stripTags(tag(block, 'guid'))
     const dateRaw = stripTags(tag(block, 'pubDate') || tag(block, 'published') || tag(block, 'updated') || tag(block, 'dc:date'))
-    const excerpt = stripTags(tag(block, 'description') || tag(block, 'summary') || tag(block, 'content:encoded') || tag(block, 'content')).slice(0, 600)
+    const excerpt = bestExcerpt([tag(block, 'content:encoded'), tag(block, 'description'), tag(block, 'summary'), tag(block, 'content')]).slice(0, 1500)
     const published = Date.parse(dateRaw)
     if (!title || !/^https?:\/\//i.test(link)) continue
     items.push({ title: title.slice(0, 300), url: decodeEntities(link).trim(), excerpt, published_at: Number.isFinite(published) ? new Date(published).toISOString() : null })
@@ -162,7 +187,7 @@ export function buildCurationPrompt({ candidates, settings = {}, count = 5, know
     settings.focus ? `Foco definido pelo time: ${clean(settings.focus, 800)}` : '',
     tone ? `Tom de voz da Mugô:\n${tone}` : 'Tom: direto, leve, sem jargão e sem emoji.',
   ].filter(Boolean).join('\n')
-  const list = candidates.map((item, index) => ({ n: index + 1, url: item.url, fonte: item.source_name, data: item.published_at?.slice(0, 10) || null, titulo: item.title, trecho: clean(item.excerpt, 400) }))
+  const list = candidates.map((item, index) => ({ n: index + 1, url: item.url, fonte: item.source_name, data: item.published_at?.slice(0, 10) || null, titulo: item.title, trecho: clean(item.excerpt, 900) }))
   return { system, user: `Notícias da semana:\n${JSON.stringify(list)}` }
 }
 

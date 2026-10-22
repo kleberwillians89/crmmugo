@@ -160,3 +160,64 @@ export function personalize(text, prospect = {}) {
 }
 
 export const isValidEmail = (value) => /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(clean(value, 320))
+
+// ---------------------------------------------------------------- respostas da prospecção
+// Toda resposta ao e-mail frio passa por aqui antes de virar oportunidade: "não tenho interesse",
+// "me tira da lista" e resposta automática de férias nunca sujam o funil.
+export const REPLY_CATEGORIES = ['interested', 'question', 'not_interested', 'opt_out', 'auto_reply', 'other']
+export const REPLY_CLASSIFICATION_SCHEMA = Object.freeze({
+  type: 'object', additionalProperties: false,
+  properties: {
+    category: { type: 'string', enum: REPLY_CATEGORIES },
+    reason: { type: 'string' },
+  },
+  required: ['category', 'reason'],
+})
+
+const fold = (value) => clean(value, 4000).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ')
+const OPT_OUT = /(descadastr|unsubscribe|remov(a|er|am)[^.]{0,30}(lista|contato|e-?mail)|tir(a|e|ar)[^.]{0,20}(da|dessa|desta) lista|nao (me )?(envie|mande|mandem|enviem|enviar|mandar) mais|pare(m)? de (me )?(enviar|mandar)|nao quero (mais )?receber|nao autorizo|lgpd|spam)/
+const AUTO_REPLY = /(resposta automatica|mensagem automatica|auto-?reply|automatic reply|out of (the )?office|fora do escritorio|estou (de ferias|ausente|fora)|em ferias|ausente ate|retorno (no dia|em|dia)|retornarei|sem acesso ao e-?mail|this mailbox is not monitored|nao monitorad)/
+const NOT_INTERESTED = /(nao (temos|tenho|ha) interesse|sem interesse|nao (e|eh) (o|um bom) momento|no momento nao|agora nao|nao precisamos|ja (temos|possuimos|contamos com) (uma )?(agencia|fornecedor|parceiro|equipe)|nao faz sentido|dispensamos|obrigad[oa],? mas nao)/
+const QUESTION = /(\?|quanto custa|qual (o )?(valor|preco|investimento)|como funciona|me (manda|envia|passa)|pode(mos)? (conversar|marcar|falar)|tenho interesse|temos interesse|vamos conversar|bora|agenda|reuniao|call)/
+
+/** Classificação local (sem IA): usada como trava e como fallback. */
+export function classifyReplyHeuristic(snippet = '') {
+  const text = fold(snippet)
+  if (!text) return { category: 'other', reason: 'Resposta sem texto legível.' }
+  if (OPT_OUT.test(text)) return { category: 'opt_out', reason: 'Pediu para não receber mais contatos.' }
+  if (AUTO_REPLY.test(text)) return { category: 'auto_reply', reason: 'Resposta automática (ausência/férias).' }
+  if (NOT_INTERESTED.test(text)) return { category: 'not_interested', reason: 'Disse que não tem interesse agora.' }
+  if (QUESTION.test(text)) return { category: /interesse|conversar|reuniao|agenda|call|bora/.test(text) ? 'interested' : 'question', reason: 'Demonstrou interesse ou fez uma pergunta.' }
+  return { category: 'other', reason: 'Resposta sem sinal claro.' }
+}
+
+/** Junta IA + heurística: pedido de saída e resposta automática detectados localmente sempre vencem. */
+export function resolveReplyCategory(aiResult, snippet = '') {
+  const local = classifyReplyHeuristic(snippet)
+  if (local.category === 'opt_out' || local.category === 'auto_reply') return local
+  const category = REPLY_CATEGORIES.includes(aiResult?.category) ? aiResult.category : local.category
+  return { category, reason: clean(aiResult?.reason, 300) || local.reason }
+}
+
+export function buildReplyClassificationPrompt({ prospect = {}, snippet = '' }) {
+  return {
+    system: 'Você classifica a resposta de um prospect a um e-mail de prospecção de uma agência de marketing. Categorias: interested (quer conversar/saber mais), question (fez pergunta sobre serviço/preço/como funciona), not_interested (recusou), opt_out (pediu para não receber mais/remover da lista), auto_reply (resposta automática, férias, ausência), other (nada disso). Responda só com a categoria e um motivo curto em português.',
+    user: `Empresa: ${clean(prospect.company_name, 200)}\nContato: ${clean(prospect.contact_name, 120)}\nResposta recebida:\n"""${clean(snippet, 1500)}"""`,
+  }
+}
+
+/** O que fazer com cada categoria. */
+export function replyOutcome(category) {
+  switch (category) {
+    case 'interested': case 'question': case 'other':
+      return { convert: true, prospectStatus: 'replied', suppress: false, temperature: category === 'other' ? 'cold' : 'warm' }
+    case 'not_interested':
+      return { convert: false, prospectStatus: 'disqualified', suppress: false }
+    case 'opt_out':
+      return { convert: false, prospectStatus: 'do_not_contact', suppress: true }
+    case 'auto_reply':
+      return { convert: false, prospectStatus: null, suppress: false }
+    default:
+      return { convert: true, prospectStatus: 'replied', suppress: false, temperature: 'cold' }
+  }
+}

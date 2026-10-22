@@ -2,7 +2,7 @@
 const clean = (value, max = 500) => String(value ?? '').trim().slice(0, max)
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 
-export async function convertProspectToLead(admin, { organizationId, prospect, channel = 'email', snippet = '' }) {
+export async function convertProspectToLead(admin, { organizationId, prospect, channel = 'email', snippet = '', temperature = 'warm', replyCategory = null }) {
   if (prospect.opportunity_id) return { opportunity_id: prospect.opportunity_id, client_id: prospect.client_id, created: false }
   const settings = await admin.from('commercial_settings').select('commercial_owner_id').eq('organization_id', organizationId).maybeSingle()
   const ownerId = prospect.owner_id || settings.data?.commercial_owner_id || null
@@ -30,6 +30,17 @@ export async function convertProspectToLead(admin, { organizationId, prospect, c
     clientId = inserted.data.id
   }
 
+  // Já existe negócio aberto com esse cliente (ex.: chegou antes pelo WhatsApp)? Usa o mesmo — nunca duplica.
+  const open = await admin.from('commercial_opportunities').select('id').eq('organization_id', organizationId).eq('client_id', clientId).not('stage', 'in', '(won,lost)').order('created_at', { ascending: false }).limit(1)
+  if (open.error) throw open.error
+  if (open.data?.[0]) {
+    const reused = open.data[0].id
+    await admin.from('commercial_opportunities').update({ last_interaction_at: new Date().toISOString(), next_action: 'Responder o prospect e marcar conversa', next_action_at: new Date().toISOString() }).eq('id', reused).eq('organization_id', organizationId)
+    await admin.from('prospects').update({ status: 'replied', replied_at: new Date().toISOString(), client_id: clientId, opportunity_id: reused }).eq('id', prospect.id).eq('organization_id', organizationId)
+    await admin.from('prospect_activities').insert({ organization_id: organizationId, prospect_id: prospect.id, channel, activity_type: 'linked_to_existing_opportunity', content: clean(snippet, 1000) || null, metadata: { opportunity_id: reused, client_id: clientId, reply_category: replyCategory }, created_by: null })
+    return { opportunity_id: reused, client_id: clientId, created: false }
+  }
+
   const opportunity = await admin.from('commercial_opportunities').insert({
     organization_id: organizationId,
     client_id: clientId,
@@ -39,15 +50,15 @@ export async function convertProspectToLead(admin, { organizationId, prospect, c
     email: clean(prospect.contact_email, 320) || null,
     source: channel === 'linkedin' ? 'prospeccao_linkedin' : 'prospeccao_email',
     stage: 'new_lead',
-    temperature: 'warm',
-    temperature_reason: 'Respondeu a prospecção ativa.',
+    temperature,
+    temperature_reason: replyCategory ? `Respondeu a prospecção ativa (${replyCategory}).` : 'Respondeu a prospecção ativa.',
     lead_kind: 'new_business',
     main_problem: clean(prospect.hook, 1000) || null,
     conversation_summary: clean(snippet, 1000) || null,
     next_action: 'Responder o prospect e marcar conversa',
     next_action_at: new Date().toISOString(),
     last_interaction_at: new Date().toISOString(),
-    metadata: { prospect_id: prospect.id, channel, fit_score: prospect.fit_score ?? null },
+    metadata: { prospect_id: prospect.id, channel, fit_score: prospect.fit_score ?? null, reply_category: replyCategory },
   }).select('id').single()
   if (opportunity.error) throw opportunity.error
 
