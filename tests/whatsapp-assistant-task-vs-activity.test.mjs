@@ -238,9 +238,9 @@ test('"Quais minhas tarefas amanhã?" consulta o dia perguntado, não sempre hoj
   assert.match(worker, /const queryDay=command\.due_date\|\|today\(\),isToday=queryDay===today\(\)/)
   assert.match(worker, /getMemberTaskReadModel\(admin,org,event\.team_member_id,queryDay\)/)
   assert.match(worker, /dayWindow\(queryDay\)/)
-  // A pergunta de hoje continua respondendo com o texto de sempre (nenhuma regressão de formato).
-  assert.match(worker, /const heading=isToday\?'Hoje você tem:':`Em \$\{queryDay\} você tem:`/)
-  assert.match(worker, /'Hoje você tem:'/)
+  // Cabeçalho diferente para hoje e para outra data.
+  assert.match(worker, /const heading=isToday\?/)
+  assert.match(worker, /Sua agenda — \$\{describeDatePt\(queryDay\)\}/)
 })
 
 // ===================================================================================================
@@ -461,8 +461,9 @@ test('1: formatRegisteredAt(created_at) produz "29/09/2026 às 18:19" em America
 
 // --- 2: due_date (prazo) continua um conceito separado de created_at (registro) ----------------------
 test('2: due_date (prazo) e created_at (registro) nunca se confundem — devem vir de colunas diferentes', () => {
-  assert.match(worker, /Prazo: \$\{ddmmyyyy\(task\.due_date\)\}/)
-  assert.match(worker, /Registrada: \$\{formatRegisteredAt\(task\.created_at\)\}/)
+  // No WhatsApp mostramos só o prazo (due_date); o registro (created_at) aparece no CRM ("Registrada em").
+  assert.match(worker, /Prazo: \$\{describeDatePt\(task\.due_date\)\}/)
+  assert.doesNotMatch(worker, /Prazo: \$\{formatRegisteredAt/)
   // ddmmyyyy só reordena os dígitos de due_date (uma DATE, sem timezone) — nunca reconstrói via `new Date`.
   assert.match(worker, /const ddmmyyyy = \(dueDate: string\) => \{ const \[y, m, d\] = String\(dueDate\)\.split\('-'\); return `\$\{d\}\/\$\{m\}\/\$\{y\}` \}/)
   // Os dois SELECTs de crm_tasks (novo insert e o de idempotência) trazem created_at explicitamente —
@@ -472,14 +473,12 @@ test('2: due_date (prazo) e created_at (registro) nunca se confundem — devem v
 })
 
 // --- 3: due_time aparece no prazo quando existir, no formato "às HH:MM" ------------------------------
-test('3: due_time aparece como "Prazo: DD/MM/AAAA às HH:MM" só quando due_time existir', () => {
-  assert.match(worker, /task\.due_time \? ` às \$\{String\(task\.due_time\)\.slice\(0,5\)\}` : ''/)
+test('3: due_time aparece no prazo ("até HH:MM") só quando due_time existir', () => {
+  assert.match(worker, /task\.due_time \? ` até \$\{String\(task\.due_time\)\.slice\(0,5\)\}` : ''/)
 })
 
-test('resposta de múltiplas tarefas mostra "Registradas:" uma única vez ao final (não repete created_at por item)', () => {
-  assert.match(worker, /Registradas: \$\{formatRegisteredAt\(created\[0\]\.created_at\)\}/)
-  // Cada item da lista usa ddmmyyyy no lugar do ISO cru (formato antigo "— 2026-09-29").
-  assert.match(worker, /\$\{i \+ 1\}\. \$\{taskShortId\(t\.id\)\} \$\{t\.title\}\$\{t\.due_date \? ` — \$\{ddmmyyyy\(t\.due_date\)\}` : ''\}/)
+test('resposta de múltiplas tarefas lista cada uma com data legível (nunca o ISO cru)', () => {
+  assert.match(worker, /\$\{i \+ 1\}\. \$\{t\.title\}\$\{t\.due_date \? ` — \$\{describeDatePt\(t\.due_date\)\}` : ''\}/)
 })
 
 test('OperationsHubPage (Meu Dia/Semana/Backlog) mostra "Registrada em" usando created_at em America/Sao_Paulo', () => {
