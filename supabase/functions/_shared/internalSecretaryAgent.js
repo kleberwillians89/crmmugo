@@ -154,7 +154,8 @@ export function canonicalizeSecretaryPlan(rawPlan, { operationalContext = {}, au
   if (!rawPlan || !Array.isArray(rawPlan.actions) || rawPlan.actions.length > MAX_SECRETARY_ACTIONS) return null
   const normalize = (raw, fields) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid arguments')
-    const value = { ...raw }
+    // O modelo costuma devolver todos os campos do schema com null; campo vazio não é argumento.
+    const value = Object.fromEntries(Object.entries(raw).filter(([, item]) => item !== null && item !== undefined && item !== ''))
     if (IDENTITY_FIELDS.some((field) => field in value)) throw new Error('Forbidden identity')
     for (const [alias, canonical] of [['due_date','date'],['due_time','time']]) {
       if (alias in value) {
