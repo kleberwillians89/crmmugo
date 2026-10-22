@@ -18,7 +18,7 @@ async function refreshFeeds(admin:any,org:string,force=false){
   for(const source of sources.data||[]){
     if(!force&&source.last_fetched_at&&Date.now()-Date.parse(source.last_fetched_at)<6*3_600_000)continue
     try{
-      const response=await fetch(source.url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; MugoNewsletter/1.0)','Accept':'application/rss+xml, application/atom+xml, application/xml, text/xml'},signal:AbortSignal.timeout(15_000)})
+      const response=await fetch(source.url,{headers:{'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 MugoNewsletter/1.1','Accept':'application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5','Accept-Language':'pt-BR,pt;q=0.9,en;q=0.8'},signal:AbortSignal.timeout(15_000)})
       if(!response.ok)throw new Error(`HTTP ${response.status}`)
       const items=parseFeed(await response.text(),{limit:25}).filter(item=>!item.published_at||Date.now()-Date.parse(item.published_at)<14*86_400_000)
       if(items.length){
