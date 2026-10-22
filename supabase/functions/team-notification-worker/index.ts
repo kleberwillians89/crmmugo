@@ -162,10 +162,10 @@ async function enqueueHandoffSla(admin:any){
     if(outbound.error)throw outbound.error
     const hasHumanOutbound=(outbound.data||[]).some((message:any)=>!automatedPrefixes.some(prefix=>String(message.idempotency_key||'').startsWith(prefix)))
     if(hasHumanOutbound)continue
-    const leadName=conversation.whatsapp_contacts?.display_name||conversation.whatsapp_contacts?.profile_name||`Contato final ${conversation.wa_id.slice(-4)}`
+    const leadName=conversation.whatsapp_contacts?.display_name||conversation.whatsapp_contacts?.profile_name||`Contato ${formatPhoneBr(conversation.wa_id)}`
     const candidate_items=[{index:1,type:'conversation',conversation_id:conversation.id,label:leadName}]
     const assigned=conversation.assigned_team_member_id||settings.data?.commercial_owner_id
-    if(assigned)await enqueue(admin,conversation.organization_id,assigned,'handoff_reminder',`handoff-reminder:${conversation.id}:${conversation.handoff_at}`,{kind:'handoff_reminder',conversation_id:conversation.id,lead_name:leadName,minutes:reminder,candidate_items})
+    if(assigned)await enqueue(admin,conversation.organization_id,assigned,'handoff_reminder',`handoff-reminder:${conversation.id}:${conversation.handoff_at}`,{kind:'handoff_reminder',conversation_id:conversation.id,lead_name:leadName,lead_phone:conversation.wa_id,minutes:reminder,candidate_items})
     if(elapsed<escalation)continue
     let client_notification_error:string|null=null
     try{await sendClientSlaUpdate(admin,conversation)}catch(error:any){client_notification_error=clean(error?.message,500)}
@@ -176,9 +176,26 @@ async function enqueueHandoffSla(admin:any){
     const admins=await admin.from('team_members').select('id').eq('organization_id',conversation.organization_id).eq('active',true).in('auth_profile_id',profileIds)
     if(admins.error)throw admins.error
     const target=(admins.data||[]).find((member:any)=>member.id!==assigned)||(admins.data||[])[0]
-    if(target)await enqueue(admin,conversation.organization_id,target.id,'handoff_escalation',`handoff-escalation:${conversation.id}:${conversation.handoff_at}`,{kind:'handoff_escalation',conversation_id:conversation.id,lead_name:leadName,minutes:escalation,assigned_team_member_id:assigned,client_notification_error,candidate_items})
-    if(elapsed>=critical&&target)await enqueue(admin,conversation.organization_id,target.id,'handoff_critical',`handoff-critical:${conversation.id}:${conversation.handoff_at}`,{kind:'handoff_critical',conversation_id:conversation.id,lead_name:leadName,minutes:critical,assigned_team_member_id:assigned,candidate_items})
+    if(target)await enqueue(admin,conversation.organization_id,target.id,'handoff_escalation',`handoff-escalation:${conversation.id}:${conversation.handoff_at}`,{kind:'handoff_escalation',conversation_id:conversation.id,lead_name:leadName,lead_phone:conversation.wa_id,minutes:escalation,assigned_team_member_id:assigned,client_notification_error,candidate_items})
+    if(elapsed>=critical&&target)await enqueue(admin,conversation.organization_id,target.id,'handoff_critical',`handoff-critical:${conversation.id}:${conversation.handoff_at}`,{kind:'handoff_critical',conversation_id:conversation.id,lead_name:leadName,lead_phone:conversation.wa_id,minutes:critical,assigned_team_member_id:assigned,candidate_items})
   }
+}
+
+// Contato completo + atalhos: o time abre a conversa com o cliente em 1 toque.
+const APP_URL=()=>clean(Deno.env.get('CRM_APP_URL')||'https://crmmugo.vercel.app',200).replace(/\/$/,'')
+const phoneDigits=(value:unknown)=>String(value??'').replace(/\D/g,'')
+function formatPhoneBr(value:unknown){
+  const d=phoneDigits(value),local=d.startsWith('55')&&d.length>=12?d.slice(2):d
+  if(local.length===11)return `(${local.slice(0,2)}) ${local.slice(2,7)}-${local.slice(7)}`
+  if(local.length===10)return `(${local.slice(0,2)}) ${local.slice(2,6)}-${local.slice(6)}`
+  return d?`+${d}`:''
+}
+function contactLines(p:any){
+  const digits=phoneDigits(p.lead_phone)
+  const lines:string[]=[]
+  if(digits)lines.push(`WhatsApp do cliente: ${formatPhoneBr(digits)}`,`Falar agora: https://wa.me/${digits}`)
+  if(p.conversation_id)lines.push(`Abrir no CRM: ${APP_URL()}/comunicacao/caixa-de-entrada?conversation=${p.conversation_id}`)
+  return lines.length?`\n\n${lines.join('\n')}`:''
 }
 
 const brl = (value: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value || 0))
@@ -207,11 +224,11 @@ function messageFor(item: any, memberName = '') {
   if (p.kind === 'overdue_tasks') return `Você tem ${p.count} tarefa${p.count === 1 ? '' : 's'} vencida${p.count === 1 ? '' : 's'}.`
   if (p.kind === 'receivable_due_tomorrow') return `${p.client || 'Cliente'} vence amanhã — ${brl(p.amount)}.`
   if (p.kind === 'pending_confirmation') return `Existe${p.count === 1 ? '' : 'm'} ${p.count} lançamento${p.count === 1 ? '' : 's'} financeiro${p.count === 1 ? '' : 's'} aguardando confirmação.`
-  if (p.kind === 'human_mode_message') return `${p.lead_name||'Um contato'} enviou uma nova mensagem durante o atendimento humano:\n“${clean(p.preview,500)}”`
-  if (p.kind === 'handoff_reminder') return `Lembrete: ${p.lead_name||'o lead'} aguarda atendimento humano há ${p.minutes} minutos.`
-  if (p.kind === 'handoff_escalation') return `Escalonamento: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.`
-  if (p.kind === 'handoff_critical') return `Alerta crítico: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.`
-  if (p.kind === 'qualified_lead_handoff') return [`Novo lead aguardando atendimento:`,p.name||p.company||'Lead',p.need?`Demanda: ${p.need}`:null,p.summary?`Contexto: ${p.summary}`:null,p.next_action?`Próximo passo: ${p.next_action}`:null,'','1. Assumir','2. Ver contexto'].filter(Boolean).join('\n')
+  if (p.kind === 'human_mode_message') return `${p.lead_name||'Um contato'} enviou uma nova mensagem durante o atendimento humano:\n“${clean(p.preview,500)}”${contactLines(p)}`
+  if (p.kind === 'handoff_reminder') return `Lembrete: ${p.lead_name||'o lead'} aguarda atendimento humano há ${p.minutes} minutos.${contactLines(p)}`
+  if (p.kind === 'handoff_escalation') return `Escalonamento: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.${contactLines(p)}`
+  if (p.kind === 'handoff_critical') return `Alerta crítico: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.${contactLines(p)}`
+  if (p.kind === 'qualified_lead_handoff') return [`Novo lead aguardando atendimento:`,p.name||p.company||'Lead',p.need?`Demanda: ${p.need}`:null,p.summary?`Contexto: ${p.summary}`:null,p.next_action?`Próximo passo: ${p.next_action}`:null,'','1. Assumir','2. Ver contexto'].filter(Boolean).join('\n')+contactLines(p)
   return 'Atualização da Mugô.'
 }
 
