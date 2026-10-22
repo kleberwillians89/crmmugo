@@ -116,3 +116,7 @@ export function buildTriageCtas(settings = {}, context = {}) {
   return [first, second].filter(Boolean)
 }
 export const SECOND_CTA_TEXT = 'Se preferir, você também pode falar com a gente por aqui:'
+
+// A mensagem fala em passar para o time? Então os botões da equipe vão junto.
+const TEAM_MENTION = /\b(nosso time|do time|o time|nossa equipe|da equipe|a equipe|pessoa respons[aá]vel|algu[eé]m (?:do|da) (?:time|equipe)|vou encaminhar|vou passar|encaminhei|especialista|consultor|comercial (?:vai|continua|te chama))/i
+export const mentionsTeam = (text) => TEAM_MENTION.test(String(text || ''))

@@ -122,3 +122,11 @@ test('dois números da equipe: dois botões, na ordem configurada', async () => 
   assert.match(ctas[1].url, /^https:\/\/wa\.me\/5511973510549\?text=/)
   assert.equal(buildTriageCtas({ triage_cta_url: 'https://wa.me/5511972769605' }).length, 1)
 })
+
+test('mensagem que fala do time leva os botões; pergunta de qualificação não', async () => {
+  const { mentionsTeam } = await import('../supabase/functions/_shared/attendanceCore.js')
+  for (const text of ['Certo. Vou encaminhar o contexto desta conversa para a pessoa responsável continuar com você.', 'Ainda estou acionando nosso time por aqui.', 'Perfeito! O Kleber, do nosso time, continua com você.', 'Vou passar para a nossa equipe comercial.'])
+    assert.equal(mentionsTeam(text), true, text)
+  for (const text of ['Hoje vocês já fazem anúncios ou seria começar do zero?', 'O site já está pronto para vender?'])
+    assert.equal(mentionsTeam(text), false, text)
+})
