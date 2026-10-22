@@ -2,8 +2,10 @@
 // Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TASK_COMMAND_WORKER_KEY,
 // META_ACCESS_TOKEN e, opcionalmente, OPENAI_API_KEY/TASK_COMMAND_MODEL.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
+import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
+import {advanceConversationState,scopedConversationState,conversationTrace} from '../_shared/conversationKernel.js'
+import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeSecretaryWriteRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
 
 const headers = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers })
@@ -16,10 +18,20 @@ const describeDatePt = (dueDate: string) => {
   if (dueDate === tomorrowDate()) return `amanhã, ${ddmm}`
   return ddmm
 }
+// due_date é uma DATE (sem timezone) — só reordena os dígitos, nunca reconstrói via new Date().
+const ddmmyyyy = (dueDate: string) => { const [y, m, d] = String(dueDate).split('-'); return `${d}/${m}/${y}` }
+// created_at é um timestamptz real — precisa converter para America/Sao_Paulo (nunca due_date, que é
+// só o prazo; "registrada em" é sempre o momento real do INSERT).
+const formatRegisteredAt = (createdAt: string) => {
+  const date = new Date(createdAt)
+  const datePart = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(date)
+  const timePart = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }).format(date)
+  return `${datePart} às ${timePart}`
+}
 // HELP nunca é fallback universal — reservado para pedidos explícitos de ajuda (ver GREETING_PATTERN/
 // HELP_PATTERN no parser). Texto livre não reconhecido recebe uma pergunta de esclarecimento genérica.
 const CLARIFY_TEXT = 'Não entendi esse comando. Pode me dizer de outro jeito o que você precisa?'
-const ALLOWED_INTENTS = new Set(['CREATE_TASK','LIST_TODAY','LIST_MINE','LIST_TEAM','LIST_OVERDUE','DAY_SUMMARY','COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK','LIST_WAITING_ATTENDANCE','ASSIGN_CONVERSATION','TAKE_CONVERSATION','PAUSE_AUTOMATION','RESUME_AUTOMATION','LIST_PENDING_CHARGES','ACTIVITY_START','ACTIVITY_COMPLETE','ACTIVITY_DATE_RESOLUTION','RECORD_DECISION','RECORD_OBSERVATION','RECORD_TIME','RECORD_PROPOSAL','UPDATE_PROPOSAL','ATTACH_PROPOSAL_FILE','FINANCIAL_EXPENSE_REQUEST','FINANCIAL_RECEIPT_REQUEST','FREELANCE_INCOME_REQUEST','CONFIRM_FINANCIAL','CANCEL_FINANCIAL','COLLECTION_ACTIVITY','COLLECTION_SEND','FOLLOW_UP','CLIENT_UPDATE','DOCUMENT','QUERY_OVERDUE_RECEIVABLES','QUERY_RECEIVED_TOTAL','QUERY_EXPENSES','QUERY_PENDING_CONFIRMATIONS','QUERY_WEEKLY_HOURS','HELP'])
+const ALLOWED_INTENTS = new Set(['CREATE_TASK','LIST_TODAY','LIST_MINE','LIST_TEAM','LIST_OVERDUE','DAY_SUMMARY','WEEK_SUMMARY','PLAN_MY_DAY','COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK','LIST_WAITING_ATTENDANCE','ASSIGN_CONVERSATION','TAKE_CONVERSATION','PAUSE_AUTOMATION','RESUME_AUTOMATION','LIST_PENDING_CHARGES','ACTIVITY_START','ACTIVITY_COMPLETE','ACTIVITY_DATE_RESOLUTION','RECORD_DECISION','RECORD_OBSERVATION','RECORD_TIME','RECORD_PROPOSAL','UPDATE_PROPOSAL','ATTACH_PROPOSAL_FILE','FINANCIAL_EXPENSE_REQUEST','FINANCIAL_RECEIPT_REQUEST','FREELANCE_INCOME_REQUEST','CONFIRM_FINANCIAL','CANCEL_FINANCIAL','COLLECTION_ACTIVITY','COLLECTION_SEND','FOLLOW_UP','CLIENT_UPDATE','DOCUMENT','QUERY_OVERDUE_RECEIVABLES','QUERY_RECEIVED_TOTAL','QUERY_EXPENSES','QUERY_PENDING_CONFIRMATIONS','QUERY_WEEKLY_HOURS','HELP'])
 // Comandos que expõem ou movimentam financeiro empresarial/comercial sensível: exigem admin ou manager.
 // Tarefas, atividades, horas, observações e solicitação de despesa continuam liberadas ao operador.
 const FINANCIAL_ADMIN_INTENTS = new Set(['FINANCIAL_RECEIPT_REQUEST','FREELANCE_INCOME_REQUEST','COLLECTION_SEND','LIST_PENDING_CHARGES','RECORD_PROPOSAL','UPDATE_PROPOSAL','QUERY_OVERDUE_RECEIVABLES','QUERY_RECEIVED_TOTAL','QUERY_EXPENSES'])
@@ -32,7 +44,7 @@ async function aiFallback(rawText: string, context: Record<string, unknown> = {}
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: Deno.env.get('TASK_COMMAND_MODEL') || 'gpt-5-mini',
+      model: Deno.env.get('TASK_COMMAND_MODEL') || Deno.env.get('OPENAI_MODEL') || '',
       input: [{ role: 'system', content: 'Classifique um comando operacional interno em português. Use o contexto de sessão (active_intent, state, candidate_items, mensagens recentes) para resolver continuações e referências. Nunca invente IDs, registros ou dados fora do contexto recebido. Retorne somente JSON.' }, { role: 'user', content: JSON.stringify({ message: rawText, ...context }) }],
       text: { format: { type: 'json_schema', name: 'task_command', strict: true, schema: { type: 'object', additionalProperties: false, properties: { intent: { type: 'string', enum: [...ALLOWED_INTENTS] }, title: { type: ['string','null'] }, assignee_name: { type: ['string','null'] }, task_short_id: { type: ['string','null'] }, subject_query: { type: ['string','null'] }, priority: { type: ['string','null'], enum: ['low','medium','high','critical',null] }, due_date: { type: ['string','null'] }, summary:{type:['string','null']},amount:{type:['number','null']},hours:{type:['number','null']},category_name:{type:['string','null']},description:{type:['string','null']},project_source:{type:['string','null']},service:{type:['string','null']},currency:{type:['string','null']},proposal_status:{type:['string','null']},collection_kind:{type:['string','null'],enum:['contacted','unpaid_status','promised',null]},period:{type:['string','null'],enum:['today','month',null]},month_name:{type:['string','null']} }, required: ['intent','title','assignee_name','task_short_id','subject_query','priority','due_date','summary','amount','hours','category_name','description','project_source','service','currency','proposal_status','collection_kind','period','month_name'] } } },
     }), signal: AbortSignal.timeout(15_000),
@@ -82,7 +94,9 @@ const findTask = async (admin: any, event: any, command: any) => {
   }
   const needle = foldText(command.task_query)
   if (!needle) return { kind: 'none', items: [] }
-  const result = await admin.from('crm_tasks').select('id,title,status,due_date,priority,metadata').eq('organization_id', event.organization_id).not('status', 'in', '(completed,cancelled)').limit(500)
+  let query=admin.from('crm_tasks').select('id,title,status,due_date,priority,metadata').eq('organization_id', event.organization_id).is('archived_at',null)
+  query=command.intent==='REOPEN_TASK'?query.eq('status','completed'):query.not('status','in','(completed,cancelled)')
+  const result = await query.limit(500)
   if (result.error) throw result.error
   const rows = result.data || []
   const exact = rows.filter((item: any) => foldText(item.title) === needle)
@@ -96,21 +110,31 @@ async function applyTaskAction(admin: any, event: any, task: any, intent: string
   const patch: any = { metadata: { ...(task.metadata || {}), origin: 'whatsapp', command_event_id: event.id } }
   if (intent === 'COMPLETE_TASK') { patch.status = 'completed'; patch.completed_at = new Date().toISOString() }
   if (intent === 'START_TASK') patch.status = 'in_progress'
+  if (intent === 'REOPEN_TASK') {patch.status='pending';patch.completed_at=null}
   if (intent === 'CANCEL_TASK') patch.status = 'cancelled'
   if (intent === 'UPDATE_TASK_STATUS') patch.status = fields.task_status
-  if (intent === 'MOVE_TASK') patch.due_date = fields.due_date
+  if (intent === 'MOVE_TASK') {
+    if (fields.due_date) patch.due_date = fields.due_date
+    if (fields.due_time) patch.due_time = fields.due_time
+  }
   if (intent === 'SET_PRIORITY') patch.priority = fields.priority
   if (intent === 'ASSIGN_TASK') {
     const member = await findMember(admin, event, fields.assignee_name)
-    if (!member) return { reply: 'Não encontrei um único responsável ativo com esse nome.' }
+    if (!member) return { status:'awaiting_context',reply: 'Não encontrei um único responsável ativo com esse nome.' }
     patch.assigned_to = member.id
   }
-  const changed = await admin.from('crm_tasks').update(patch).eq('id', task.id).eq('organization_id', event.organization_id)
+  let mutation=admin.from('crm_tasks').update(patch).eq('id',task.id).eq('organization_id',event.organization_id).is('archived_at',null)
+  if(intent==='REOPEN_TASK')mutation=mutation.eq('status','completed')
+  const changed = await mutation.select('id').maybeSingle()
   if (changed.error) throw changed.error
+  if(!changed.data)return{status:'awaiting_context',reply:'A tarefa não está mais disponível para alteração. Posso consultar novamente.'}
   event.entity_type = 'crm_tasks'; event.entity_id = task.id
-  return { reply: `${taskShortId(task.id)} atualizada ✓` }
+  return { reply: `${taskShortId(task.id)} ${intent==='REOPEN_TASK'?'reaberta':'atualizada'} ✓` }
 }
 const taskLines = (items: any[]) => items.length ? items.slice(0, 15).map((item: any) => `${item.priority === 'high' || item.priority === 'critical' ? '🔴' : '•'} ${taskShortId(item.id)} ${item.title}${item.due_date ? ` — ${item.due_date}` : ''}`).join('\n') : 'Nenhuma tarefa encontrada.'
+// Mantém uma action por demanda. Além de preservar prazo/horário/responsável, isso deixa cada criação
+// com checkpoint e entity_id próprios para correções naturais posteriores sem duplicar tarefa.
+const compactSecretaryCommands=(commands:any[])=>commands
 const brl=(value:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(value)
 const dayWindow=(day:string=today())=>({start:`${day}T00:00:00-03:00`,end:`${day}T23:59:59.999-03:00`})
 const friendlyFailure=(error:any)=>{
@@ -128,7 +152,8 @@ async function isAdminActor(admin:any,event:any){
   return ['admin','manager'].includes(profile.data?.role)
 }
 async function recordEvent(admin:any,event:any,type:string,title:string,description:string,metadata:any={},itemIndex:number|null=null,occurredAt:string|null=null){
-  const idempotencyKey=itemIndex===null?`command:${event.id}:${type}`:`command:${event.id}:${type}:${itemIndex}`
+  const actionPart=Number.isInteger(event.action_index)?`:action:${event.action_index}`:''
+  const idempotencyKey=itemIndex===null?`command:${event.id}${actionPart}:${type}`:`command:${event.id}${actionPart}:${type}:${itemIndex}`
   const row:any={organization_id:event.organization_id,event_type:type,title,description:clean(description,1000),team_member_id:event.team_member_id,conversation_id:event.conversation_id,source:'whatsapp',metadata,idempotency_key:idempotencyKey}
   if(occurredAt)row.occurred_at=occurredAt
   const result=await admin.from('operational_events').upsert(row,{onConflict:'organization_id,idempotency_key',ignoreDuplicates:true}).select('id,occurred_at').maybeSingle()
@@ -275,13 +300,32 @@ async function confirmCommercial(admin:any,event:any,pending:any,cancel=false){
 
 async function execute(admin: any, event: any, command: any) {
   const org = event.organization_id
+  if(command.intent==='SEARCH_TASKS'){
+    const owner=await findMember(admin,event,command.assignee_name||null)
+    if(!owner)return{status:'awaiting_context',reply:'Qual membro da equipe você quer consultar?'}
+    let query=admin.from('crm_tasks').select('id,title,status,due_date,due_time,assigned_to').eq('organization_id',org).eq('assigned_to',owner.id).is('archived_at',null)
+    if(command.task_query)query=query.ilike('title',`%${clean(command.task_query,240).replaceAll('%','\\%').replaceAll('_','\\_')}%`)
+    if(command.task_status)query=query.eq('status',command.task_status)
+    if(command.due_date)query=query.eq('due_date',command.due_date)
+    const rows=await query.order('due_date').limit(20)
+    if(rows.error)throw rows.error
+    const candidates=(rows.data||[]).map((item:any,index:number)=>({index:index+1,type:'task',task_id:item.id,label:item.title,status:item.status,due_date:item.due_date,due_time:item.due_time}))
+    await saveAssistantSession(admin,event,{state:'idle',active_intent:'TASK_BROWSE',context:{candidate_items:candidates},pending_action:null,pending_entity_type:null,pending_entity_id:null})
+    return candidates.length?`${owner.name}:\n${candidates.map((item:any)=>`${item.index}. ${item.label} — ${item.status}${item.due_date?` — ${item.due_date}`:''}${item.due_time?` ${item.due_time.slice(0,5)}`:''}`).join('\n')}`:'Não encontrei tarefas com esses filtros.'
+  }
+  if(command.intent==='SEARCH_CLIENTS'){
+    if(!command.subject_query)return{status:'awaiting_context',reply:'Qual cliente você quer consultar?'}
+    const rows=await admin.from('clients').select('id,company_name,trade_name,status').eq('organization_id',org).neq('status','archived').ilike('company_name',`%${clean(command.subject_query,240).replaceAll('%','\\%').replaceAll('_','\\_')}%`).limit(10)
+    if(rows.error)throw rows.error
+    return rows.data?.length?rows.data.map((item:any)=>`${item.trade_name||item.company_name} — ${item.status}`).join('\n'):'Não encontrei esse cliente pelo nome cadastrado.'
+  }
   if (command.intent === 'HELP') return HELP_TEXT
   if (command.intent === 'GREETING') {
     const firstName = clean(event.team_member?.name).split(' ')[0]
     const model=await getMemberTaskReadModel(admin,org,event.team_member_id,today())
-    await saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'MAIN_MENU',context:{candidate_items:model.candidateItems,menu_items:[{index:1,intent:'LIST_MINE'},{index:2,intent:'ACTIVITY_CAPTURE'},{index:3,intent:'CREATE_TASK'},{index:4,intent:'RECORD_TIME'},{index:5,intent:'FINANCIAL_MENU'},{index:6,intent:'LIST_PENDING_CHARGES'},{index:7,intent:'LIST_WAITING_ATTENDANCE'}]},pending_action:'select_menu_item',pending_entity_type:null,pending_entity_id:null})
+    await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'PLAN_MY_DAY',context:{candidate_items:model.candidateItems},pending_action:'offer_plan_day',pending_entity_type:null,pending_entity_id:null})
     const taskCount=model.today.length,overdueCount=model.overdue.length
-    return `${firstName?`Bom dia, ${firstName}.`:'Bom dia.'}\n\nHoje você tem ${taskCount} tarefa${taskCount===1?'':'s'} e ${overdueCount} atrasada${overdueCount===1?'':'s'}.\n\n1. Ver tarefas\n2. Registrar atividade\n3. Criar tarefa\n4. Registrar horas\n5. Financeiro\n6. Cobranças\n7. Atendimento`
+    return `${firstName?`Bom dia, ${firstName}.`:'Bom dia.'} Você tem ${taskCount} tarefa${taskCount===1?'':'s'} hoje e ${overdueCount} atrasada${overdueCount===1?'':'s'}. Quer que eu organize seu dia?`
   }
   if (FINANCIAL_ADMIN_INTENTS.has(command.intent) && !(await isAdminActor(admin, event))) {
     return 'Esse comando exige permissão financeira/comercial. Peça para um administrador confirmar.'
@@ -599,10 +643,34 @@ async function execute(admin: any, event: any, command: any) {
     const heading=isToday?'Hoje você tem:':`Em ${queryDay} você tem:`
     return `${heading}\n\n${taskModel.today.length} tarefa${taskModel.today.length===1?'':'s'} e ${taskModel.overdue.length} atrasada${taskModel.overdue.length===1?'':'s'}.${taskList}${activitySuffix}`
   }
+  if(command.intent==='PLAN_MY_DAY'){
+    const queryDay=command.due_date||today()
+    const model=await getMemberTaskReadModel(admin,org,event.team_member_id,queryDay)
+    const rank:any={critical:0,high:1,medium:2,low:3}
+    const ordered=[...model.tasks].sort((left:any,right:any)=>{
+      const overdueDifference=Number(right.due_date<queryDay)-Number(left.due_date<queryDay)
+      if(overdueDifference)return overdueDifference
+      const priorityDifference=(rank[left.priority]??2)-(rank[right.priority]??2)
+      if(priorityDifference)return priorityDifference
+      return String(left.due_time||'99:99').localeCompare(String(right.due_time||'99:99'))
+    })
+    await saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'TASK_BROWSE',context:{candidate_items:model.candidateItems},pending_action:'select_task',pending_entity_type:'crm_tasks',pending_entity_id:null})
+    if(!ordered.length)return 'Seu dia está livre de tarefas marcadas e atrasadas.'
+    const rows=ordered.slice(0,12).map((item:any,index:number)=>{
+      const timing=item.due_date<queryDay?'atrasada':item.due_time?String(item.due_time).slice(0,5):null
+      const client=item.clients?.trade_name||item.clients?.company_name
+      return {priority:item.due_date<queryDay||['critical','high'].includes(item.priority),line:`${index+1}. ${item.title}${client?` — ${client}`:''}${timing?` — ${timing}`:''}`}
+    })
+    const priorityRows=rows.filter((item:any)=>item.priority),laterRows=rows.filter((item:any)=>!item.priority),sections=[]
+    if(priorityRows.length)sections.push(`Prioridade:\n${priorityRows.map((item:any)=>item.line).join('\n')}`)
+    if(laterRows.length)sections.push(`${priorityRows.length?'Depois':'Pendências'}:\n${laterRows.map((item:any)=>item.line).join('\n')}`)
+    return `Seu dia está assim:\n\n${sections.join('\n\n')}\n\nVocê tem ${model.overdue.length} item${model.overdue.length===1?'':'s'} atrasado${model.overdue.length===1?'':'s'}.`
+  }
   if (['LIST_TODAY','LIST_OVERDUE'].includes(command.intent)) {
     let query = admin.from('crm_tasks').select('id,title,status,priority,due_date,planned_hours').eq('organization_id', org).not('status', 'in', '(completed,cancelled)').order('due_date')
     if (command.intent === 'LIST_TODAY') query = query.eq('due_date', today())
     if (command.intent === 'LIST_OVERDUE') query = query.lt('due_date', today())
+    if (command.intent === 'LIST_OVERDUE') query = query.eq('assigned_to',event.team_member_id)
     const result = await query
     if (result.error) throw result.error
     return `${command.intent === 'LIST_OVERDUE' ? 'Tarefas atrasadas' : 'Hoje na Mugô'} — ${today()}\n\n${taskLines(result.data || [])}`
@@ -628,6 +696,19 @@ async function execute(admin: any, event: any, command: any) {
     if (decisions) lines.push(`${decisions} decisão${decisions === 1 ? '' : 'ões'} registrada${decisions === 1 ? '' : 's'}`)
     if (observations) lines.push(`${observations} observação${observations === 1 ? '' : 'ões'} registrada${observations === 1 ? '' : 's'}`)
     return `O que você fez hoje (${today()}):\n${lines.map((line) => `• ${line}`).join('\n')}`
+  }
+  if(command.intent==='WEEK_SUMMARY'){
+    const anchor=command.due_date||today(),date=new Date(`${anchor}T12:00:00Z`),weekday=date.getUTCDay()||7
+    date.setUTCDate(date.getUTCDate()-weekday+1)
+    const startDay=date.toISOString().slice(0,10);date.setUTCDate(date.getUTCDate()+6);const endDay=date.toISOString().slice(0,10)
+    const [tasks,events]=await Promise.all([
+      admin.from('crm_tasks').select('id,status,due_date').eq('organization_id',org).eq('assigned_to',event.team_member_id).gte('due_date',startDay).lte('due_date',endDay),
+      admin.from('operational_events').select('event_type,metadata').eq('organization_id',org).eq('team_member_id',event.team_member_id).gte('occurred_at',`${startDay}T00:00:00-03:00`).lte('occurred_at',`${endDay}T23:59:59.999-03:00`),
+    ])
+    if(tasks.error||events.error)throw tasks.error||events.error
+    const taskRows=tasks.data||[],eventRows=events.data||[],completed=eventRows.filter((item:any)=>item.event_type==='activity_completed').length
+    const hours=eventRows.filter((item:any)=>item.event_type==='time_recorded').reduce((sum:number,item:any)=>sum+Number(item.metadata?.hours||0),0)
+    return `Sua semana (${startDay} a ${endDay}):\n• ${taskRows.filter((item:any)=>item.status==='completed').length} tarefas concluídas\n• ${taskRows.filter((item:any)=>!['completed','cancelled'].includes(item.status)).length} tarefas em aberto\n• ${completed} atividades concluídas\n• ${hours}h registradas`
   }
   if (command.intent === 'QUERY_OVERDUE_RECEIVABLES') {
     const rows = await admin.from('invoice_installments').select('id,due_date,amount,received_amount,clients(company_name)').eq('organization_id', org).in('status', ['pending', 'partial', 'overdue']).lt('due_date', today()).order('due_date').limit(30)
@@ -675,11 +756,18 @@ async function execute(admin: any, event: any, command: any) {
     return `Você trabalhou ${total}h essa semana.`
   }
   if (command.intent === 'LIST_TEAM') {
-    const [members, tasks] = await Promise.all([admin.from('team_members').select('id,name').eq('organization_id', org).eq('active', true), admin.from('crm_tasks').select('assigned_to,status,due_date').eq('organization_id', org).eq('due_date', today())])
+    const queryDay=command.due_date||today()
+    const [members, tasks] = await Promise.all([admin.from('team_members').select('id,name').eq('organization_id', org).eq('active', true), admin.from('crm_tasks').select('assigned_to,status,due_date').eq('organization_id', org).eq('due_date', queryDay)])
     if (members.error || tasks.error) throw members.error || tasks.error
     const needle=foldText(command.assignee_name);const selected=(members.data||[]).filter((member:any)=>!needle||foldText(member.name).includes(needle))
     if(command.assignee_name&&selected.length!==1)return `Não encontrei um único membro ativo chamado “${clean(command.assignee_name)}”.`
-    return `Equipe hoje\n\n${selected.map((member: any) => { const mine = (tasks.data || []).filter((task: any) => task.assigned_to === member.id); return `${member.name}: ${mine.filter((task: any) => !['completed','cancelled'].includes(task.status)).length} pendentes · ${mine.filter((task: any) => task.status === 'completed').length} concluídas` }).join('\n')}`
+    return `Equipe em ${queryDay}\n\n${selected.map((member: any) => { const mine = (tasks.data || []).filter((task: any) => task.assigned_to === member.id); return `${member.name}: ${mine.filter((task: any) => !['completed','cancelled'].includes(task.status)).length} pendentes · ${mine.filter((task: any) => task.status === 'completed').length} concluídas` }).join('\n')}`
+  }
+  if(command.intent==='CREATE_TASK_DATE_UNRESOLVED'){
+    // Resposta durante resolve_task_date sem data reconhecível: preserva a sessão (nada é limpo, nada é
+    // criado, nenhuma decisão/observação é gravada) e pergunta de novo — nunca passa pelo fallback de IA.
+    const pendingItems=Array.isArray(event.session?.context?.pending_items)?event.session.context.pending_items:[]
+    return pendingItems.length>1?'Qual dia? Pode responder hoje, amanhã, sexta ou dia 5 de outubro.':`Qual dia fica "${clean(pendingItems[0]?.title)}"? Pode responder hoje, amanhã, sexta ou dia 5 de outubro.`
   }
   if (command.intent === 'CREATE_TASK') {
     // Fluxo obrigatório: intenção → título → data → confirmação explícita → persistência. Sem título,
@@ -694,7 +782,7 @@ async function execute(admin: any, event: any, command: any) {
       return `Qual dia e horário devo colocar para “${clean(command.title)}”?`
     }
     const assignee = await findMember(admin, event, command.assignee_name)
-    if (command.assignee_name && !assignee) return `Não encontrei um único membro ativo chamado “${clean(command.assignee_name)}”. Confira o nome e tente novamente.`
+    if (command.assignee_name && !assignee) return {status:'awaiting_context',reply:`Não encontrei um único membro ativo chamado “${clean(command.assignee_name)}”. Confira o nome e tente novamente.`}
     const items = Array.isArray(command.items) && command.items.length ? command.items : [{ title: command.title, due_date: command.due_date, due_time: command.due_time, task_type: command.task_type, participant_name: command.participant_name }]
     if (items.some((item:any)=>!clean(item.title)||isTaskCreationCommandOnly(item.title))) {
       await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:'CREATE_TASK',context:{},pending_action:'describe_tasks',pending_entity_type:null,pending_entity_id:null})
@@ -707,7 +795,7 @@ async function execute(admin: any, event: any, command: any) {
       await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:'CREATE_TASK',context:{pending_items:items,assignee_name:command.assignee_name||null,task_type:command.task_type||null,priority:command.priority||null},pending_action:'resolve_task_date',pending_entity_type:null,pending_entity_id:null})
       return items.length>1?'Para quando ficam essas tarefas?':`Para quando fica "${clean(items[0].title)}"?`
     }
-    if (!command.date_confirmed) {
+    if (!command.date_confirmed && !command.secretary_direct) {
       await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'CREATE_TASK',context:{pending_items:items,assignee_name:command.assignee_name||null,task_type:command.task_type||null,priority:command.priority||null},pending_action:'confirm_task_date',pending_entity_type:null,pending_entity_id:null})
       return items.length>1
         ? `Confirmo estas tarefas?\n${items.map((item:any)=>`"${clean(item.title)}" — ${describeDatePt(item.due_date)}`).join('\n')}`
@@ -716,32 +804,35 @@ async function execute(admin: any, event: any, command: any) {
     const created: any[] = []
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index]
-      const sourceRef = items.length > 1 ? `${event.id}:${index}` : event.id
-      const existing = await admin.from('crm_tasks').select('id,title,due_date').eq('organization_id', org).eq('source_ref', sourceRef).maybeSingle()
+      const actionPart=Number.isInteger(event.action_index)?`:action:${event.action_index}`:''
+      const sourceRef = items.length > 1 ? `${event.id}${actionPart}:${index}` : `${event.id}${actionPart}`
+      const existing = await admin.from('crm_tasks').select('id,title,due_date,due_time,created_at').eq('organization_id', org).eq('source_ref', sourceRef).maybeSingle()
       if (existing.error) throw existing.error
       const client = existing.data ? null : await resolveClientMentionedIn(admin, org, item.title)
-      const inserted = existing.data ? { data: existing.data, error: null } : await admin.from('crm_tasks').insert({ organization_id: org, title: clean(item.title, 240), category: 'Trabalho', client_id: client?.id || null, assigned_to: assignee?.id || event.team_member_id, due_date: item.due_date || null, due_time: item.due_time || null, task_type: item.task_type || command.task_type || 'general', priority: command.priority || 'medium', source: 'whatsapp', source_ref: sourceRef, metadata: { origin: 'whatsapp', command_event_id: event.id, ...(item.participant_name ? { participant_name: item.participant_name } : {}) } }).select('id,title,due_date,due_time').single()
+      const inserted = existing.data ? { data: existing.data, error: null } : await admin.from('crm_tasks').insert({ organization_id: org, title: clean(item.title, 240), category: 'Trabalho', client_id: client?.id || null, assigned_to: assignee?.id || event.team_member_id, due_date: item.due_date || null, due_time: item.due_time || null, task_type: item.task_type || command.task_type || 'general', priority: command.priority || 'medium', source: 'whatsapp', source_ref: sourceRef, metadata: { origin: 'whatsapp', command_event_id: event.id, ...(item.participant_name ? { participant_name: item.participant_name } : {}) } }).select('id,title,due_date,due_time,created_at').single()
       if (inserted.error) throw inserted.error
       created.push({ ...inserted.data, client })
     }
     await clearAssistantSession(admin, event)
     event.entity_type='crm_tasks';event.entity_id=created[0].id
     if (created.length > 1) {
-      return `Prontinho. Criei ${created.length} tarefas ✓\n\n${created.map((t: any, i: number) => `${i + 1}. ${taskShortId(t.id)} ${t.title}${t.due_date ? ` — ${t.due_date}` : ''}`).join('\n')}`
+      return `Prontinho. Criei ${created.length} tarefas ✓\n\n${created.map((t: any, i: number) => `${i + 1}. ${taskShortId(t.id)} ${t.title}${t.due_date ? ` — ${ddmmyyyy(t.due_date)}` : ''}`).join('\n')}\n\nRegistradas: ${formatRegisteredAt(created[0].created_at)}`
     }
     const task = created[0]
-    return `Tarefa criada ✓\n${taskShortId(task.id)} ${task.title}${task.client ? ` — ${task.client.trade_name||task.client.company_name}` : ''}${task.due_date ? `\nPrazo: ${task.due_date}${task.due_time ? ` às ${String(task.due_time).slice(0,5)}` : ''}` : ''}`
+    return `Tarefa criada ✓\n${taskShortId(task.id)} ${task.title}${task.client ? ` — ${task.client.trade_name||task.client.company_name}` : ''}${task.due_date ? `\nPrazo: ${ddmmyyyy(task.due_date)}${task.due_time ? ` às ${String(task.due_time).slice(0,5)}` : ''}` : ''}\nRegistrada: ${formatRegisteredAt(task.created_at)}`
   }
-  if (['COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK'].includes(command.intent)) {
+  if (['REOPEN_TASK','COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK'].includes(command.intent)) {
     const found = await findTask(admin, event, command)
     if (found.kind === 'ambiguous') {
       const candidateItems = found.items.slice(0, 8).map((item: any, index: number) => ({ index: index + 1, type: 'task', task_id: item.id, label: item.title }))
-      await saveAssistantSession(admin, event, { state: 'awaiting_selection', active_intent: 'TASK_SELECTION', context: { candidate_items: candidateItems, pending_task_intent: command.intent, pending_task_fields: { due_date: command.due_date, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status } }, pending_action: 'select_task', pending_entity_type: 'crm_tasks', pending_entity_id: null })
+      await saveAssistantSession(admin, event, { state: 'awaiting_selection', active_intent: 'TASK_SELECTION', context: { candidate_items: candidateItems, pending_task_intent: command.intent, pending_task_fields: { due_date: command.due_date, due_time: command.due_time, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status } }, pending_action: 'select_task', pending_entity_type: 'crm_tasks', pending_entity_id: null })
       return `Encontrei mais de uma:\n\n${candidateItems.map((c: any) => `${c.index}. ${c.label}`).join('\n')}\n\nQual delas?`
     }
-    if (found.kind !== 'one') return 'Não encontrei essa tarefa. Pode me dizer o nome como está no CRM, ou usar o código curto se tiver (ex.: #A1B2C3).'
-    const outcome = await applyTaskAction(admin, event, found.item, command.intent, { due_date: command.due_date, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status })
-    return outcome.reply
+    if (found.kind !== 'one') return {status:'awaiting_context',reply:'Não encontrei essa tarefa. Pode me dizer o nome como está no CRM, ou usar o código curto se tiver (ex.: #A1B2C3).'}
+    if(command.intent==='REOPEN_TASK'&&found.item.status!=='completed')return{status:'awaiting_context',reply:'Essa tarefa não está concluída. Quer consultar o estado atual?'}
+    const outcome = await applyTaskAction(admin, event, found.item, command.intent, { due_date: command.due_date, due_time: command.due_time, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status })
+    await saveAssistantSession(admin,event,{state:'idle',active_intent:'TASK_BROWSE',context:{candidate_items:[{index:1,type:'task',task_id:found.item.id,label:found.item.title}],selected_task:{index:1,type:'task',task_id:found.item.id,label:found.item.title}},pending_action:null,pending_entity_type:'crm_tasks',pending_entity_id:found.item.id})
+    return outcome
   }
   if (command.intent === 'LIST_WAITING_ATTENDANCE') {
     if(command.subject_query){const result=await admin.from('whatsapp_conversations').select('assigned_team_member_id,whatsapp_contacts!inner(display_name,profile_name)').eq('organization_id',org).neq('status','closed').limit(200);if(result.error)throw result.error;const needle=foldText(command.subject_query),matches=(result.data||[]).filter((item:any)=>foldText(item.whatsapp_contacts?.display_name||item.whatsapp_contacts?.profile_name).includes(needle));if(matches.length!==1)return 'Não encontrei uma única conversa com esse nome.';if(!matches[0].assigned_team_member_id)return `${clean(command.subject_query)} ainda não tem responsável.`;const owner=await admin.from('team_members').select('name').eq('id',matches[0].assigned_team_member_id).eq('organization_id',org).maybeSingle();if(owner.error)throw owner.error;return owner.data?.name?`${clean(command.subject_query)} está com ${owner.data.name}.`:`${clean(command.subject_query)} ainda não tem responsável.`}
@@ -781,9 +872,12 @@ async function execute(admin: any, event: any, command: any) {
 }
 
 async function processEvent(admin: any, event: any) {
+  const turnStartedAt=Date.now()
   const claimed = await admin.from('task_command_events').update({ status: 'processing', attempts: Number(event.attempts || 0) + 1 }).eq('id', event.id).in('status', ['pending','failed']).select('id').maybeSingle()
   if (claimed.error || !claimed.data) return false
   try {
+    let secretaryPlan:any=null,secretaryCommands:any[]=[],processingPath='deterministic_gate'
+    let plannerStatus:string|null=null,plannerHttpStatus:number|null=null,plannerErrorClass:string|null=null,secretaryTeam:any[]|null=null
     let command: any = ['document','image'].includes(event.message_type)&&event.media?.id
       ? {intent:'ATTACH_PROPOSAL_FILE',confidence:1}
       : parseInternalCommand(event.raw_text)
@@ -793,7 +887,32 @@ async function processEvent(admin: any, event: any) {
     const member = await admin.from('team_members').select('id,name,auth_profile_id').eq('id', event.team_member_id).eq('organization_id', event.organization_id).eq('active', true).single()
     if (member.error) throw Object.assign(new Error('Membro interno não está mais ativo.'), { code: 'TEAM_MEMBER_INACTIVE' })
     event.team_member = member.data
+    const conversationScope=`${event.organization_id}:${event.team_member_id}:${event.conversation_id||event.wa_id}`
+    const conversationState=scopedConversationState(event.session?.context?.conversation_state,conversationScope)
+    const conversationHistory=await admin.from('whatsapp_messages').select('direction,text_content,created_at').eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).order('created_at',{ascending:false}).limit(16)
+    if(conversationHistory.error)throw conversationHistory.error
+    if(event.session)event.session.context={...event.session.context,conversation_state:conversationState}
     const cleanedRaw=clean(event.raw_text),foldedRaw=foldText(cleanedRaw)
+    if(event.session?.context?.secretary_plan?.interrupted_at && Date.now()-event.session.context.secretary_plan.interrupted_at>=30*60*1000){
+      if(event.session.active_intent==='SECRETARY_PLAN')await clearAssistantSession(admin,event)
+      else await saveAssistantSession(admin,event,{state:event.session.state,active_intent:event.session.active_intent,context:{...event.session.context,secretary_plan:null},pending_action:event.session.pending_action,pending_entity_type:event.session.pending_entity_type,pending_entity_id:event.session.pending_entity_id})
+    }
+    const previousSecretaryPlan=event.session?.context?.secretary_plan||null
+    // Um plano onde TODAS as actions já terminaram (completed) não pode sequestrar o próximo pedido: "qual
+    // minha demanda de hoje?" (leitura já concluída) seguido de "cria uma tarefa..." precisa ser
+    // new_request, nunca "Não consegui continuar esse plano agora." Só um plano com algo GENUINAMENTE
+    // pendente (dado faltando, confirmação, falha recuperável) é dono do próximo turno.
+    const secretaryOwnsTurn=Array.isArray(previousSecretaryPlan?.actions)&&previousSecretaryPlan.actions.some((action:any)=>['needs_input','awaiting_confirmation','failed'].includes(action.status))
+    // Tarefas recém-criadas nesta MESMA conversa (mesmo as de outro membro, ex. "Origami pra Julia") e
+    // conclusões recém-feitas — nunca uma consulta a qualquer tarefa da organização, só o que este
+    // plano específico já tocou. Usado para resolver "e a da Julia deixa amanhã" e desfazer uma
+    // conclusão que acabou de acontecer ("não, pera, não termina não").
+    const recentPlanActions:any[]=Array.isArray(previousSecretaryPlan?.actions)?previousSecretaryPlan.actions:[]
+    const recentPlanTasks=recentPlanActions.filter((action:any)=>action.command?.intent==='CREATE_TASK'&&action.status==='completed').flatMap((action:any)=>{
+      const items=Array.isArray(action.command.items)&&action.command.items.length?action.command.items:[{title:action.command.title}]
+      return items.map((item:any)=>({title:item.title,assignee_name:action.command.assignee_name||null,status:'pending'}))
+    })
+    const recentCompletedTasks=recentPlanActions.filter((action:any)=>action.command?.intent==='COMPLETE_TASK'&&action.status==='completed'&&action.result?.entity_id).map((action:any)=>({entity_id:action.result.entity_id}))
     const candidateItems:any[]=Array.isArray(event.session?.context?.candidate_items)?event.session.context.candidate_items:[]
     const selectableItems=candidateItems.length?candidateItems:(Array.isArray(event.session?.context?.installment_ids)?event.session.context.installment_ids.map((id:any,index:number)=>({index:index+1,id})):[])
     const sessionDate=resolveRelativeDate(cleanedRaw)
@@ -806,6 +925,8 @@ async function processEvent(admin: any, event: any) {
       // true para sempre). ACTIVITY_DATE_RESOLUTION com due_date nulo já tem handler seguro (só
       // re-pergunta, nenhuma escrita) — reaproveita em vez de deixar a IA inventar um evento novo.
       command={intent:'ACTIVITY_DATE_RESOLUTION',due_date:null,confidence:1}
+    }else if(command.intent==='CONFIRM_FINANCIAL'&&event.session?.active_intent==='PLAN_MY_DAY'&&event.session?.pending_action==='offer_plan_day'){
+      command={intent:'PLAN_MY_DAY',due_date:today(),confidence:1}
     }else if(event.session?.active_intent==='MAIN_MENU'&&/^\d+$/.test(cleanedRaw)){
       const menu=(event.session.context?.menu_items||[]).find((item:any)=>item.index===Number(cleanedRaw))
       if(menu?.intent==='LIST_MINE')command={intent:'LIST_MINE',confidence:1}
@@ -820,7 +941,7 @@ async function processEvent(admin: any, event: any) {
     if(selectedTask&&['ACTIVITY_START','ACTIVITY_COMPLETE'].includes(command.intent)&&(!clean(command.summary)||['ela','ele','isso','essa','esse'].includes(foldText(command.summary)))){
       command={intent:command.intent==='ACTIVITY_START'?'START_TASK':'COMPLETE_TASK',task_query:selectedTask.label,confidence:1}
     }
-    if(selectedTask&&['CANCEL_TASK','UPDATE_TASK_STATUS'].includes(command.intent)&&!clean(command.task_query)){
+    if(selectedTask&&['CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK'].includes(command.intent)&&!clean(command.task_query)){
       command={...command,task_query:selectedTask.label,confidence:1}
     }
     // PIPELINE (ordem importa): 1) referência a itens já apresentados ("os dois"...) tem prioridade
@@ -868,11 +989,18 @@ async function processEvent(admin: any, event: any) {
       command={intent:'CREATE_TASK',title:clean(event.session.context?.pending_task_title,240),task_type:event.session.context?.pending_task_type||'meeting',participant_name:event.session.context?.participant_name||null,...schedule,schedule_ambiguous:!schedule.due_date||!schedule.due_time,priority:'medium',assignee_name:null,confidence:1}
     }
     // Data obrigatória: título(s) já definidos, só falta o dia — qualquer resposta que resolva para uma
-    // data (relativa, dia/mês, dia da semana) completa os itens pendentes e segue para a confirmação.
-    else if(command.intent==='UNKNOWN'&&event.session?.active_intent==='CREATE_TASK'&&event.session?.pending_action==='resolve_task_date'&&cleanedRaw&&sessionDate){
-      const pendingItems=Array.isArray(event.session.context?.pending_items)?event.session.context.pending_items:[]
-      const items=pendingItems.map((item:any)=>({...item,due_date:item.due_date||sessionDate}))
-      command={intent:'CREATE_TASK',items,title:items[0]?.title||null,due_date:items[0]?.due_date||null,assignee_name:event.session.context?.assignee_name||null,task_type:event.session.context?.task_type||null,priority:event.session.context?.priority||null,confidence:1}
+    // data (relativa, dia/mês, dia da semana, "até o final do dia") completa os itens pendentes e segue
+    // para a confirmação. Sem data reconhecível, a resposta NUNCA pode cair no fallback de IA (já
+    // reclassificou isso como RECORD_DECISION em produção) — preserva a sessão e pede a data de novo,
+    // sem gravar nada.
+    else if(command.intent==='UNKNOWN'&&event.session?.active_intent==='CREATE_TASK'&&event.session?.pending_action==='resolve_task_date'&&cleanedRaw){
+      if(sessionDate){
+        const pendingItems=Array.isArray(event.session.context?.pending_items)?event.session.context.pending_items:[]
+        const items=pendingItems.map((item:any)=>({...item,due_date:item.due_date||sessionDate}))
+        command={intent:'CREATE_TASK',items,title:items[0]?.title||null,due_date:items[0]?.due_date||null,assignee_name:event.session.context?.assignee_name||null,task_type:event.session.context?.task_type||null,priority:event.session.context?.priority||null,confidence:1}
+      }else{
+        command={intent:'CREATE_TASK_DATE_UNRESOLVED',confidence:1}
+      }
     }
     // Confirmação obrigatória antes de qualquer insert: "sim"/"confirmo" já é CONFIRM_FINANCIAL no
     // parser (não UNKNOWN) — reconstrói o CREATE_TASK com date_confirmed para liberar a gravação.
@@ -886,32 +1014,195 @@ async function processEvent(admin: any, event: any) {
       const items=lines.map((line:string)=>({title:taskTitleFromText(clean(line,240)),...parseTaskSchedule(line)}))
       command={intent:'CREATE_TASK',items,title:items[0]?.title||null,due_date:items[0]?.due_date||null,priority:'medium',assignee_name:null,confidence:1}
     }
-    else if(command.intent==='UNKNOWN'&&event.session?.active_intent==='ACTIVITY_CAPTURE'&&event.session.state==='awaiting_context'&&cleanedRaw){
+    else if(event.session?.active_intent==='ACTIVITY_CAPTURE'&&event.session.state==='awaiting_context'&&cleanedRaw){
       // "quero registrar atividade" é neutro; a resposta livre sem verbo próprio é tratada como
-      // conclusão — é o padrão mais comum de "me conta o que você fez".
-      command={intent:'ACTIVITY_COMPLETE',summary:clean(cleanedRaw,240),contextual:true,confidence:1}
+      // conclusão — é o padrão mais comum de "me conta o que você fez". Uma lista numerada inline
+      // ("1. x 2. y 3. z") vira uma atividade POR item — nunca uma única descrição genérica com os
+      // números dentro do texto.
+      const inlineActivities=splitInlineNumberedList(cleanedRaw)
+      if(inlineActivities)command={intent:'ACTIVITY_COMPLETE',items:inlineActivities.items.map((summary:string)=>({summary:clean(summary,240)})),summary:clean(inlineActivities.items[0],240),contextual:true,confidence:1}
+      else if(command.intent==='UNKNOWN')command={intent:'ACTIVITY_COMPLETE',summary:clean(cleanedRaw,240),contextual:true,confidence:1}
     }
     else if(command.intent==='ACTIVITY_COMPLETE'&&!clean(command.summary)&&event.session?.active_intent==='ACTIVITY_START'&&clean(event.session.context?.activity_summary)){command={...command,summary:clean(event.session.context.activity_summary,240),contextual:true,confidence:1}}
-    // 4) só resta o fallback de IA — recebe contexto estruturado (intenção pendente, itens
-    // numerados, quem está falando) para resolver referência/continuação sem inventar registros.
-    if(command.intent==='UNKNOWN'){
+    // 4) linguagem natural primeiro: a secretária planeja somente tools allowlisted. Ela recebe um
+    // read model resumido e nunca toca o banco; execute() continua sendo a única camada de efeito.
+    const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
+    const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4
+    const secretaryKey=Deno.env.get('OPENAI_API_KEY')||'',secretaryModel=Deno.env.get('TASK_COMMAND_MODEL')||Deno.env.get('OPENAI_MODEL')||''
+    const operationalReadProbe=safeSecretaryReadRescue(event.raw_text,{localDate:today()})
+    // Correção determinística de alta prioridade: nunca depende do planner estar disponível (é uma
+    // reabertura de tarefa, ação sensível o bastante para não arriscar na confiabilidade de um LLM).
+    const undoCompletionProbe=safeUndoLastCompletionRescue(event.raw_text,{recentCompletedTasks})
+    const deterministicShortcut=['document','image'].includes(event.message_type)
+      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL'].includes(command.intent)
+      || (!secretaryOwnsTurn&&(
+        standaloneGreeting
+        || ['HELP','ACTIVITY_DATE_RESOLUTION','SESSION_SELECTION','TASK_CONTEXT_LIST','CREATE_TASK_DATE_UNRESOLVED','TAKE_CONVERSATION_BY_ID','CONVERSATION_CONTEXT'].includes(command.intent)
+        || Boolean(command.task_short_id)
+        || (!(secretaryKey&&secretaryModel)&&protectedPendingActions.has(event.session?.pending_action))
+      )&&!operationalReadProbe&&!undoCompletionProbe)
+    const savedSecretaryPlan=event.parsed_command?.orchestrator==='internal_secretary'?event.parsed_command:null
+    if(!deterministicShortcut&&undoCompletionProbe){
+      secretaryPlan=undoCompletionProbe
+      secretaryCommands=secretaryPlan.actions.map(secretaryActionToCommand).filter(Boolean)
+      if(secretaryCommands.length)command=secretaryCommands[0]
+      processingPath='secretary_undo_rescue'
+    }else if(savedSecretaryPlan?.plan?.reply_mode==='execute'&&Array.isArray(savedSecretaryPlan.commands)&&savedSecretaryPlan.commands.length&&!deterministicShortcut){
+      // Never reinterpret/split a legacy retry: that would shift completed action checkpoints.
+      secretaryPlan=validateSecretaryPlan(savedSecretaryPlan.plan)
+      try{
+        secretaryCommands=secretaryPlan?secretaryPlan.actions.map(secretaryActionToCommand).filter(Boolean).map((item:any)=>({...item,secretary_direct:true})):[]
+      }catch{secretaryCommands=[]}
+      if(!secretaryCommands.length)secretaryPlan={reply_mode:'clarify',message:'Esse pedido salvo tem um formato incompatível. Confira o que já foi registrado antes de reenviar apenas o que falta.',actions:[]}
+      else command=secretaryCommands[0]
+      processingPath='secretary_agent'
+    }else if(secretaryKey&&secretaryModel&&!deterministicShortcut){
+      const [memberModel,team]=await Promise.all([
+        getMemberTaskReadModel(admin,event.organization_id,event.team_member_id,today()),
+        admin.from('team_members').select('id,name').eq('organization_id',event.organization_id).eq('active',true),
+      ])
+      if(team.error)throw team.error
+      secretaryTeam=team.data||[]
+      secretaryPlan=await planInternalSecretaryMessage({
+        onPlannerStatus:(status:string,meta:any)=>{plannerStatus=status;plannerHttpStatus=meta?.httpStatus??null;plannerErrorClass=meta?.errorClass??null},
+        apiKey:secretaryKey,model:secretaryModel,message:event.raw_text,
+        member:{...event.team_member,organization_id:event.organization_id},now:{iso:new Date().toISOString(),local_date:today(),timezone:'America/Sao_Paulo'},
+        session:{state:event.session?.state||'idle',active_intent:event.session?.active_intent||null,pending_action:event.session?.pending_action||null,context:{...(event.session?.context||{}),conversation_state:conversationState,recent_messages:(conversationHistory.data||[]).reverse()}},
+        operationalContext:{my_tasks:memberModel.candidateItems,team_members:(team.data||[]).map((item:any)=>({id:item.id,name:item.name})),recent_plan_tasks:recentPlanTasks},
+      })
+      if(secretaryPlan)processingPath='secretary_agent'
+      if(secretaryPlan?.reply_mode==='execute'){
+        secretaryCommands=compactSecretaryCommands(secretaryPlan.actions.map(secretaryActionToCommand).filter(Boolean).map((item:any)=>({...item,secretary_direct:true})))
+        if(secretaryCommands.length)command=secretaryCommands[0]
+        else secretaryPlan={reply_mode:'clarify',message:'Ainda não consigo executar essa ação. Pode me dizer o que você precisa de outro jeito?',actions:[]}
+      }
+    }
+    if(!deterministicShortcut&&operationalReadProbe&&(!secretaryPlan||plannerStatus&&plannerStatus!=='ok')){
+      if(!secretaryTeam){
+        const members=await admin.from('team_members').select('id,name').eq('organization_id',event.organization_id).eq('active',true)
+        if(members.error)throw members.error
+        secretaryTeam=members.data||[]
+      }
+      secretaryPlan=safeSecretaryReadRescue(event.raw_text,{localDate:today(),teamMembers:secretaryTeam})
+      secretaryCommands=secretaryPlan?.actions.map(secretaryActionToCommand).filter(Boolean)||[]
+      if(secretaryCommands.length)command=secretaryCommands[0]
+      processingPath='secretary_read_rescue'
+    }
+    // Sem o planner, uma mensagem com verbo de escrita explícito e mais de uma cláusula ("cria ... e
+    // coloca ...") nunca pode cair no comando legado (que só sabe interpretar UMA cláusula por vez) nem
+    // virar uma consulta por acidente. Melhor não fazer nada do que transformar CREATE_TASK em LIST_TODO.
+    else if(!deterministicShortcut&&!operationalReadProbe&&hasExplicitWriteSignal(cleanedRaw)&&/\s+e\s+\S/iu.test(cleanedRaw)&&(!secretaryPlan||plannerStatus&&plannerStatus!=='ok')){
+      if(!secretaryTeam){
+        const members=await admin.from('team_members').select('id,name').eq('organization_id',event.organization_id).eq('active',true)
+        if(members.error)throw members.error
+        secretaryTeam=members.data||[]
+      }
+      const writeRescue=safeSecretaryWriteRescue(event.raw_text,{now:new Date(),teamMembers:secretaryTeam})
+      if(writeRescue){
+        secretaryPlan=writeRescue
+        secretaryCommands=writeRescue.actions.map(secretaryActionToCommand).filter(Boolean)
+        if(secretaryCommands.length)command=secretaryCommands[0]
+        processingPath='secretary_write_rescue'
+      }else{
+        secretaryPlan={reply_mode:'answer',message:'Estou com uma indisponibilidade temporária para interpretar esse pedido completo. Não alterei nada. Pode tentar novamente em instantes.',actions:[],turn_relation:'new_request'}
+        secretaryCommands=[]
+        processingPath='secretary_write_rescue_declined'
+      }
+    }
+    // Nunca prompt, corpo de resposta do modelo, header de autorização ou API key — só status HTTP e uma
+    // classe seca e conhecida, para descobrir por que o planner falhou sem expor nada sensível.
+    event.result={...(event.result||{}),planner_status:plannerStatus,planner_http_status:plannerHttpStatus,planner_error_class:plannerErrorClass}
+    if(secretaryOwnsTurn&&!deterministicShortcut&&!secretaryPlan){
+      secretaryPlan={reply_mode:'clarify',message:'Não consegui continuar esse plano agora. Pode tentar novamente?',actions:[]}
+      processingPath='secretary_agent'
+    }
+    // 5) parser/IA legado permanece apenas como fallback transitório quando a secretária não planejou.
+    if(!secretaryPlan&&!secretaryOwnsTurn&&!operationalReadProbe&&command.intent==='UNKNOWN'){
       const awaiting=await pendingCommercial(admin,event)
       if(awaiting?.action_type==='proposal_attachment'&&awaiting.status==='awaiting_context'){
         command={intent:'ATTACH_PROPOSAL_FILE',context_query:event.raw_text,confidence:1}
       }else{
         const aiContext={active_intent:event.session?.active_intent||null,state:event.session?.state||null,session_context:event.session?.context||null,candidate_items:candidateItems.length?candidateItems:null,team_member_name:event.team_member?.name||null}
+        processingPath='legacy_fallback'
         command=await aiFallback(event.raw_text,aiContext)||command
       }
     }
     const contextualActivity=command.intent==='ACTIVITY_COMPLETE'&&['ACTIVITY_START','ACTIVITY_CAPTURE'].includes(event.session?.active_intent)&&command.contextual
     // Uma saudação solta ("oi") não deve derrubar um fluxo pendente (lista aguardando escolha, tarefa
     // aguardando título...) — só um novo comando de verdade cancela o contexto anterior.
-    if(event.session&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
-    await recordEvent(admin,event,'whatsapp_command','Comando interno recebido',event.raw_text||event.media?.filename||event.message_type,{intent:command.intent,message_type:event.message_type})
-    const outcome:any = command.intent === 'UNKNOWN' ? CLARIFY_TEXT : await execute(admin, event, command)
+    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
+    const turnRelation=secretaryPlan?.turn_relation||'new_request'
+    event.result={...(event.result||{}),turn_relation:turnRelation}
+    if(turnRelation==='cancel_plan')await clearAssistantSession(admin,event)
+    await recordEvent(admin,event,'whatsapp_command','Comando interno recebido','Comando processado via WhatsApp',{intent:command.intent,message_type:event.message_type,secretary:Boolean(secretaryPlan),action_count:secretaryCommands.length||null,processing_path:processingPath,turn_relation:turnRelation})
+    let outcome:any
+    if(secretaryPlan&&secretaryPlan.reply_mode!=='execute'){
+      if(secretaryPlan.reply_mode==='clarify'){
+        const priorPlan=['continue_plan','correct_plan'].includes(turnRelation)?event.session?.context?.secretary_plan||null:null
+        await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:priorPlan?'SECRETARY_PLAN':'SECRETARY_CLARIFICATION',context:{request:cleanedRaw,secretary_plan:priorPlan},pending_action:priorPlan?'resolve_secretary_plan':'secretary_clarification',pending_entity_type:null,pending_entity_id:null})
+      }else if(event.session?.active_intent==='SECRETARY_CLARIFICATION'||(turnRelation==='new_request'&&event.session?.active_intent==='SECRETARY_PLAN')){
+        await clearAssistantSession(admin,event)
+      }
+      outcome=secretaryPlan.message||CLARIFY_TEXT
+    }else if(secretaryCommands.length){
+      const planned=await admin.from('task_command_events').update({parsed_command:{orchestrator:'internal_secretary',plan:secretaryPlan,commands:secretaryCommands},result:{...(event.result||{}),processing_path:processingPath}}).eq('id',event.id)
+      if(planned.error)throw planned.error
+      let criticalPendingSession:any=event.session?.active_intent==='COLLECTION_SEND'?event.session:null
+      const initialSecretaryPlan=retainSecretaryPlan(previousSecretaryPlan,buildPendingSecretaryPlan({plan:secretaryPlan,commands:secretaryCommands,messageKey:event.id}),turnRelation)
+      await saveAssistantSession(admin,event,{state:'idle',active_intent:'SECRETARY_PLAN',context:{...(event.session?.context||{}),secretary_plan:initialSecretaryPlan},pending_action:'execute_secretary_plan',pending_entity_type:null,pending_entity_id:null})
+      outcome=await runSecretaryActions({
+        messageKey:event.id,
+        commands:secretaryCommands,
+        completedToolCalls:event.result?.completed_tool_calls||[],
+        toolCallResults:event.result?.tool_call_results||{},
+        executeTool:async(toolCommand:any,{index}:any)=>{
+          event.action_index=index
+          const missing=secretaryCommandInputRequest(toolCommand)
+          if(missing)return{reply:missing,pending:true,status:'awaiting_context'}
+          event.entity_type=null;event.entity_id=null
+          const beforeSession=event.session
+          const result:any=await execute(admin,event,toolCommand)
+          if(event.session?.active_intent==='COLLECTION_SEND')criticalPendingSession=event.session
+          const pending=Boolean(
+            result?.status==='confirmation_required'
+            || (event.session&&event.session!==beforeSession&&['awaiting_context','awaiting_selection','awaiting_confirmation'].includes(event.session.state))
+          )
+          return typeof result==='string'?{reply:result,pending,status:pending?'awaiting_context':undefined,entity_type:event.entity_type,entity_id:event.entity_id}:{...result,pending,entity_type:event.entity_type,entity_id:event.entity_id}
+        },
+        onProgress:async(progress:any)=>{
+          const checkpoint=await admin.from('task_command_events').update({result:{...(event.result||{}),...progress,processing_path:processingPath}}).eq('id',event.id)
+          if(checkpoint.error)throw checkpoint.error
+          event.result={...(event.result||{}),...progress,processing_path:processingPath}
+        },
+      })
+      delete event.action_index
+      const updatedSecretaryPlan=retainSecretaryPlan(previousSecretaryPlan,buildPendingSecretaryPlan({plan:secretaryPlan,commands:secretaryCommands,messageKey:event.id,outcome}),turnRelation)
+      const pendingActions=updatedSecretaryPlan.actions.filter((item:any)=>['needs_input','awaiting_confirmation','failed'].includes(item.status))
+      const collectionSession=criticalPendingSession||((event.session?.active_intent==='COLLECTION_SEND')?event.session:null)
+      const preserveCollection=Boolean(collectionSession)
+      await saveAssistantSession(admin,event,preserveCollection
+        ? {state:collectionSession.state,active_intent:collectionSession.active_intent,context:{...(collectionSession.context||{}),secretary_plan:updatedSecretaryPlan},pending_action:collectionSession.pending_action,pending_entity_type:collectionSession.pending_entity_type,pending_entity_id:collectionSession.pending_entity_id}
+        : {state:pendingActions.length?'awaiting_context':'idle',active_intent:'SECRETARY_PLAN',context:{...(event.session?.context||{}),secretary_plan:updatedSecretaryPlan},pending_action:pendingActions.length?'resolve_secretary_plan':null,pending_entity_type:null,pending_entity_id:null})
+      outcome.reply=formatSecretaryExecutionReply({commands:secretaryCommands,outcome,memberName:event.team_member?.name,localDate:today()})
+    }else{
+      outcome=command.intent === 'UNKNOWN' ? CLARIFY_TEXT : await execute(admin, event, command)
+    }
     const reply=typeof outcome==='string'?outcome:outcome.reply
+    const verifiedEntities=(event.session?.context?.candidate_items||[]).filter((item:any)=>item.task_id).map((item:any)=>({id:item.task_id,kind:'task',label:item.label}))
+    const successfulActions:any[]=[]
+    for(const [index,toolCommand] of secretaryCommands.entries()){
+      const key=Object.keys(outcome?.tool_call_results||{}).find(key=>key.includes(`:action:${index}:`))
+      const result=key?outcome.tool_call_results[key]:null
+      if(result?.entity_type==='crm_tasks'&&result.entity_id&&!result.pending){
+        verifiedEntities.push({id:result.entity_id,kind:'task',label:toolCommand.title||toolCommand.task_query||toolCommand.items?.[0]?.title,owner_name:toolCommand.assignee_name})
+        successfulActions.push({tool:secretaryPlan.actions[index]?.tool,status:'completed',entity_ref:`task:${result.entity_id}`})
+      }
+    }
+    const nextState=advanceConversationState(conversationState,{scope:conversationScope,understanding:secretaryPlan?.understanding,entities:verifiedEntities,actions:successfulActions,pending:secretaryPlan?.reply_mode==='clarify'?reply:null})
+    await saveAssistantSession(admin,event,{state:event.session?.state||'idle',active_intent:event.session?.active_intent||null,context:{...(event.session?.context||{}),conversation_state:nextState},pending_action:event.session?.pending_action||null,pending_entity_type:event.session?.pending_entity_type||null,pending_entity_id:event.session?.pending_entity_id||null})
+    event.result={...(event.result||{}),conversation_trace:conversationTrace({identityType:'internal',understanding:secretaryPlan?.understanding,state:conversationState,plannerStatus, path:processingPath,actions:secretaryPlan?.actions||[],results:outcome?.tool_call_results||{},response:reply,startedAt:turnStartedAt})}
     const providerMessageId = await sendReply(admin, event, reply)
-    await admin.from('task_command_events').update({ status: outcome?.status||'completed', parsed_command: command, entity_type: event.entity_type||null, entity_id: event.entity_id||null, result: { reply, provider_message_id: providerMessageId }, processed_at: new Date().toISOString(), error_code: null, error_message: null }).eq('id', event.id)
+    await admin.from('task_command_events').update({ status: outcome?.status||'completed', parsed_command: secretaryPlan?{orchestrator:'internal_secretary',plan:secretaryPlan,commands:secretaryCommands}:command, entity_type: event.entity_type||null, entity_id: event.entity_id||null, result: { ...(event.result||{}),completed_tool_calls:outcome?.completed_tool_calls||event.result?.completed_tool_calls||[],pending_tool_calls:outcome?.pending_tool_calls||event.result?.pending_tool_calls||[],tool_call_results:outcome?.tool_call_results||event.result?.tool_call_results||{},processing_path:processingPath,reply,provider_message_id:providerMessageId }, processed_at: new Date().toISOString(), error_code: null, error_message: null }).eq('id', event.id)
     return true
   } catch (error: any) {
     const safeReply=friendlyFailure(error)
@@ -924,7 +1215,7 @@ async function processEvent(admin: any, event: any) {
     }
     const attempts = Number(event.attempts || 0) + 1
     const terminal = attempts >= 6 || ['TEAM_MEMBER_INACTIVE','META_CONFIGURATION_MISSING'].includes(error?.code)
-    await admin.from('task_command_events').update({ status: terminal ? 'dead_letter' : 'failed', next_attempt_at: new Date(Date.now() + Math.min(3600, 2 ** attempts * 30) * 1000).toISOString(), error_code: clean(error?.code || error?.name, 100), error_message: clean(error?.message, 500), processed_at: terminal ? new Date().toISOString() : null }).eq('id', event.id)
+    await admin.from('task_command_events').update({ result:{...(event.result||{}),conversation_trace:conversationTrace({identityType:'internal',understanding:event.parsed_command?.plan?.understanding,state:event.session?.context?.conversation_state,plannerStatus:event.result?.planner_status||'error',path:'failed',actions:event.parsed_command?.plan?.actions||[],results:event.result?.tool_call_results||{},response:null,startedAt:turnStartedAt,error:error?.code||error?.name})},status: terminal ? 'dead_letter' : 'failed', next_attempt_at: new Date(Date.now() + Math.min(3600, 2 ** attempts * 30) * 1000).toISOString(), error_code: clean(error?.code || error?.name, 100), error_message: clean(error?.message, 500), processed_at: terminal ? new Date().toISOString() : null }).eq('id', event.id)
     return false
   }
 }

@@ -1,16 +1,17 @@
-import { useState } from 'react'
-import { Building2, ChevronDown, ChevronLeft, LogOut, X } from 'lucide-react'
+import { Building2, ChevronLeft, LogOut, X } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { MugoBrand } from './brand/MugoBrand'
-import { NAVIGATION_LABELS } from '../config/navigationLabels'
 import { statusLabel } from '../config/statusLabels'
-import { NAVIGATION_GROUPS } from '../config/navigationGroups'
+import { NAVIGATION_GROUPS, areaForPage, visibleGroups } from '../config/navigationGroups'
 
+// Menu enxuto: uma entrada por área. As sub-páginas aparecem como abas no topo
+// da área (SectionTabs / abas próprias de WhatsApp e Financeiro).
 export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onToggleCollapse }) {
   const { isLegacy, signOut, profile, loading: profileLoading } = useAuth()
-  const [closedGroups, setClosedGroups] = useState({})
-  function navigate(id) {
-    onNavigate(id)
+  const groups = visibleGroups({ role: profile?.role, isLegacy, loading: profileLoading })
+  const activeArea = areaForPage(activePage)
+  function navigate(group) {
+    onNavigate(group.links[0].id)
     onClose()
   }
 
@@ -30,31 +31,25 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
           <X size={20} />
         </button>
       </div>
-      <nav className="sidebar-nav">
-        {NAVIGATION_GROUPS.filter((group)=>(!group.adminOnly||profileLoading||profile?.role==='admin')&&(!group.roles||profileLoading||group.roles.includes(profile?.role))).map((group) => (
-          <div className="nav-group" key={group.label}>
-            <button type="button" className="nav-group-label" onClick={()=>setClosedGroups((current)=>({...current,[group.id]:!current[group.id]}))} aria-expanded={!closedGroups[group.id]}>
-              <span>{group.label}</span><ChevronDown size={13}/>
-            </button>
-            {!closedGroups[group.id]&&group.links.filter((link)=>!link.supabaseOnly||!isLegacy).filter((link)=>!link.adminOnly||profileLoading||profile?.role==='admin').filter((link)=>!link.roles||profileLoading||link.roles.includes(profile?.role)).map((link) => {
-              const Icon = link.icon
-              return (
-                <button
-                  key={link.id}
-                  type="button"
-                  className={`nav-item${activePage === link.id ? ' active' : ''}`}
-                  onClick={() => navigate(link.id)}
-                  disabled={link.disabled}
-                  title={collapsed ? link.label : undefined}
-                >
-                  <Icon size={18} aria-hidden="true" />
-                  <span>{NAVIGATION_LABELS[link.id] || link.label}</span>
-                  {link.disabled && <small>Em breve</small>}
-                </button>
-              )
-            })}
-          </div>
-        ))}
+      <nav className="sidebar-nav" aria-label="Áreas do CRM">
+        <div className="nav-group">
+          {groups.map((group) => {
+            const Icon = group.icon
+            return (
+              <button
+                key={group.id}
+                type="button"
+                className={`nav-item${activeArea === group.id ? ' active' : ''}`}
+                aria-current={activeArea === group.id ? 'page' : undefined}
+                onClick={() => navigate(group)}
+                title={collapsed ? group.label : undefined}
+              >
+                <Icon size={18} aria-hidden="true" />
+                <span>{group.label}</span>
+              </button>
+            )
+          })}
+        </div>
       </nav>
       <div className="sidebar-footer">
         <div className="agency-avatar"><Building2 size={17} /></div>
@@ -72,3 +67,5 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
     </>
   )
 }
+
+export { NAVIGATION_GROUPS }

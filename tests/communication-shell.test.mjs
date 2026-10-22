@@ -28,7 +28,7 @@ assert.equal((app.match(/<WhatsAppPage\b/g) || []).length, 1, 'WhatsAppPage é m
 // ---------------------------------------------------------------------------
 // 1) Subnavegação horizontal de comunicação — aponta para rotas existentes.
 // ---------------------------------------------------------------------------
-assert.match(page, /const COMMUNICATION_NAV = \[[\s\S]*?\['inbox', 'Caixa de entrada'\][\s\S]*?\['contacts', 'Contatos'\][\s\S]*?\['collections', 'Cobranças'\][\s\S]*?\['templates', 'Templates'\][\s\S]*?\['automations', 'Automações'\][\s\S]*?\]/)
+assert.match(page, /const COMMUNICATION_NAV = \[[\s\S]*?\['inbox', 'Caixa de entrada'\][\s\S]*?\['templates', 'Templates'\][\s\S]*?\['automations', 'Automações'\][\s\S]*?\]/)
 assert.match(page, /COMMUNICATION_SECTIONS\.has\(section\)[\s\S]*?whatsapp-domain-nav[\s\S]*?COMMUNICATION_NAV\.map\(\(\[id,label\]\)=>[\s\S]*?onNavigate\(id\)/)
 
 // ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ assert.ok(builder.length > 1000, 'AutomationFlowBuilder continua presente')
 // ---------------------------------------------------------------------------
 // Sidebar por domínios preservada (não voltou para a lista plana antiga).
 // ---------------------------------------------------------------------------
-assert.match(nav, /id:\s*"communication"[\s\S]*?label:\s*"Comunicação"/)
+assert.match(nav, /id:\s*"conversations"[\s\S]*?label:\s*"Conversas"/)
 assert.match(nav, /id:\s*"finance"[\s\S]*?label:\s*"Financeiro"/)
 
 console.log('Communication shell + navigation: OK')

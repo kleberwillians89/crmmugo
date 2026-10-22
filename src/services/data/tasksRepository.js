@@ -1,5 +1,6 @@
 import {db,isSupabaseProvider,organizationId,unwrap} from './provider'
 import {invalidateCrmData} from '../../lib/dataInvalidation'
+import {attachTaskReminderStates} from '../../lib/taskReminder'
 
 const select='*, team_members(name), clients(company_name), proposals(title), contracts(contract_number), invoice_installments(reference_month), commercial_opportunities(name,conversation_id)'
 const unavailable=(error)=>error?.code==='PGRST205'||error?.code==='42P01'||/crm_tasks|operational_events|schema cache/i.test(`${error?.message||''} ${error?.details||''}`)
@@ -9,7 +10,12 @@ export async function listTasks(){
   if(!isSupabaseProvider())return{available:false,items:[]}
   const response=await db().from('crm_tasks').select(select).order('due_date',{ascending:true})
   if(response.error&&unavailable(response.error))return{available:false,items:[]}
-  return{available:true,items:unwrap(response)}
+  const items=unwrap(response)
+  if(!items.length)return{available:true,items}
+  const reminders=await db().from('task_reminder_outbox').select('task_id,organization_id,team_member_id,due_at,status').in('task_id',items.map(item=>item.id)).order('created_at',{ascending:false})
+  // Additive rollout: tasks remain readable before the reminder migration is applied.
+  if(reminders.error)return{available:true,items}
+  return{available:true,items:attachTaskReminderStates(items,reminders.data||[])}
 }
 export async function createTask(values){const payload={...values,due_time:values.due_time||null,source:values.source||'crm',organization_id:await organizationId()};const record=unwrap(await db().from('crm_tasks').insert(payload).select(select).single());invalidateCrmData({resources:['dashboard','intelligence','tasks']});return record}
 export async function updateTask(id,values){const patch={...values,...('due_time'in values?{due_time:values.due_time||null}:{})};if(values.status==='completed')patch.completed_at=new Date().toISOString();else if(values.status&&values.status!=='completed')patch.completed_at=null;const record=unwrap(await db().from('crm_tasks').update(patch).eq('id',id).select(select).single());invalidateCrmData({resources:['dashboard','intelligence','tasks']});return record}

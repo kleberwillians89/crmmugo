@@ -47,9 +47,18 @@ const weekdayIndex = { domingo: 0, segunda: 1, terca: 2, quarta: 3, quinta: 4, s
 export function resolveRelativeDate(value, now = new Date()) {
   const text = foldText(value)
   const today = isoInSaoPaulo(now)
+  const numericDate = text.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(20\d{2}))?\b/)
+  if (numericDate) {
+    const candidate = `${numericDate[3] || today.slice(0, 4)}-${numericDate[2].padStart(2, '0')}-${numericDate[1].padStart(2, '0')}`
+    const parsed = new Date(`${candidate}T12:00:00Z`)
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === candidate ? candidate : null
+  }
   if (/depois de amanha/.test(text)) return addDays(today, 2)
   if (/\bamanha\b/.test(text)) return addDays(today, 1)
   if (/\bhoje\b/.test(text)) return today
+  // "até o final do dia" / "até o fim do dia" / "fim do dia" / "no final do dia" — sem hora explícita,
+  // sempre hoje (America/Sao_Paulo). Nunca inventa horário: due_time continua null em parseTaskSchedule.
+  if (/\b(?:final|fim)\s+do\s+dia\b/.test(text)) return today
   if (/\bontem\b/.test(text)) return addDays(today, -1)
   const dayOnly = text.match(/^(?:dia\s+)?(\d{1,2})$/)
   if (dayOnly) {
@@ -92,18 +101,28 @@ export function parseTaskSchedule(value, now = new Date()) {
   return { due_date: resolveRelativeDate(raw, now) || (dueTime ? isoInSaoPaulo(now) : null), due_time: dueTime }
 }
 
+// "crie/marca/coloca (uma) reunião ..." é o mesmo reconhecimento de "reunião com Fulano" de sempre, só
+// com o verbo de criação opcional na frente. Duas formas de nomear a reunião: "reunião chamada X" (ou
+// "reunião X" nua) dá o NOME da própria reunião — o título vira só "X", sem prefixo. "reunião com Fulano"
+// continua distinto: aí o texto é o nome de uma PESSOA, e o título preserva "Reunião com X".
+const MEETING_CREATE_LEAD = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:crie|cria|criar|marca|marque|marcar|coloca|colocar|bota|p[õo]e)\s+/iu
+const stripScheduleWords = (value) => trimEdges(value
+  .replace(/(?:^|\s)(?:às?|as)\s*\d{1,2}(?::\d{2})?(?:\s*(?:h|hrs?|horas?))?\b|\b\d{1,2}(?::\d{2})?\s*(?:h|hrs?|horas?)\b|\b\d{1,2}:\d{2}\b/giu, '')
+  .replace(/(?:^|\s)(hoje|amanhã|depois de amanhã|segunda(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|domingo)(?=\s|$)/giu, ''))
 function meetingCommand(raw, now) {
-  const match = raw.match(/^\s*(reuni[aã]o|call|liga[cç][aã]o)\s+(?:com\s+)?(.+)$/iu)
+  const withoutLead = raw.replace(MEETING_CREATE_LEAD, '')
+  const match = withoutLead.match(/^\s*(?:uma\s+)?(reuni[aã]o|call|liga[cç][aã]o)\s+(.+)$/iu)
   if (!match) return null
+  const rest = match[2]
   const schedule = parseTaskSchedule(raw, now)
-  const participant = trimEdges(match[2]
-    .replace(/(?:^|\s)(?:às?|as)\s*\d{1,2}(?::\d{2})?(?:\s*(?:h|hrs?|horas?))?\b|\b\d{1,2}(?::\d{2})?\s*(?:h|hrs?|horas?)\b|\b\d{1,2}:\d{2}\b/giu, '')
-    .replace(/(?:^|\s)(hoje|amanhã|depois de amanhã|segunda(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|domingo)(?=\s|$)/giu, ''))
+  const named = rest.match(/\bchamad[ao]\s+(.+)$/iu)
+  const withPerson = !named && /^\s*com\s+/iu.test(rest)
+  const participant = named ? trimEdges(named[1]) : stripScheduleWords(withPerson ? rest.replace(/^\s*com\s+/iu, '') : rest)
   if (!participant && !schedule.due_date && !schedule.due_time) return null
   const kind = foldText(match[1]) === 'reuniao' ? 'Reunião' : foldText(match[1]) === 'call' ? 'Call' : 'Ligação'
   return {
-    intent: 'CREATE_TASK', raw_text: raw, title: participant ? `${kind} com ${participant}` : kind,
-    participant_name: participant || null, task_type: 'meeting', ...schedule,
+    intent: 'CREATE_TASK', raw_text: raw, title: withPerson ? (participant ? `${kind} com ${participant}` : kind) : (participant || kind),
+    participant_name: withPerson ? (participant || null) : null, task_type: 'meeting', ...schedule,
     schedule_ambiguous: !schedule.due_date || !schedule.due_time,
     assignee_name: null, priority: 'medium', confidence: schedule.due_date && schedule.due_time ? .99 : .72,
   }
@@ -151,8 +170,13 @@ const HELP_PATTERN = /^(menu|ajuda|help|comandos|o que (voce|vc) (faz|pode fazer
 // "quero registrar atividade" é uma intenção neutra — não presume início nem fim. A resposta pede o
 // relato livre; a próxima mensagem (com verbo/particípio) resolve para ACTIVITY_START/COMPLETE.
 const ACTIVITY_CAPTURE_PATTERN = /\b(?:quero|vou|preciso)\s+registrar\s+(?:uma\s+)?atividade\b|^registrar\s+(?:uma\s+)?atividade$|^anotar\s+atividade$/
-const TASK_CREATE_LEAD_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|registrar|registre|adicionar|adicione|incluir|inclua)(?:\s+uma)?\s+tarefas?\b|^nova(?:\s+uma)?\s+tarefa\b/iu
-const TASK_CREATE_COMMAND_ONLY_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|registrar|registre|adicionar|adicione|incluir|inclua)(?:\s+uma)?\s+tarefas?[\s.!?]*$|^nova(?:\s+uma)?\s+tarefa[\s.!?]*$/iu
+// Um verbo de escrita explícito no meio da frase sempre vence um sinal de leitura genérico que apareça
+// de carona na mesma mensagem — nunca deixa "cria uma tarefa ... hoje" cair em LIST_TODAY só porque
+// contém "tarefa" e "hoje" em qualquer lugar (ver uso nos gates de leitura abaixo).
+const EXPLICIT_WRITE_SIGNAL = /\b(cria|criar|crie|marca|marque|marcar|adicione|adiciona|adicionar|inclua|inclui|incluir|registre|registra|registrar|coloca|colocar|muda|mudar|move|mover|finaliza|finalizar|conclui|concluir|atribui|atribuir|cobra|cobrar)\b/
+export const hasExplicitWriteSignal = (value) => EXPLICIT_WRITE_SIGNAL.test(foldText(value))
+const TASK_CREATE_LEAD_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|crie|registrar|registre|registra|adicionar|adicione|adiciona|incluir|inclua|inclui)(?:\s+uma)?\s+tarefas?\b|^nova(?:\s+uma)?\s+tarefa\b/iu
+const TASK_CREATE_COMMAND_ONLY_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|crie|registrar|registre|registra|adicionar|adicione|adiciona|incluir|inclua|inclui)(?:\s+uma)?\s+tarefas?[\s.!?]*$|^nova(?:\s+uma)?\s+tarefa[\s.!?]*$/iu
 export const isTaskCreationCommandOnly = (value) => TASK_CREATE_COMMAND_ONLY_PATTERN.test(clean(value))
 // TAREFA (crm_tasks) só quando há um sinal explícito: a palavra "tarefa(s)" ou um short id. Sem isso,
 // verbos de conclusão/início descrevem ATIVIDADE (operational_events) — o caso mais comum no dia a dia.
@@ -214,6 +238,13 @@ function parseSingle(rawInput, now) {
   if (/^(recebi|entrou|recebemos|caiu)\b/.test(text)) { const {amount,subject_query}=receiptParts(raw,text);return{...base,intent:'FINANCIAL_RECEIPT_REQUEST',amount,subject_query,confidence:amount?.toString()&&subject_query?0.96:0.6} }
   if(PAID_BY_PATTERN.test(raw)){const {amount,subject_query}=receiptParts(raw,text);return{...base,intent:'FINANCIAL_RECEIPT_REQUEST',amount,subject_query,confidence:amount?.toString()&&subject_query?0.96:0.6}}
   if (/^(gastei|paguei|despesa de)\b/.test(text)) { const amount=moneyAmount(text),category=after(raw, /(?:em|com)\s+(.+)$/iu);return { ...base,intent:'FINANCIAL_EXPENSE_REQUEST',amount,category_name:category,description:category,confidence:amount?.toString()?0.98:0.55 } }
+  // Variações naturais sem "gastei/paguei/despesa de": "registra/coloca/lança N (reais) de X (como
+  // despesa)". Só conta como despesa junto de "despesa" ou "reais" — evita colidir com outros usos de
+  // "registra"/"coloca" no parser (ex.: RECORD_OBSERVATION usa "anota", nunca estes verbos).
+  if (/^(?:registra(?:r)?|coloca(?:r)?|lan[cç]a(?:r)?)\b/.test(text) && /\b(?:despesa|reais?)\b/.test(text)) {
+    const amount=moneyAmount(text),category=after(stripAmount(raw).replace(/\bcomo\s+despesa\b/iu,''), /(?:de|do|da)\s+(.+)$/iu)
+    return { ...base,intent:'FINANCIAL_EXPENSE_REQUEST',amount,category_name:category,description:category,confidence:amount?.toString()?0.95:0.5 }
+  }
   const proposalUpdate=raw.match(/^(.+?)\s+(aceitou|aprovou|recusou|rejeitou|visualizou)\s+(?:o\s+|a\s+)?(?:orçamento|orcamento|proposta)\b/iu)
   if(proposalUpdate){const action=foldText(proposalUpdate[2]),status=/aceitou|aprovou/.test(action)?'accepted':/recusou|rejeitou/.test(action)?'rejected':'viewed';return{...base,intent:'UPDATE_PROPOSAL',subject_query:clean(proposalUpdate[1]),proposal_status:status,confidence:.98}}
   if(/\b(proposta|orçamento|orcamento)\b/.test(text)){const parts=proposalParts(raw),proposal_status=/\b(mandamos|enviamos)\b/.test(text)?'sent':'draft';return{...base,intent:'RECORD_PROPOSAL',...parts,proposal_status,confidence:parts.subject_query&&parts.amount?0.98:.62}}
@@ -227,11 +258,21 @@ function parseSingle(rawInput, now) {
   const promised = raw.match(new RegExp(`^${ARTICLE}([\\p{L}][\\p{L}\\s'-]*?)\\s+disse que paga\\b`, 'iu'))
   if(promised)return{...base,intent:'COLLECTION_ACTIVITY',collection_kind:'promised',subject_query:clean(promised[1]),summary:raw,confidence:.9}
   if(/^cobrei\b/.test(text)){const namePart=raw.replace(new RegExp(`^cobrei\\s+${ARTICLE}`,'iu'),'').split(/\s+porque\b/i)[0];return{...base,intent:'COLLECTION_ACTIVITY',collection_kind:'contacted',subject_query:clean(namePart),summary:raw,confidence:.93}}
-  if(/^cobrar\b/.test(text)){
-    const namePart=clean(clean(raw.replace(/^cobrar\s*/iu,'')).replace(new RegExp(`^${ARTICLE}`,'iu'),''))
+  if(/^cobra(?:r)?\b/.test(text)){
+    const namePart=clean(clean(raw.replace(/^cobra(?:r)?\s*/iu,'')).replace(new RegExp(`^${ARTICLE}`,'iu'),''))
     const foldedName=foldText(namePart).replace(/[.?!]+$/,'')
     if(!namePart||GENERIC_COLLECTION_WORDS.has(foldedName))return{...base,intent:'LIST_PENDING_CHARGES',confidence:.95}
     return{...base,intent:'COLLECTION_SEND',subject_query:namePart,confidence:.98}
+  }
+  // "manda (uma) cobrança pra/para X" e "lembra X do pagamento" são a mesma intenção de "cobra(r) X" —
+  // variações naturais de pedir o envio da cobrança.
+  const collectionRequest = raw.match(/^manda(?:r)?\s+(?:uma\s+)?cobran[cç]a\s+(?:pra|para)\s+(.+)$/iu)
+    || raw.match(new RegExp(`^lembra(?:r)?\\s+${ARTICLE}(.+?)\\s+d[oe]\\s+pagamento\\b`, 'iu'))
+  if(collectionRequest){
+    const namePart=clean(collectionRequest[1])
+    const foldedName=foldText(namePart).replace(/[.?!]+$/,'')
+    if(!namePart||GENERIC_COLLECTION_WORDS.has(foldedName))return{...base,intent:'LIST_PENDING_CHARGES',confidence:.95}
+    return{...base,intent:'COLLECTION_SEND',subject_query:namePart,confidence:.96}
   }
   const reminder = raw.match(new RegExp(`^me\\s+lembr[ae]?\\s+de\\s+cobrar\\s+${ARTICLE}(.+)$`, 'iu'))
   if(reminder){let subject=reminder[1];for(const word of['hoje','amanhã','depois de amanhã','segunda','terça','quarta','quinta','sexta','sábado','domingo','fim da semana','semana que vem'])subject=subject.replace(new RegExp(`\\s+${word}$`,'iu'),'');return{...base,intent:'FOLLOW_UP',subject_query:clean(subject),confidence:.95}}
@@ -286,13 +327,16 @@ function parseSingle(rawInput, now) {
   const clientRequest = raw.match(new RegExp(`^${ARTICLE}([\\p{L}][\\p{L}\\s'-]*?)\\s+pediu\\s+(.+)$`, 'iu'))
   if(clientRequest)return{...base,intent:'CLIENT_UPDATE',subject_query:clean(clientRequest[1]),summary:clean(clientRequest[2]),confidence:.9}
   if(/\b(aprovou|reprovou|decidiu|autorizou)\b/.test(text))return{...base,intent:'RECORD_DECISION',summary:raw,confidence:.93}
-  if (/\b(o que|oq|que)\s+(eu\s+)?fiz\s+hoje\b/.test(text)) return { ...base, intent: 'DAY_SUMMARY', confidence: 1 }
-  if (/(o que|oq|que).*tenho hoje|meu dia|minhas tarefas( hoje)?/.test(text)) return { ...base, intent: 'LIST_MINE', confidence: 1 }
+  // EXPLICIT WRITE SIGNAL sempre vence: "cria uma tarefa ... hoje" nunca pode cair nestes gates de
+  // leitura só porque também contém "tarefa"/"hoje"/"equipe" em algum lugar da frase.
+  const explicitWrite = EXPLICIT_WRITE_SIGNAL.test(text)
+  if (!explicitWrite && /\b(o que|oq|que)\s+(eu\s+)?fiz\s+hoje\b/.test(text)) return { ...base, intent: 'DAY_SUMMARY', confidence: 1 }
+  if (!explicitWrite && /(o que|oq|que).*tenho hoje|meu dia|minhas tarefas( hoje)?/.test(text)) return { ...base, intent: 'LIST_MINE', confidence: 1 }
   const memberToday = raw.match(new RegExp(`(?:o que|oq|que)\\s+${ARTICLE}([\\p{L}'-]+)\\s+tem\\s+hoje`, 'iu'))
   if (memberToday) return { ...base, intent: 'LIST_TEAM', assignee_name: memberToday[1], confidence: 1 }
   if (/(?:tarefas?.*)?atrasad[oa]s?|o que esta atrasado|esta atrasado/.test(text)) return { ...base, intent: 'LIST_OVERDUE', confidence: 1 }
-  if (/como esta a equipe|tarefas? da equipe|equipe hoje/.test(text)) return { ...base, intent: 'LIST_TEAM', confidence: 1 }
-  if (/tarefas?.*hoje|o que temos hoje/.test(text)) return { ...base, intent: 'LIST_TODAY', confidence: 1 }
+  if (!explicitWrite && /como esta a equipe|tarefas? da equipe|equipe hoje/.test(text)) return { ...base, intent: 'LIST_TEAM', confidence: 1 }
+  if (!explicitWrite && /tarefas?.*hoje|o que temos hoje/.test(text)) return { ...base, intent: 'LIST_TODAY', confidence: 1 }
   if (/alguem.*(esperando|aguardando).*atendimento|atendimentos? esperando/.test(text)) return { intent: 'LIST_WAITING_ATTENDANCE', confidence: 1 }
   if (/quem (?:esta|ta) atendendo\b/.test(text)) return { intent: 'LIST_WAITING_ATTENDANCE', subject_query: after(raw, /quem (?:está|esta|tá|ta) atendendo\s+(.+)$/iu), confidence: 1 }
   if (/quem esta devendo|quem deve\b/.test(text)) return { ...base, intent: 'QUERY_OVERDUE_RECEIVABLES', confidence: 1 }
@@ -317,19 +361,68 @@ function parseSingle(rawInput, now) {
   if(taskByDate)return{...base,intent:'CREATE_TASK',title:clean(taskByDate[2]),assignee_name:null,priority:priority(text)||'medium',confidence:.98}
   const delegated=raw.match(/^([\p{L}'-]+)\s+precisa\s+(.+)$/iu)
   if(delegated){const title=delegated[2].replace(/\s+(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)$/iu,'');return{...base,intent:'CREATE_TASK',title:clean(title),assignee_name:delegated[1],priority:priority(text)||'medium',confidence:base.due_date?.length?0.98:0.9}}
+  // "coloca/bota/põe pra NOME fazer X" delega uma tarefa sem usar as palavras "tarefa" ou "precisa" —
+  // forma natural comum em pedidos de multi-ação ("cria uma tarefa pra mim X e coloca pra Julia Y").
+  const delegatedPut=raw.match(/^(?:coloca|bota|p[õo]e)\s+(?:para|pra)\s+([\p{L}'-]+)\s*,?\s+(.+)$/iu)
+  if(delegatedPut){
+    const dateWord=/(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)/iu
+    const title=taskTitleFromText(delegatedPut[2].replace(new RegExp(`\\s+${dateWord.source}[\\s.!?]*$`,'iu'),''))
+    const schedule=parseTaskSchedule(raw,now)
+    return{...base,due_date:schedule.due_date,due_time:schedule.due_time,intent:'CREATE_TASK',title:clean(title),assignee_name:delegatedPut[1],priority:priority(text)||'medium',confidence:title?.9:.5}
+  }
   // Pedidos de criação sem conteúdo são intenção, nunca título. O mesmo caminho aceita conteúdo
   // explícito depois do comando, sem depender de IA nem de um telefone específico.
   if (TASK_CREATE_LEAD_PATTERN.test(raw)) {
-    const assignee = raw.match(/\bpara\s+([\p{L}'-]+)(?:\s+.+)?$/iu)?.[1] || null
+    // "pra" é a mesma coisa que "para" na fala natural; "pra mim"/"para mim" é autoatribuição (não é
+    // um responsável de verdade) e nunca vira assignee_name.
+    const assigneeMatch = raw.match(/\b(?:para|pra)\s+([\p{L}'-]+)\s*,?(?:\s+.+)?$/iu)
+    const assignee = assigneeMatch && !['mim', 'eu'].includes(foldText(assigneeMatch[1])) ? assigneeMatch[1] : null
     const dateWord = /(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)/iu
     let title = clean(raw.replace(TASK_CREATE_LEAD_PATTERN, ''))
-      .replace(new RegExp(`^${dateWord.source}\\s+`, 'iu'), '')
-      .replace(new RegExp(`\\s+${dateWord.source}(?=\\s|$).*$`, 'iu'), '')
-    if (assignee) title = title.replace(new RegExp(`^para\\s+${assignee}\\s+`, 'iu'), '').replace(new RegExp(`\\s+para\\s+${assignee}$`, 'iu'), '')
+    title = title.replace(/^\s*,?\s*(?:para|pra)\s+mim\s*,?\s*/iu, '')
+    if (assignee) title = title.replace(new RegExp(`^\\s*,?\\s*(?:para|pra)\\s+${assignee}\\s*,?\\s*`, 'iu'), '').replace(new RegExp(`\\s+(?:para|pra)\\s+${assignee}$`, 'iu'), '')
+    // A data pode vir ANTES do restante do título ("sexta reunião...") ou DEPOIS ("revisar site
+    // amanhã") — nos dois casos ela já foi capturada em base.due_date; aqui só remove a palavra da
+    // data do texto, nunca o conteúdo real da tarefa que vier depois dela.
+    // dateWord.source já tem seu próprio grupo de captura — o restante do título é o grupo 2, não o 1.
+    const leadDateMatch = title.match(new RegExp(`^\\s*,?\\s*${dateWord.source}\\s*,?\\s+(.+)$`, 'iu'))
+    if (leadDateMatch) title = leadDateMatch[2]
+    else title = title.replace(new RegExp(`^${dateWord.source}\\s+`, 'iu'), '').replace(new RegExp(`\\s+${dateWord.source}[\\s.!?]*$`, 'iu'), '')
     title = taskTitleFromText(title)
-    return { ...base, intent: 'CREATE_TASK', title: clean(title), assignee_name: assignee, priority: priority(text) || 'medium', confidence: title ? .95 : .6 }
+    // base.due_date sozinho nunca captura horário ("hoje às 17h") — parseTaskSchedule resolve os dois
+    // juntos, na mesma mensagem, sem inventar horário quando ele não é mencionado.
+    const schedule = parseTaskSchedule(raw, now)
+    return { ...base, due_date: schedule.due_date, due_time: schedule.due_time, intent: 'CREATE_TASK', title: clean(title), assignee_name: assignee, priority: priority(text) || 'medium', confidence: title ? .95 : .6 }
   }
   return { intent: 'UNKNOWN', confidence: 0, raw_text: raw }
+}
+
+// Uma reunião/tarefa para MAIS DE UM responsável ("uma para X e outra para Y", "para X e Y", "para mim e
+// Y"): crm_tasks.assigned_to é singular, então isso nunca cabe em um único comando. Aqui só isolamos o
+// rabo com os nomes e reaproveitamos parseSingle para tudo que ele já sabe extrair sozinho (título, data,
+// hora, task_type) a partir do que sobra da frase. Resolver os nomes contra membros reais — e decidir se
+// executa ou pergunta quando um nome não bate — é responsabilidade de quem chama (nunca aqui: este é o
+// parser puro reaproveitado por todo o CRM, que nunca assume que um nome existe).
+const MULTI_ASSIGNEE_TAIL_PATTERNS = [
+  /,?\s*uma\s+(?:para|pra)\s+([\p{L}'-]+)\s+e\s+outra\s+(?:para|pra)\s+([\p{L}'-]+)\s*[.!?]*$/iu,
+  /,?\s*(?:para|pra)\s+([\p{L}'-]+)\s+e\s+(?:para|pra)\s+([\p{L}'-]+)\s*[.!?]*$/iu,
+  /,?\s*(?:para|pra)\s+([\p{L}'-]+)\s+e\s+([\p{L}'-]+)\s*[.!?]*$/iu,
+]
+export function parseMultiAssigneeTask(rawInput, now) {
+  const raw = clean(rawInput)
+  for (const pattern of MULTI_ASSIGNEE_TAIL_PATTERNS) {
+    const match = raw.match(pattern)
+    if (!match) continue
+    const names = [match[1], match[2]].map((name) => (['mim', 'eu'].includes(foldText(name)) ? null : clean(name)))
+    // "pra mim e mim"/dois apelidos do mesmo nome nunca vira duas tarefas para a mesma pessoa.
+    if (names[0] === names[1] || (names[0] && names[1] && foldText(names[0]) === foldText(names[1]))) continue
+    const base = clean(raw.slice(0, match.index))
+    if (!base) continue
+    const parsedBase = parseSingle(base, now)
+    if (parsedBase.intent !== 'CREATE_TASK' || Array.isArray(parsedBase.items) || !clean(parsedBase.title) || !parsedBase.due_date) continue
+    return { title: parsedBase.title, due_date: parsedBase.due_date, due_time: parsedBase.due_time || null, task_type: parsedBase.task_type || 'general', assignee_names: names }
+  }
+  return null
 }
 
 // Mensagens com várias linhas registram vários itens em um só envio: a primeira linha define a
@@ -337,10 +430,36 @@ function parseSingle(rawInput, now) {
 // herdam essa intenção como itens adicionais — nunca vira um único evento/tarefa com descrição
 // genérica tipo "os dois trabalhos".
 const ACTIVITY_INTENTS = new Set(['ACTIVITY_START', 'ACTIVITY_COMPLETE'])
+// Lista numerada inline ("1. item 2. item 3. item" ou "1) item 2) item 3) item") só conta como lista
+// quando há pelo menos 2 marcadores SEQUENCIAIS começando em 1 — evita quebrar números comuns, valores
+// monetários, datas ou versões ("campanha 2026", "R$ 3.500", "versão 2.0") e frases como "terminamos a
+// etapa 4. Começamos a etapa 5" (marcadores existem mas não são sequenciais a partir de 1).
+const INLINE_LIST_MARKER = /(?:^|\s)(\d{1,2})[.)]\s+(?=\S)/g
+export function splitInlineNumberedList(value) {
+  const text = clean(value)
+  const markers = [...text.matchAll(INLINE_LIST_MARKER)]
+  if (markers.length < 2) return null
+  const numbers = markers.map((match) => Number(match[1]))
+  const sequential = numbers[0] === 1 && numbers.every((number, index) => index === 0 || number === numbers[index - 1] + 1)
+  if (!sequential) return null
+  const header = trimEdges(text.slice(0, markers[0].index))
+  const items = markers.map((match, index) => {
+    const start = match.index + match[0].length
+    const end = index + 1 < markers.length ? markers[index + 1].index : text.length
+    return trimEdges(text.slice(start, end))
+  }).filter(Boolean)
+  return items.length >= 2 ? { header, items } : null
+}
 export function parseInternalCommand(rawText, { now = new Date() } = {}) {
   const raw = clean(rawText)
-  const lines = raw.split(/\r?\n/).flatMap((line) => line.split(/\s*[•;]\s*/)).map((line) => clean(line.replace(/^[-*]\s+/, ''))).filter(Boolean)
-  if (lines.length <= 1) return parseSingle(raw, now)
+  let lines = raw.split(/\r?\n/).flatMap((line) => line.split(/\s*[•;]\s*/)).map((line) => clean(line.replace(/^[-*]\s+/, ''))).filter(Boolean)
+  if (lines.length <= 1) {
+    // Sem newline/bullet/";" — ainda pode ser uma lista numerada na mesma linha. Quando for, ela se
+    // comporta exatamente como uma lista multilinha (cabeçalho opcional + itens) daqui em diante.
+    const inline = splitInlineNumberedList(raw)
+    if (!inline) return parseSingle(raw, now)
+    lines = inline.header ? [inline.header, ...inline.items] : inline.items
+  }
   const first = parseSingle(lines[0], now)
 
   if (ACTIVITY_INTENTS.has(first.intent)) {

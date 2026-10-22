@@ -5,10 +5,10 @@ import { NAVIGATION_GROUPS } from "../src/config/navigationGroups.js";
 const visible = NAVIGATION_GROUPS.flatMap((group) =>
   group.links.map((link) => link.id),
 );
-// Navegação por domínios (Attio/Linear-like): grupos nomeados, não uma lista plana.
+// CRM enxuto: 5 áreas no menu; sub-páginas viram abas da área.
 assert.deepEqual(
   NAVIGATION_GROUPS.map((group) => group.id),
-  ["overview", "crm", "communication", "finance", "administration"],
+  ["today", "conversations", "commercial", "finance", "settings"],
 );
 for (const required of [
   "dashboard",
@@ -22,6 +22,10 @@ for (const required of [
   "finance-summary",
   "collections",
   "organization-settings",
+  "prospecting",
+  "email-campaigns",
+  "ai-knowledge",
+  "advanced",
 ])
   assert.ok(visible.includes(required), `item de navegação ausente: ${required}`);
 // nenhuma rota técnica/administrativa profunda vazou para o menu principal
@@ -53,6 +57,7 @@ for (const tab of [
   "Calendário",
   "Receitas",
   "Despesas",
+  "Cobranças",
   "Dívidas",
   "Caixa Freela",
   "Metas & Reservas",

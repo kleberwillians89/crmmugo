@@ -88,9 +88,11 @@ test('webhook cria contato/conversa e roteia IA comercial sem competir com autom
   assert.match(webhook,/whatsapp_contacts'\)\.upsert/)
   assert.match(webhook,/whatsapp_conversations'\)\.upsert/)
   assert.match(webhook,/commercial_ai_events/)
-  assert.match(webhook,/ai_mode === 'controlled_auto'[\s\S]+return true[\s\S]+automation_events/)
+  assert.match(webhook,/\['controlled_auto', 'copilot'\]\.includes\(commercial\.data\?\.ai_mode\)[\s\S]+return true[\s\S]+automation_events/)
   assert.match(webhook,/classifyConversationKind/)
-  assert.match(webhook,/\['support','finance','existing_client'\]/)
+  // Webhook enqueues every opt-in external conversation; worker owns support-vs-sale policy.
+  const worker=fs.readFileSync('supabase/functions/commercial-ai-worker/index.ts','utf8')
+  assert.match(worker,/\['support','finance','existing_client'\]\.includes\(currentKind\.kind\)/)
   assert.match(webhook,/commercial_classification/)
   assert.match(webhook,/priorContact\.data\?\.source \|\| attribution\.source/)
 })
@@ -111,7 +113,9 @@ test('worker deduplica cliente, cria oportunidade, qualificação, resumo e tare
 test('handoff pausa IA, atribui ID real e notifica por outbox',()=>{
   const worker=fs.readFileSync('supabase/functions/commercial-ai-worker/index.ts','utf8')
   assert.match(worker,/status:'pending',attendance_mode:'human',automation_paused:true,assigned_to:commercialOwnerProfileId\|\|null,assigned_team_member_id:settingsResult\.data\.commercial_owner_id/)
-  assert.match(worker,/commercial_notification_outbox/)
+  assert.match(worker,/from\('team_notification_outbox'\)\.upsert/)
+  assert.match(worker,/notification_type:'qualified_lead_handoff'/)
+  assert.match(worker,/idempotency_key:handoffRef/)
   assert.doesNotMatch(worker,/5511973510549|5511972769605/)
 })
 test('notificação usa primário, retry e fallback sem envio duplo confirmado',()=>{
