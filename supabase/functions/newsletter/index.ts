@@ -4,7 +4,7 @@
 // O envio em si é feito pela função email-campaigns (campanha agendada).
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {generateStructured} from '../_shared/aiProvider.js'
-import {CURATION_SCHEMA,buildCurationPrompt,generationDue,nextSendAt,parseFeed,renderNewsletterHtml,validateCuration,weekStart} from '../_shared/newsletterCore.js'
+import {CURATION_SCHEMA,buildCurationPrompt,generationDue,parseFeed,renderNewsletterHtml,sendAtAfterApproval,validateCuration,weekStart} from '../_shared/newsletterCore.js'
 
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-email-worker-key','Content-Type':'application/json'}
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors})
@@ -88,7 +88,7 @@ async function upsertCampaign(admin:any,settings:any,edition:any){
 async function approveEdition(admin:any,settings:any,edition:any,userId:string|null){
   if(!['draft','failed'].includes(edition.status))throw Object.assign(new Error('Esta edição não está mais em rascunho.'),{code:'INVALID_STATE'})
   const campaignId=await upsertCampaign(admin,settings,edition)
-  const when=nextSendAt(settings)
+  const when=sendAtAfterApproval(settings)
   const scheduled=await admin.from('email_campaigns').update({status:'scheduled',scheduled_for:when.toISOString()}).eq('id',campaignId).select('id').single()
   if(scheduled.error)throw scheduled.error
   await admin.from('newsletter_editions').update({status:'approved',approved_by:userId,approved_at:new Date().toISOString()}).eq('id',edition.id)

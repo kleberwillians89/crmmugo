@@ -71,6 +71,29 @@ export function nextSendAt(settings, now = new Date()) {
   return new Date(`${date}T${hh}:${mm}:00-03:00`)
 }
 
+/**
+ * Envio depois da aprovação, sem perder o timing: usa o horário da semana se ainda não passou;
+ * se a aprovação atrasou, sai no próximo dia útil no mesmo horário (nunca empurra para a semana seguinte).
+ */
+export function sendAtAfterApproval(settings, now = new Date()) {
+  const minutes = toMinutes(settings?.send_time, 9 * 60)
+  const regular = nextSendAt(settings, now)
+  if (regular.getTime() - now.getTime() <= 6 * 86_400_000) {
+    const z = zoned(now), target = Number(settings?.send_weekday ?? 2)
+    const daysUntil = (target - z.weekday + 7) % 7
+    // slot ainda nesta semana (até o dia configurado) → mantém
+    if (daysUntil > 0 && daysUntil <= 3) return regular
+  }
+  // atrasou: hoje mesmo se ainda der tempo, senão o próximo dia útil
+  const z = zoned(now)
+  let date = z.date, weekday = z.weekday
+  if (weekday === 0 || weekday === 6 || z.minutes >= minutes - 5) {
+    do { date = addDays(date, 1); weekday = (weekday + 1) % 7 } while (weekday === 0 || weekday === 6)
+  }
+  const hh = String(Math.floor(minutes / 60)).padStart(2, '0'), mm = String(minutes % 60).padStart(2, '0')
+  return new Date(`${date}T${hh}:${mm}:00-03:00`)
+}
+
 export const CURATION_SCHEMA = Object.freeze({
   type: 'object', additionalProperties: false,
   properties: {

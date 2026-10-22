@@ -74,3 +74,13 @@ test('newsletter nunca envia sem aprovação por padrão', () => {
   assert.match(sql, /auto_send boolean not null default false/)
   assert.match(sql, /enabled boolean not null default false/)
 })
+
+test('aprovação atrasada não empurra o envio para a semana seguinte', async () => {
+  const { sendAtAfterApproval } = await import('../supabase/functions/_shared/newsletterCore.js')
+  const s = { send_weekday: 2, send_time: '09:00' }
+  const at = (iso) => sendAtAfterApproval(s, new Date(iso)).toISOString()
+  assert.equal(at('2026-10-19T14:00:00Z'), '2026-10-20T12:00:00.000Z') // aprovada seg 11h → ter 9h
+  assert.equal(at('2026-10-20T11:00:00Z'), '2026-10-20T12:00:00.000Z') // ter 8h → ter 9h
+  assert.equal(at('2026-10-20T15:00:00Z'), '2026-10-21T12:00:00.000Z') // ter 12h (atrasou) → qua 9h
+  assert.equal(at('2026-10-23T18:00:00Z'), '2026-10-26T12:00:00.000Z') // sex 15h → seg 9h
+})
