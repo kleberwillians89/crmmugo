@@ -1316,6 +1316,9 @@ Deno.serve(async (request) => {
   if (!url || !key) return json({ ok: false, code: 'CONFIGURATION_MISSING' }, 503)
   const admin = createClient(url, key, { auth: { persistSession: false } })
   const payload=await request.json().catch(()=>({}))
+  // Evento preso em "processing" (função reiniciada no meio, ex.: deploy) volta para a fila. É seguro:
+  // a resposta tem idempotência por evento e a criação de tarefa usa source_ref.
+  await admin.from('task_command_events').update({status:'failed',error_code:'STALE_PROCESSING',next_attempt_at:new Date().toISOString()}).eq('status','processing').lt('created_at',new Date(Date.now()-5*60_000).toISOString()).lt('attempts',4)
   let dueQuery=admin.from('task_command_events').select('*').in('status',['pending','failed']).lte('next_attempt_at',new Date().toISOString()).order('created_at').limit(payload?.event_id?1:20)
   if(payload?.event_id)dueQuery=dueQuery.eq('id',clean(payload.event_id,80))
   const due=await dueQuery
