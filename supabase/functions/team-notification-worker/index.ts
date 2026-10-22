@@ -162,6 +162,9 @@ async function enqueueHandoffSla(admin:any){
     if(outbound.error)throw outbound.error
     const hasHumanOutbound=(outbound.data||[]).some((message:any)=>!automatedPrefixes.some(prefix=>String(message.idempotency_key||'').startsWith(prefix)))
     if(hasHumanOutbound)continue
+    // Alguém respondeu fora do CRM e avisou ("já atendi") ou assumiu pelo WhatsApp: para os lembretes.
+    const acknowledged=await admin.from('whatsapp_conversation_events').select('id').eq('conversation_id',conversation.id).in('event_type',['handoff_acknowledged','take_conversation']).gt('created_at',conversation.handoff_at).limit(1)
+    if(!acknowledged.error&&acknowledged.data?.length)continue
     const leadName=conversation.whatsapp_contacts?.display_name||conversation.whatsapp_contacts?.profile_name||`Contato ${formatPhoneBr(conversation.wa_id)}`
     const candidate_items=[{index:1,type:'conversation',conversation_id:conversation.id,label:leadName}]
     const assigned=conversation.assigned_team_member_id||settings.data?.commercial_owner_id
