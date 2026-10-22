@@ -495,6 +495,13 @@ async function execute(admin: any, event: any, command: any) {
     await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'COLLECTION_SEND',context:{},pending_action:'send_collection_template',pending_entity_type:'invoice_installments',pending_entity_id:row.data.id})
     return{status:'confirmation_required',reply:`Enviar cobrança de ${row.data.clients?.trade_name||row.data.clients?.company_name||'cliente'} de ${brl(Number(row.data.amount))}?`}
   }
+  if(command.intent==='BULK_COMPLETE_MINE'){
+    const model=await getMemberTaskReadModel(admin,org,event.team_member_id,today())
+    const items=(model.candidateItems||[]).filter((item:any)=>item.task_id)
+    if(!items.length)return 'Você não tem tarefas abertas para hoje nem atrasadas. 🎉'
+    await saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'TASK_SELECTION',context:{candidate_items:items,pending_task_intent:'COMPLETE_TASK',pending_task_fields:{}},pending_action:'confirm_bulk_complete',pending_entity_type:null,pending_entity_id:null})
+    return `Vou concluir ${items.length===1?'esta tarefa':`estas ${items.length} tarefas`}:\n\n${items.map((item:any)=>`${item.index}. ${item.label}${item.due_date&&item.due_date<today()?' — atrasada':''}`).join('\n')}\n\nConfirma? Responda *sim*, ou só os números que quer concluir (ex.: 1 e 3).`
+  }
   if(command.intent==='SESSION_SELECTION_MULTI'){
     const items=(event.session?.context?.candidate_items||[]).filter((item:any)=>item.task_id&&(command.selections||[]).includes(item.index))
     if(!items.length)return 'Não encontrei esses itens na lista. Pode me mandar os números de novo?'
@@ -988,8 +995,17 @@ async function processEvent(admin: any, event: any) {
     // 1b) seleção múltipla sobre a lista de tarefas apresentada ("as duas", "ambas finalizadas", "1 e 2").
     // Tem prioridade sobre o parser isolado e sobre o planner: antes disso o assistente ficava em loop
     // perguntando "qual delas?" para quem já tinha respondido "as duas".
+    // "conclui/finaliza todas as minhas tarefas": lista e pede confirmação antes (nunca conclui direto).
+    if(/\b(todas|todos)\b/.test(foldedRaw)&&/\b(tarefas|pendencias|pendentes|minhas|meus)\b/.test(foldedRaw)&&selectionActionIntent(cleanedRaw)==='COMPLETE_TASK'&&!(event.session?.pending_action==='confirm_bulk_complete')){
+      command={intent:'BULK_COMPLETE_MINE',confidence:1}
+    }
+    // "sim" para a conclusão em massa já listada
+    else if(command.intent==='CONFIRM_FINANCIAL'&&event.session?.pending_action==='confirm_bulk_complete'){
+      const all=candidateItems.filter((item:any)=>item.task_id).map((item:any)=>item.index)
+      command={intent:'SESSION_SELECTION_MULTI',selections:all,task_intent:'COMPLETE_TASK',confidence:1}
+    }
     const taskCandidates=candidateItems.filter((item:any)=>item.task_id)
-    if(taskCandidates.length>1&&['TASK_SELECTION','TASK_BROWSE'].includes(event.session?.active_intent)){
+    if(command.intent!=='SESSION_SELECTION_MULTI'&&command.intent!=='BULK_COMPLETE_MINE'&&taskCandidates.length>1&&['TASK_SELECTION','TASK_BROWSE'].includes(event.session?.active_intent)){
       const picks=parseMultiSelection(cleanedRaw,taskCandidates.length)
       if(picks){
         const taskIntent=selectionActionIntent(cleanedRaw)||(event.session.active_intent==='TASK_SELECTION'?event.session.context?.pending_task_intent:null)
@@ -1069,7 +1085,7 @@ async function processEvent(admin: any, event: any) {
     // reabertura de tarefa, ação sensível o bastante para não arriscar na confiabilidade de um LLM).
     const undoCompletionProbe=safeUndoLastCompletionRescue(event.raw_text,{recentCompletedTasks})
     const deterministicShortcut=['document','image'].includes(event.message_type)
-      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI'].includes(command.intent)
+      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE'].includes(command.intent)
       || (!secretaryOwnsTurn&&(
         standaloneGreeting
         || ['HELP','ACTIVITY_DATE_RESOLUTION','SESSION_SELECTION','TASK_CONTEXT_LIST','CREATE_TASK_DATE_UNRESOLVED','TAKE_CONVERSATION_BY_ID','CONVERSATION_CONTEXT'].includes(command.intent)

@@ -30,3 +30,12 @@ test('worker usa a seleção múltipla antes do planner e lista com prazo/respon
   assert.match(worker, /mine\.length === 1\) return \{ kind: 'one'/)
   assert.match(worker, /hour<12\?'Bom dia':hour<18\?'Boa tarde':'Boa noite'/)
 })
+
+test('"conclui todas as minhas tarefas" lista e pede confirmação; "sim" conclui; lista é determinística', () => {
+  const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
+  assert.match(worker, /command=\{intent:'BULK_COMPLETE_MINE',confidence:1\}/)
+  assert.match(worker, /pending_action:'confirm_bulk_complete'/)
+  assert.match(worker, /CONFIRM_FINANCIAL'&&event\.session\?\.pending_action==='confirm_bulk_complete'[\s\S]*SESSION_SELECTION_MULTI/)
+  assert.match(worker, /'SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE'\]\.includes\(command\.intent\)/)
+  assert.equal(selectionActionIntent('Pode marcar todas minhas tarefas como finalizadas'), 'COMPLETE_TASK')
+})
