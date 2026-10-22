@@ -484,7 +484,7 @@ Tools: ${INTERNAL_SECRETARY_TOOLS.join(', ')}.`
     const referenced=resolveConversationReferences(decoded,session?.context?.conversation_state)
     if(!referenced){onPlannerStatus('validation_rejected');return{reply_mode:'clarify',message:'Não consegui identificar com segurança qual tarefa você quis dizer. Qual é o título?',actions:[]}}
     const canonical = canonicalizeSecretaryPlan(referenced, { operationalContext, authenticatedMember:member })
-    if (!canonical) { onPlannerStatus('canonicalization_rejected'); return { reply_mode:'clarify',message:'Não posso executar essa ação. Confirme os dados e o responsável pelo pedido.',actions:[] } }
+    if (!canonical) { onPlannerStatus('canonicalization_rejected'); const identity=(referenced?.actions||[]).some((action)=>IDENTITY_FIELDS.some((field)=>action?.arguments&&action.arguments[field]!=null)); if(identity)return{reply_mode:'clarify',message:'Não posso executar essa ação. Posso ajudar com outra coisa?',actions:[]}; return { reply_mode:'clarify',message:'Não entendi direito esse pedido. Pode me mandar de novo com o que é, para quem e para quando? Ex.: “Julia enviar o layout até segunda 17h”.',actions:[] } }
     const rawPlan = enrichSecretaryPlan(canonical, { message, localDate: now?.local_date, operationalContext })
     const plan = validateSecretaryPlan(rawPlan)
     onPlannerStatus(plan ? 'ok' : 'validation_rejected')
@@ -694,7 +694,7 @@ export function formatSecretaryExecutionReply({ commands, outcome, memberName = 
     }
   })
   const firstName = clean(memberName, 120).split(' ')[0]
-  const prefix = firstName ? `Pronto, ${firstName}.` : 'Pronto.'
-  const completedText = lines.length ? `${prefix} Organizei tudo:\n${lines.map((line) => `• ${line};`).join('\n')}` : ''
+  const prefix = firstName ? `Pronto, ${firstName} ✓` : 'Pronto ✓'
+  const completedText = lines.length === 1 ? `${prefix} ${lines[0]}.` : lines.length ? `${prefix}\n${lines.map((line) => `• ${line}`).join('\n')}` : ''
   return [completedText, ...pendingReplies].filter(Boolean).join('\n\n') || outcome?.reply || 'Pronto.'
 }

@@ -1153,6 +1153,11 @@ async function processEvent(admin: any, event: any) {
         operationalContext:{my_tasks:memberModel.candidateItems,team_members:(team.data||[]).map((item:any)=>({id:item.id,name:item.name})),recent_plan_tasks:recentPlanTasks},
       })
       if(secretaryPlan)processingPath='secretary_agent'
+      // A IA montou um plano que a trava de segurança recusou, mas o parser entendeu o pedido sozinho:
+      // segue pelo parser (que sempre confirma antes de gravar) em vez de responder "não posso".
+      if(['canonicalization_rejected','validation_rejected'].includes(plannerStatus)&&command.intent!=='UNKNOWN'&&secretaryPlan?.reply_mode!=='execute'){
+        secretaryPlan=null;processingPath='parser_after_planner_reject'
+      }
       if(secretaryPlan?.reply_mode==='execute'){
         secretaryCommands=compactSecretaryCommands(secretaryPlan.actions.map(secretaryActionToCommand).filter(Boolean).map((item:any)=>({...item,secretary_direct:true})))
         if(secretaryCommands.length)command=secretaryCommands[0]
