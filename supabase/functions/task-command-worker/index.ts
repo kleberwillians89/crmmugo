@@ -2,7 +2,7 @@
 // Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TASK_COMMAND_WORKER_KEY,
 // META_ACCESS_TOKEN e, opcionalmente, OPENAI_API_KEY/TASK_COMMAND_MODEL.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { HELP_TEXT, REFERENTIAL_ALL_WORDS, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
+import { HELP_TEXT, REFERENTIAL_ALL_WORDS, parseMultiSelection, selectionActionIntent, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
 import {advanceConversationState,scopedConversationState,conversationTrace} from '../_shared/conversationKernel.js'
 import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeSecretaryWriteRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
@@ -94,14 +94,19 @@ const findTask = async (admin: any, event: any, command: any) => {
   }
   const needle = foldText(command.task_query)
   if (!needle) return { kind: 'none', items: [] }
-  let query=admin.from('crm_tasks').select('id,title,status,due_date,priority,metadata').eq('organization_id', event.organization_id).is('archived_at',null)
+  let query=admin.from('crm_tasks').select('id,title,status,due_date,priority,metadata,assigned_to,team_members:assigned_to(name)').eq('organization_id', event.organization_id).is('archived_at',null)
   query=command.intent==='REOPEN_TASK'?query.eq('status','completed'):query.not('status','in','(completed,cancelled)')
   const result = await query.limit(500)
   if (result.error) throw result.error
   const rows = result.data || []
   const exact = rows.filter((item: any) => foldText(item.title) === needle)
   if (exact.length === 1) return { kind: 'one', item: exact[0] }
-  if (exact.length > 1) return { kind: 'ambiguous', items: exact }
+  if (exact.length > 1) {
+    // várias com o mesmo nome: se só uma é de quem pediu, é essa
+    const mine = exact.filter((item: any) => item.assigned_to === event.team_member_id)
+    if (mine.length === 1) return { kind: 'one', item: mine[0] }
+    return { kind: 'ambiguous', items: exact }
+  }
   const matches = rows.filter((item: any) => foldText(item.title).includes(needle) || needle.includes(foldText(item.title)))
   return matches.length === 1 ? { kind: 'one', item: matches[0] } : matches.length > 1 ? { kind: 'ambiguous', items: matches } : { kind: 'none', items: [] }
 }
@@ -325,7 +330,9 @@ async function execute(admin: any, event: any, command: any) {
     const model=await getMemberTaskReadModel(admin,org,event.team_member_id,today())
     await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'PLAN_MY_DAY',context:{candidate_items:model.candidateItems},pending_action:'offer_plan_day',pending_entity_type:null,pending_entity_id:null})
     const taskCount=model.today.length,overdueCount=model.overdue.length
-    return `${firstName?`Bom dia, ${firstName}.`:'Bom dia.'} Você tem ${taskCount} tarefa${taskCount===1?'':'s'} hoje e ${overdueCount} atrasada${overdueCount===1?'':'s'}. Quer que eu organize seu dia?`
+    const hour=Number(new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',hour:'2-digit',hourCycle:'h23'}).format(new Date()))
+    const hello=hour<12?'Bom dia':hour<18?'Boa tarde':'Boa noite'
+    return `${firstName?`${hello}, ${firstName}.`:`${hello}.`} Você tem ${taskCount} tarefa${taskCount===1?'':'s'} hoje e ${overdueCount} atrasada${overdueCount===1?'':'s'}. Quer que eu organize seu dia?`
   }
   if (FINANCIAL_ADMIN_INTENTS.has(command.intent) && !(await isAdminActor(admin, event))) {
     return 'Esse comando exige permissão financeira/comercial. Peça para um administrador confirmar.'
@@ -487,6 +494,22 @@ async function execute(admin: any, event: any, command: any) {
     if(row.error)throw row.error
     await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'COLLECTION_SEND',context:{},pending_action:'send_collection_template',pending_entity_type:'invoice_installments',pending_entity_id:row.data.id})
     return{status:'confirmation_required',reply:`Enviar cobrança de ${row.data.clients?.trade_name||row.data.clients?.company_name||'cliente'} de ${brl(Number(row.data.amount))}?`}
+  }
+  if(command.intent==='SESSION_SELECTION_MULTI'){
+    const items=(event.session?.context?.candidate_items||[]).filter((item:any)=>item.task_id&&(command.selections||[]).includes(item.index))
+    if(!items.length)return 'Não encontrei esses itens na lista. Pode me mandar os números de novo?'
+    if(!command.task_intent)return `O que faço com ${items.length===2?'as duas':`essas ${items.length}`}? Posso concluir, começar, cancelar ou mudar a data.`
+    const label:any={COMPLETE_TASK:'concluída',START_TASK:'em andamento',CANCEL_TASK:'cancelada',REOPEN_TASK:'reaberta'}
+    const done:string[]=[],failed:string[]=[]
+    for(const item of items){
+      const task=await admin.from('crm_tasks').select('id,title,status,metadata').eq('organization_id',org).eq('id',item.task_id).maybeSingle()
+      if(task.error)throw task.error
+      if(!task.data){failed.push(item.label);continue}
+      const outcome:any=await applyTaskAction(admin,event,task.data,command.task_intent,event.session?.context?.pending_task_fields||{})
+      if(outcome?.status==='awaiting_context')failed.push(task.data.title);else done.push(task.data.title)
+    }
+    await clearAssistantSession(admin,event)
+    return [done.length?'Pronto ✓':null,...done.map((title)=>`• ${title} — ${label[command.task_intent]||'atualizada'}`),failed.length?`Não consegui atualizar: ${failed.join(', ')}.`:null].filter(Boolean).join('\n')
   }
   if(command.intent==='SESSION_SELECTION'&&event.session?.active_intent==='TASK_SELECTION'){
     const items=event.session.context?.candidate_items||[]
@@ -824,9 +847,10 @@ async function execute(admin: any, event: any, command: any) {
   if (['REOPEN_TASK','COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK'].includes(command.intent)) {
     const found = await findTask(admin, event, command)
     if (found.kind === 'ambiguous') {
-      const candidateItems = found.items.slice(0, 8).map((item: any, index: number) => ({ index: index + 1, type: 'task', task_id: item.id, label: item.title }))
+      const describe = (item: any) => [item.title, item.due_date ? `prazo ${String(item.due_date).slice(8, 10)}/${String(item.due_date).slice(5, 7)}` : null, item.team_members?.name ? clean(item.team_members.name).split(' ')[0] : null].filter(Boolean).join(' — ')
+      const candidateItems = found.items.slice(0, 8).map((item: any, index: number) => ({ index: index + 1, type: 'task', task_id: item.id, label: describe(item) }))
       await saveAssistantSession(admin, event, { state: 'awaiting_selection', active_intent: 'TASK_SELECTION', context: { candidate_items: candidateItems, pending_task_intent: command.intent, pending_task_fields: { due_date: command.due_date, due_time: command.due_time, priority: command.priority, assignee_name: command.assignee_name, task_status: command.task_status } }, pending_action: 'select_task', pending_entity_type: 'crm_tasks', pending_entity_id: null })
-      return `Encontrei mais de uma:\n\n${candidateItems.map((c: any) => `${c.index}. ${c.label}`).join('\n')}\n\nQual delas?`
+      return `Encontrei mais de uma:\n\n${candidateItems.map((c: any) => `${c.index}. ${c.label}`).join('\n')}\n\nQual delas? Pode responder com o número, "1 e 2" ou "as duas".`
     }
     if (found.kind !== 'one') return {status:'awaiting_context',reply:'Não encontrei essa tarefa. Pode me dizer o nome como está no CRM, ou usar o código curto se tiver (ex.: #A1B2C3).'}
     if(command.intent==='REOPEN_TASK'&&found.item.status!=='completed')return{status:'awaiting_context',reply:'Essa tarefa não está concluída. Quer consultar o estado atual?'}
@@ -961,6 +985,17 @@ async function processEvent(admin: any, event: any) {
       if(/^(1|assumir|assumo)[.!]?$/i.test(foldedRaw))command={intent:'TAKE_CONVERSATION_BY_ID',conversation_id:candidateItems[0].conversation_id,confidence:1}
       else if(/^(2|ver contexto|contexto)[.!]?$/i.test(foldedRaw))command={intent:'CONVERSATION_CONTEXT',conversation_id:candidateItems[0].conversation_id,confidence:1}
     }
+    // 1b) seleção múltipla sobre a lista de tarefas apresentada ("as duas", "ambas finalizadas", "1 e 2").
+    // Tem prioridade sobre o parser isolado e sobre o planner: antes disso o assistente ficava em loop
+    // perguntando "qual delas?" para quem já tinha respondido "as duas".
+    const taskCandidates=candidateItems.filter((item:any)=>item.task_id)
+    if(taskCandidates.length>1&&['TASK_SELECTION','TASK_BROWSE'].includes(event.session?.active_intent)){
+      const picks=parseMultiSelection(cleanedRaw,taskCandidates.length)
+      if(picks){
+        const taskIntent=selectionActionIntent(cleanedRaw)||(event.session.active_intent==='TASK_SELECTION'?event.session.context?.pending_task_intent:null)
+        command={intent:'SESSION_SELECTION_MULTI',selections:picks.map((position:number)=>taskCandidates[position-1]?.index).filter(Boolean),task_intent:taskIntent||null,confidence:1}
+      }
+    }
     // 2) seleção numérica ("1"), ordinal ("primeiro") ou por nome/título ("roove", "home da roove")
     // sobre uma lista numerada apresentada antes (cobranças, tarefas ambíguas) — só quando o parser
     // isolado não achou nenhuma intenção própria mais forte na mensagem atual.
@@ -1034,7 +1069,7 @@ async function processEvent(admin: any, event: any) {
     // reabertura de tarefa, ação sensível o bastante para não arriscar na confiabilidade de um LLM).
     const undoCompletionProbe=safeUndoLastCompletionRescue(event.raw_text,{recentCompletedTasks})
     const deterministicShortcut=['document','image'].includes(event.message_type)
-      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL'].includes(command.intent)
+      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI'].includes(command.intent)
       || (!secretaryOwnsTurn&&(
         standaloneGreeting
         || ['HELP','ACTIVITY_DATE_RESOLUTION','SESSION_SELECTION','TASK_CONTEXT_LIST','CREATE_TASK_DATE_UNRESOLVED','TAKE_CONVERSATION_BY_ID','CONVERSATION_CONTEXT'].includes(command.intent)

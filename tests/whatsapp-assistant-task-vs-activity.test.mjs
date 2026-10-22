@@ -137,7 +137,7 @@ test('15: "finalizei revisão da Roove" (sem a palavra "tarefa") continua ACTIVI
 // --- 17-18: tarefa ambígua gera opções numeradas; seleção resolve contra candidate_items ---------
 test('17-18: tarefa ambígua salva candidate_items tipo task e "a primeira"/número resolvem via SESSION_SELECTION', () => {
   assert.match(worker, /if \(found\.kind === 'ambiguous'\) \{/)
-  assert.match(worker, /type: 'task', task_id: item\.id, label: item\.title/)
+  assert.match(worker, /type: 'task', task_id: item\.id, label: describe\(item\)/)
   assert.match(worker, /active_intent: 'TASK_SELECTION'/)
   assert.match(worker, /pending_task_intent: command\.intent, pending_task_fields:/)
   assert.match(worker, /Encontrei mais de uma:\\n\\n/)

@@ -500,3 +500,31 @@ export function parseInternalCommand(rawText, { now = new Date() } = {}) {
 export const taskShortId = (id) => `#${clean(id).replace(/-/g, '').slice(0, 6).toUpperCase()}`
 
 export const HELP_TEXT = `Você pode me pedir para:\n\n• criar tarefas\n• registrar atividades\n• registrar horas\n• anotar decisões\n• registrar despesas\n• registrar recebimentos\n• cobrar clientes\n• consultar seu dia\n• consultar pendências`
+
+// "as duas", "ambas", "todas", "1 e 2", "1, 2 e 3" sobre uma lista numerada já apresentada.
+// Devolve os índices (1-based) escolhidos ou null quando não é uma seleção múltipla.
+export function parseMultiSelection(rawInput, count) {
+  const folded = foldText(rawInput).replace(/[.!?]+$/g, '').trim()
+  if (!folded || !count) return null
+  const all = () => Array.from({ length: count }, (_, index) => index + 1)
+  if (/\b(todas|todos|tudo)\b/.test(folded)) return all()
+  // "as duas"/"ambas" só fazem sentido quando a lista tem exatamente 2 itens (o mesmo para "as três")
+  if (/\b(as duas|os dois|as 2|os 2|ambas|ambos)\b/.test(folded)) return count === 2 ? all() : null
+  if (/\b(as tres|os tres|as 3|os 3)\b/.test(folded)) return count === 3 ? all() : null
+  const numbers = (folded.match(/\b\d{1,2}\b/g) || []).map(Number).filter((value) => value >= 1 && value <= count)
+  const unique = [...new Set(numbers)]
+  // só números + conectivos (e, vírgula) + no máximo um verbo de ação ("1 e 2 finalizadas")
+  const leftover = folded.replace(/\b\d{1,2}\b/g, ' ').replace(/\b(e|a|o|as|os|tarefa|tarefas|numero|numeros|item|itens)\b/g, ' ').replace(/[,;&+]/g, ' ').trim()
+  if (unique.length >= 2 && leftover.split(/\s+/).filter(Boolean).length <= 2) return unique.sort((a, b) => a - b)
+  return null
+}
+
+// Verbo de ação presente na resposta de seleção ("as duas finalizadas", "comecei as duas").
+export function selectionActionIntent(rawInput) {
+  const folded = foldText(rawInput)
+  if (/\b(finaliz|conclu|feit|termin|pront|entreg|fechad|resolvid)/.test(folded)) return 'COMPLETE_TASK'
+  if (/\b(comec|inicie|inicia|andamento|fazendo)/.test(folded)) return 'START_TASK'
+  if (/\b(cancel|exclu|apag|remov)/.test(folded)) return 'CANCEL_TASK'
+  if (/\b(reabr|volta)/.test(folded)) return 'REOPEN_TASK'
+  return null
+}
