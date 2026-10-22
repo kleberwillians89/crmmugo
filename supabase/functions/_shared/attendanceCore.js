@@ -108,3 +108,11 @@ export function buildTriageCta(settings = {}, { summary = '', contactName = '' }
 export function interactiveCtaBody(text, cta) {
   return { type: 'cta_url', body: { text: clean(text, 1024) }, action: { name: 'cta_url', parameters: { display_text: cta.label, url: cta.url } } }
 }
+
+/** Até 2 botões de triagem (o WhatsApp aceita 1 por mensagem; o segundo vai numa mensagem curta logo depois). */
+export function buildTriageCtas(settings = {}, context = {}) {
+  const first = buildTriageCta(settings, context)
+  const second = buildTriageCta({ triage_cta_url: settings.triage_cta_url_2, triage_cta_label: settings.triage_cta_label_2 || 'Outro atendente' }, context)
+  return [first, second].filter(Boolean)
+}
+export const SECOND_CTA_TEXT = 'Se preferir, você também pode falar com a gente por aqui:'

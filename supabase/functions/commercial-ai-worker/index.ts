@@ -3,7 +3,7 @@ import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {brazilianPhoneCandidates} from '../_shared/internalCommandCore.js'
 import {getOperationalWindow} from '../_shared/operationalCalendar.js'
 import {generateStructured,transcribeAudio} from '../_shared/aiProvider.js'
-import {FOLLOWUP_FALLBACK,FOLLOWUP_SCHEMA,buildKnowledgePrompt,buildTriageCta,interactiveCtaBody,composeHandoffResponse,followupDue,pendingInboundText,stripUnauthorizedLinks} from '../_shared/attendanceCore.js'
+import {FOLLOWUP_FALLBACK,FOLLOWUP_SCHEMA,buildKnowledgePrompt,SECOND_CTA_TEXT,buildTriageCtas,interactiveCtaBody,composeHandoffResponse,followupDue,pendingInboundText,stripUnauthorizedLinks} from '../_shared/attendanceCore.js'
 import {CONVERSATION_PRINCIPLES,UNDERSTANDING_SCHEMA,conversationModelInput,conversationTrace,scopedConversationState,advanceConversationState} from '../_shared/conversationKernel.js'
 import {COMMERCIAL_INTENTS,COMMERCIAL_LEAD_KINDS,COMMERCIAL_SYSTEM_PROMPT,applyInterestCorrection,assessCommercialTemperature,buildCommercialSummary,classifyConversationKind,defaultCommercialDecision,enforceCommercialHandoffPolicy,enforceCommercialPrivacyPolicy,enforceCommercialResponsePolicy,hasMinimumCommercialContext,qualificationClassification,validateCommercialDecision} from '../_shared/commercialAgentCore.js'
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}})
@@ -87,10 +87,15 @@ async function transcribePendingAudio(admin:any,event:any){
 }
 
 // Modo copiloto: a IA escreve, uma pessoa aprova no CRM. Modo automático: envia.
-async function deliver(admin:any,event:any,conversation:any,text:string,mode:string,cta:any=null){
-  if(mode!=='copilot')return sendMessage(admin,event,conversation,text,undefined,cta)
+async function deliver(admin:any,event:any,conversation:any,text:string,mode:string,ctas:any[]=[]){
+  if(mode!=='copilot'){
+    const id=await sendMessage(admin,event,conversation,text,undefined,ctas[0]||null)
+    // segundo número da equipe: mensagem curta com o outro botão
+    if(ctas[1])await sendMessage(admin,event,conversation,SECOND_CTA_TEXT,`commercial-ai:${event.id}:cta2`,ctas[1]).catch(()=>null)
+    return id
+  }
   await admin.from('commercial_reply_drafts').update({status:'superseded',decided_at:new Date().toISOString()}).eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).eq('status','pending')
-  const draft=await admin.from('commercial_reply_drafts').insert({organization_id:event.organization_id,conversation_id:event.conversation_id,event_id:event.id,draft_text:cta?`${text}\n\n${cta.label}: ${cta.url}`:text})
+  const draft=await admin.from('commercial_reply_drafts').insert({organization_id:event.organization_id,conversation_id:event.conversation_id,event_id:event.id,draft_text:ctas.length?`${text}\n\n${ctas.map((c:any)=>`${c.label}: ${c.url}`).join('\n')}`:text})
   if(draft.error&&draft.error.code!=='23505')throw draft.error
   return null
 }
@@ -204,7 +209,7 @@ async function processEvent(admin:any,event:any){
         const task=await admin.from('crm_tasks').upsert({organization_id:event.organization_id,title:`${currentKind.kind==='finance'?'Financeiro':'Suporte'} — ${client.contact_name||client.company_name}`,status:'pending',priority:'medium',due_date:today(),assigned_to:settingsResult.data.commercial_owner_id||null,client_id:client.id,task_type:'general',source:'automation',source_ref:handoffRef,notes:`Mensagem: ${clean(inbound,500)}\nTelefone: +${contact.wa_id}\nClassificação: ${currentKind.kind}`,metadata:{origin:'automation',sync_external:true,existing_client_handoff:true,kind:currentKind.kind}},{onConflict:'organization_id,source_ref'})
         if(task.error)throw task.error
         const response=commercialOwnerName?`Perfeito. Vou passar esse contexto para ${commercialOwnerName.split(' ')[0]} continuar com você.`:'Certo. Vou encaminhar o contexto desta conversa para a pessoa responsável continuar com você.'
-        const providerMessageId=await deliver(admin,event,conversation,response,aiMode,buildTriageCta(settingsResult.data,{summary:`${currentKind.kind==='finance'?'financeiro':currentKind.kind==='support'?'suporte':'atendimento'} — ${clean(inbound,120)}`,contactName:client.contact_name}))
+        const providerMessageId=await deliver(admin,event,conversation,response,aiMode,buildTriageCtas(settingsResult.data,{summary:`${currentKind.kind==='finance'?'financeiro':currentKind.kind==='support'?'suporte':'atendimento'} — ${clean(inbound,120)}`,contactName:client.contact_name}))
         await admin.from('commercial_ai_events').update({status:'completed',decision:{reason:'existing_client_non_commercial',kind:currentKind.kind,provider_message_id:providerMessageId,conversation_trace:trace(semanticDecision,response,{handoff:true})},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id)
         return true
       }
@@ -318,7 +323,7 @@ async function processEvent(admin:any,event:any){
       decision.response=composeHandoffResponse({modelResponse:decision.response,ownerFirstName:attendance.ownerFirstName,operationalOpen:operationalWindow.open})
     }
 
-    const triageCta=decision.handoff?buildTriageCta(settingsResult.data,{summary:interests.length?interests.join(' + ').toLowerCase():clean(inbound,120),contactName:client.contact_name}):null
+    const triageCta=decision.handoff?buildTriageCtas(settingsResult.data,{summary:interests.length?interests.join(' + ').toLowerCase():clean(inbound,120),contactName:client.contact_name}):[]
     const providerMessageId=await deliver(admin,event,conversation,finalize(decision.response),aiMode,triageCta)
     await admin.from('commercial_ai_events').update({status:'completed',decision:{...decision,temperature,lead_kind:leadKind,provider_message_id:providerMessageId,opportunity_id:opportunity.id,conversation_trace:trace(decision,decision.response,{opportunity_id:opportunity.id,handoff:decision.handoff})},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id)
     return true

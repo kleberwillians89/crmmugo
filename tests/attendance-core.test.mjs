@@ -114,3 +114,11 @@ test('botão de triagem: wa.me com assunto, limites da Meta e link inválido ign
   assert.equal(body.type, 'cta_url')
   assert.equal(body.action.parameters.display_text, cta.label)
 })
+
+test('dois números da equipe: dois botões, na ordem configurada', async () => {
+  const { buildTriageCtas } = await import('../supabase/functions/_shared/attendanceCore.js')
+  const ctas = buildTriageCtas({ triage_cta_url: 'https://wa.me/5511972769605', triage_cta_label: 'Falar com Kleber', triage_cta_url_2: 'https://wa.me/5511973510549', triage_cta_label_2: 'Falar com Danilo' }, { summary: 'site' })
+  assert.deepEqual(ctas.map((c) => c.label), ['Falar com Kleber', 'Falar com Danilo'])
+  assert.match(ctas[1].url, /^https:\/\/wa\.me\/5511973510549\?text=/)
+  assert.equal(buildTriageCtas({ triage_cta_url: 'https://wa.me/5511972769605' }).length, 1)
+})

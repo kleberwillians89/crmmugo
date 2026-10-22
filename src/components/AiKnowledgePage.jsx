@@ -51,7 +51,7 @@ export function AiKnowledgePage() {
     event.preventDefault(); setError('')
     const patch = {
       ai_mode: settings.ai_mode, meeting_link: settings.meeting_link?.trim() || null, voice_tone: settings.voice_tone?.trim() || null,
-      triage_cta_url: settings.triage_cta_url?.trim() || null, triage_cta_label: settings.triage_cta_label?.trim() || null, followup_enabled: Boolean(settings.followup_enabled), followup_after_minutes: Number(settings.followup_after_minutes || 240), debounce_seconds: Number(settings.debounce_seconds ?? 8),
+      triage_cta_url: settings.triage_cta_url?.trim() || null, triage_cta_label: settings.triage_cta_label?.trim() || null, triage_cta_url_2: settings.triage_cta_url_2?.trim() || null, triage_cta_label_2: settings.triage_cta_label_2?.trim() || null, followup_enabled: Boolean(settings.followup_enabled), followup_after_minutes: Number(settings.followup_after_minutes || 240), debounce_seconds: Number(settings.debounce_seconds ?? 8),
     }
     try {
       const organizationId = settings.organization_id || profile?.organization_id
@@ -88,6 +88,8 @@ export function AiKnowledgePage() {
         <label>Retomar depois de (minutos)<input type="number" min="30" max="1380" value={settings.followup_after_minutes ?? 240} onChange={set('followup_after_minutes')} disabled={!canWrite || !settings.followup_enabled} /></label>
         <label>Botão da triagem — link do WhatsApp da equipe<input type="url" placeholder="https://wa.me/5511999999999" value={settings.triage_cta_url || ''} onChange={set('triage_cta_url')} disabled={!canWrite} /><small>Quando a IA passa o atendimento para o time, a mensagem sai com um botão que abre este WhatsApp, já com o assunto escrito.</small></label>
         <label>Texto do botão (até 20 letras)<input maxLength="20" placeholder="Falar com a equipe" value={settings.triage_cta_label || ''} onChange={set('triage_cta_label')} disabled={!canWrite} /></label>
+        <label>2º WhatsApp da equipe (opcional)<input type="url" placeholder="https://wa.me/5511988888888" value={settings.triage_cta_url_2 || ''} onChange={set('triage_cta_url_2')} disabled={!canWrite} /><small>Vai numa segunda mensagem, logo depois, com o próprio botão.</small></label>
+        <label>Texto do 2º botão (até 20 letras)<input maxLength="20" placeholder="Outro atendente" value={settings.triage_cta_label_2 || ''} onChange={set('triage_cta_label_2')} disabled={!canWrite} /></label>
         <label className="g-wide">Tom de voz (opcional)<textarea rows="2" placeholder={EXAMPLES.tom} value={settings.voice_tone || ''} onChange={set('voice_tone')} disabled={!canWrite} /></label>
       </div>
       {canWrite && <div className="row-actions"><button className="button" type="submit"><Save size={15} /> Salvar atendimento</button></div>}
