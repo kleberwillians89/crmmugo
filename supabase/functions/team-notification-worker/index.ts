@@ -250,6 +250,22 @@ async function saveNotificationContext(admin:any,item:any,member:any,conversatio
 const templateEnvFor=(item:any)=>item.notification_type==='morning_digest'?'MUGO_TEAM_DIGEST_TEMPLATE_NAME':item.notification_type==='end_of_day_digest'?'MUGO_TEAM_HOURS_TEMPLATE_NAME':'MUGO_TEAM_ALERT_TEMPLATE_NAME'
 const templateSummary=(item:any)=>item.notification_type==='morning_digest'?`${item.payload?.today?.length||0} para hoje e ${item.payload?.overdue?.length||0} atrasada(s)`:messageFor(item).replace(/\s+/g,' ').slice(0,500)
 
+// Monta os parâmetros conforme o modelo aprovado de verdade: quantas variáveis o corpo tem e se são
+// numeradas ({{1}}) ou com nome ({{nome}}). 1ª variável = primeiro nome, 2ª = resumo; o resto recebe o resumo.
+export function templateBodyComponents(components: any, firstName: string, summary: string) {
+  const body = (Array.isArray(components) ? components : []).find((part: any) => String(part?.type || '').toUpperCase() === 'BODY')
+  const keys = [...new Set([...String(body?.text || '').matchAll(/\{\{\s*([\w]+)\s*\}\}/g)].map((match) => match[1]))]
+  if (!body) return [{ type: 'body', parameters: [{ type: 'text', text: firstName }, { type: 'text', text: summary }] }]
+  if (!keys.length) return []
+  const named = keys.some((key) => !/^\d+$/.test(key))
+  const ordered = named ? keys : keys.sort((a, b) => Number(a) - Number(b))
+  const valueFor = (key: string, index: number) => {
+    if (named) return /nome|name|pessoa|membro/i.test(key) ? firstName : summary
+    return index === 0 && ordered.length > 1 ? firstName : summary
+  }
+  return [{ type: 'body', parameters: ordered.map((key, index) => ({ type: 'text', ...(named ? { parameter_name: key } : {}), text: valueFor(key, index).slice(0, 900) })) }]
+}
+
 async function processItem(admin: any, item: any) {
   const operationalWindow=await getOperationalWindow(admin,item.organization_id)
   if(!operationalWindow.open)return false
@@ -288,10 +304,10 @@ async function processItem(admin: any, item: any) {
     if(!withinWindow){
       templateName=clean(Deno.env.get(templateEnvFor(item)),100);templateLanguage=clean(Deno.env.get('MUGO_TEAM_TEMPLATE_LANGUAGE')||'pt_BR',20)
       if(!templateName)throw Object.assign(new Error(`Configure ${templateEnvFor(item)} com um template aprovado.`),{code:'APPROVED_TEMPLATE_REQUIRED'})
-      const stored=await admin.from('whatsapp_message_templates').select('name,status,is_active').eq('organization_id',item.organization_id).eq('waba_id',connection.data.waba_id).eq('name',templateName).eq('language',templateLanguage).maybeSingle()
+      const stored=await admin.from('whatsapp_message_templates').select('name,status,is_active,components').eq('organization_id',item.organization_id).eq('waba_id',connection.data.waba_id).eq('name',templateName).eq('language',templateLanguage).maybeSingle()
       if(stored.error)throw stored.error
       if(!stored.data||String(stored.data.status).toUpperCase()!=='APPROVED'||stored.data.is_active===false)throw Object.assign(new Error(`O template ${templateName} não está aprovado e ativo.`),{code:'APPROVED_TEMPLATE_REQUIRED'})
-      templateComponents=[{type:'body',parameters:[{type:'text',text:clean(member.data.name).split(' ')[0]||'time Mugô'},{type:'text',text:templateSummary(item)}]}]
+      templateComponents=templateBodyComponents(stored.data.components,clean(member.data.name).split(' ')[0]||'time Mugô',templateSummary(item))
       metaPayload={messaging_product:'whatsapp',recipient_type:'individual',to:destination,type:'template',template:{name:templateName,language:{code:templateLanguage},components:templateComponents}}
       messageType='template'
     }

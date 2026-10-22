@@ -105,3 +105,10 @@ test('botão "Feito" do alerta de atendimento marca o contato como atendido', ()
   const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
   assert.match(worker, /\^\(feito\|pronto\|ok feito\)\[\.!\]\*\$\/\.test\(foldedRaw\)&&event\.session\?\.active_intent==='CONVERSATION_BROWSE'/)
 })
+
+test('alerta por modelo monta os parâmetros a partir do modelo aprovado (quantidade e nome das variáveis)', () => {
+  const notifier = fs.readFileSync('supabase/functions/team-notification-worker/index.ts', 'utf8')
+  assert.match(notifier, /select\('name,status,is_active,components'\)/)
+  assert.match(notifier, /templateBodyComponents\(stored\.data\.components/)
+  assert.match(notifier, /parameter_name: key/)
+})
