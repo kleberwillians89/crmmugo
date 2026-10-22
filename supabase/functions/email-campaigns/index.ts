@@ -5,7 +5,7 @@
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {htmlToText,matchesAudience,renderCampaignHtml,unsubscribeUrl} from '../_shared/emailMarketingCore.js'
 
-const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-email-worker-key','Content-Type':'application/json'}
+const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type, x-email-worker-key','Content-Type':'application/json'}
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors})
 const clean=(value:unknown,max=500)=>String(value??'').trim().slice(0,max)
 const BATCH=100

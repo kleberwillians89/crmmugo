@@ -126,3 +126,10 @@ test('notícias: usa o trecho mais completo do feed, tira rodapé automático e 
   assert.doesNotMatch(text, /Assine/)
   assert.ok(extractArticleText(html, { max: 80 }).length <= 80)
 })
+
+test('funções chamadas pela tela liberam o cabeçalho x-client-info (senão o navegador barra a chamada)', () => {
+  for (const name of ['newsletter', 'prospecting', 'email-campaigns']) {
+    const source = fs.readFileSync(`supabase/functions/${name}/index.ts`, 'utf8')
+    assert.match(source, /Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type/, name)
+  }
+})
