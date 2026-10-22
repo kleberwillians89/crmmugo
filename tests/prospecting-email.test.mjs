@@ -134,3 +134,29 @@ test('arquitetura: LinkedIn nunca é enviado por robô e prospecção fria não 
   assert.match(campaigns, /from\('email_contacts'\)/)
   assert.doesNotMatch(campaigns, /from\('prospects'\)/)
 })
+
+test('respostas da prospecção: só interesse/dúvida viram oportunidade; saída bloqueia; automática não conta', async () => {
+  const { classifyReplyHeuristic, resolveReplyCategory, replyOutcome } = await import('../supabase/functions/_shared/prospectingCore.js')
+  const cases = {
+    'Por favor, me remova da sua lista.': 'opt_out',
+    'Não quero mais receber esses e-mails': 'opt_out',
+    'Resposta automática: estou de férias até 03/11.': 'auto_reply',
+    'Out of office until Monday': 'auto_reply',
+    'Obrigado, mas não temos interesse no momento.': 'not_interested',
+    'Já temos uma agência que cuida disso.': 'not_interested',
+    'Tenho interesse, podemos conversar na quinta?': 'interested',
+    'Quanto custa a gestão de tráfego?': 'question',
+  }
+  for (const [text, expected] of Object.entries(cases)) assert.equal(classifyReplyHeuristic(text).category, expected, text)
+  // a IA não consegue "salvar" um pedido de saída nem uma resposta automática
+  assert.equal(resolveReplyCategory({ category: 'interested', reason: 'x' }, 'me tira dessa lista por favor').category, 'opt_out')
+  assert.equal(resolveReplyCategory({ category: 'question', reason: 'x' }, 'Olá! Pode me mandar uma proposta?').category, 'question')
+  assert.equal(replyOutcome('opt_out').suppress, true)
+  assert.equal(replyOutcome('opt_out').prospectStatus, 'do_not_contact')
+  assert.equal(replyOutcome('not_interested').convert, false)
+  assert.equal(replyOutcome('auto_reply').convert, false)
+  assert.equal(replyOutcome('interested').convert, true)
+  const conversion = fs.readFileSync('supabase/functions/_shared/prospectConversion.js', 'utf8')
+  assert.match(conversion, /not\('stage', 'in', '\(won,lost\)'\)/)
+  assert.match(conversion, /linked_to_existing_opportunity/)
+})

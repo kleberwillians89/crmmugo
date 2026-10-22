@@ -105,3 +105,24 @@ test('cron pula a semana não aprovada e escala a tarefa para o resumo do WhatsA
   assert.match(fn, /reminderDue\(settings,current\.data\)[\s\S]*priority:'critical',due_date:today\(\)/)
   assert.match(fn, /action==='approve_now'[\s\S]*approveEdition\(admin,config,edition\.data,user\.data\.user\.id,true\)/)
 })
+
+test('notícias: usa o trecho mais completo do feed, tira rodapé automático e lê a página quando o feed é curto', async () => {
+  const { parseFeed, bestExcerpt, extractArticleText } = await import('../supabase/functions/_shared/newsletterCore.js')
+  const xml = `<rss><channel><item><title>Meta lança IA</title><link>https://about.fb.com/x</link>
+    <description><![CDATA[<img src="a.jpg"> The post Meta lança IA appeared first on Meta Newsroom.]]></description>
+    <content:encoded><![CDATA[<p>A Meta anunciou hoje uma ferramenta de IA para anunciantes que cria variações de criativos automaticamente.</p><p>O recurso chega ao Brasil em novembro.</p>]]></content:encoded>
+    <pubDate>Thu, 22 Oct 2026 10:00:00 GMT</pubDate></item></channel></rss>`
+  const [item] = parseFeed(xml)
+  assert.match(item.excerpt, /ferramenta de IA para anunciantes/)
+  assert.doesNotMatch(item.excerpt, /appeared first/)
+  assert.equal(bestExcerpt(['', 'curto', 'um texto bem mais longo']), 'um texto bem mais longo')
+  const html = `<html><head><meta property="og:description" content="Google muda regras do Performance Max para varejo."><script>var x=1</script></head>
+    <body><nav><p>Assine nossa newsletter e receba novidades toda semana no seu e-mail.</p></nav>
+    <article><p>O Google anunciou mudanças no Performance Max que afetam campanhas de varejo a partir de dezembro.</p>
+    <p>Anunciantes poderão excluir marcas e ver relatórios por canal, algo pedido há anos pelo mercado.</p></article></body></html>`
+  const text = extractArticleText(html)
+  assert.match(text, /^Google muda regras/)
+  assert.match(text, /relatórios por canal/)
+  assert.doesNotMatch(text, /Assine/)
+  assert.ok(extractArticleText(html, { max: 80 }).length <= 80)
+})

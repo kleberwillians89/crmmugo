@@ -9,7 +9,7 @@
 //          GMAIL_SERVICE_ACCOUNT_JSON, GMAIL_SENDER
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {generateStructured,researchWithWebSearch} from '../_shared/aiProvider.js'
-import {PROSPECT_RESEARCH_SCHEMA,buildResearchPrompt,extractSiteSignals,isValidEmail,normalizeResearch,personalize,planSequence,renderOutreachHtml} from '../_shared/prospectingCore.js'
+import {PROSPECT_RESEARCH_SCHEMA,REPLY_CLASSIFICATION_SCHEMA,buildReplyClassificationPrompt,classifyReplyHeuristic,replyOutcome,resolveReplyCategory,buildResearchPrompt,extractSiteSignals,isValidEmail,normalizeResearch,personalize,planSequence,renderOutreachHtml} from '../_shared/prospectingCore.js'
 import {buildMimeMessage,gmailAccessToken,gmailSend,gmailThreadStatus} from '../_shared/gmail.js'
 import {convertProspectToLead} from '../_shared/prospectConversion.js'
 import {newsHooksFor} from '../_shared/newsletterCore.js'
@@ -118,6 +118,30 @@ async function stopSequence(admin:any,org:string,prospectId:string,reason='stopp
   await admin.from('prospects').update({email_state:reason==='replied'?'replied':reason==='bounced'?'bounced':'stopped'}).eq('id',prospectId).eq('organization_id',org)
 }
 
+async function classifyReply(prospect:any,snippet:string){
+  try{
+    const prompt=buildReplyClassificationPrompt({prospect,snippet})
+    const result=await generateStructured({system:prompt.system,user:prompt.user,schema:REPLY_CLASSIFICATION_SCHEMA,schemaName:'classify_reply',maxTokens:300,timeoutMs:30_000})
+    return resolveReplyCategory(result.data,snippet)
+  }catch{return classifyReplyHeuristic(snippet)}
+}
+
+// Resposta do prospect: classifica, para a sequência e só vira oportunidade se houver interesse/dúvida.
+async function handleReply(admin:any,org:string,prospect:any,channel:string,snippet:string){
+  const verdict=await classifyReply(prospect,clean(snippet,1500))
+  const outcome=replyOutcome(verdict.category)
+  await stopSequence(admin,org,prospect.id,'replied')
+  await activity(admin,org,prospect.id,channel,channel==='email'?'email_reply':'reply',clean(snippet,1000),{category:verdict.category,reason:verdict.reason})
+  if(outcome.suppress&&prospect.contact_email){
+    const email=clean(prospect.contact_email,320).toLowerCase()
+    await admin.from('email_suppressions').upsert({organization_id:org,email,reason:'unsubscribe'},{onConflict:'organization_id,email'})
+    await admin.from('email_contacts').update({subscribed:false,unsubscribed_at:new Date().toISOString()}).eq('organization_id',org).eq('email',email)
+  }
+  if(outcome.prospectStatus&&!outcome.convert)await admin.from('prospects').update({status:outcome.prospectStatus,replied_at:new Date().toISOString()}).eq('id',prospect.id).eq('organization_id',org)
+  if(outcome.convert)await convertProspectToLead(admin,{organizationId:org,prospect,channel,snippet,temperature:outcome.temperature,replyCategory:verdict.category})
+  return verdict
+}
+
 async function checkReplies(admin:any,org:string,sender:string,token:string){
   const watching=await admin.from('prospects').select('*').eq('organization_id',org).in('email_state',['sequence','approved']).not('gmail_thread_id','is',null).limit(60)
   let replies=0
@@ -128,9 +152,7 @@ async function checkReplies(admin:any,org:string,sender:string,token:string){
       await admin.from('email_suppressions').upsert({organization_id:org,email:clean(prospect.contact_email,320).toLowerCase(),reason:'bounce'},{onConflict:'organization_id,email'})
       await activity(admin,org,prospect.id,'email','email_bounced')
     }else if(status.replied){
-      await stopSequence(admin,org,prospect.id,'replied')
-      await activity(admin,org,prospect.id,'email','email_reply',clean(status.replySnippet,1000))
-      await convertProspectToLead(admin,{organizationId:org,prospect,channel:'email',snippet:status.replySnippet})
+      await handleReply(admin,org,prospect,'email',status.replySnippet)
       replies+=1
     }
   }
