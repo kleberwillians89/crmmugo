@@ -175,6 +175,7 @@ const ACTIVITY_CAPTURE_PATTERN = /\b(?:quero|vou|preciso)\s+registrar\s+(?:uma\s
 // contém "tarefa" e "hoje" em qualquer lugar (ver uso nos gates de leitura abaixo).
 const EXPLICIT_WRITE_SIGNAL = /\b(cria|criar|crie|marca|marque|marcar|adicione|adiciona|adicionar|inclua|inclui|incluir|registre|registra|registrar|coloca|colocar|muda|mudar|move|mover|finaliza|finalizar|conclui|concluir|atribui|atribuir|cobra|cobrar)\b/
 export const hasExplicitWriteSignal = (value) => EXPLICIT_WRITE_SIGNAL.test(foldText(value))
+const NOT_A_PERSON = new Set(['mim', 'eu', 'hoje', 'amanha', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo', 'cliente', 'clientes', 'equipe', 'time', 'ele', 'ela'])
 const TASK_CREATE_LEAD_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|crie|registrar|registre|registra|adicionar|adicione|adiciona|incluir|inclua|inclui)(?:\s+uma)?\s+tarefas?\b|^nova(?:\s+uma)?\s+tarefa\b/iu
 const TASK_CREATE_COMMAND_ONLY_PATTERN = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:criar|cria|crie|registrar|registre|registra|adicionar|adicione|adiciona|incluir|inclua|inclui)(?:\s+uma)?\s+tarefas?[\s.!?]*$|^nova(?:\s+uma)?\s+tarefa[\s.!?]*$/iu
 export const isTaskCreationCommandOnly = (value) => TASK_CREATE_COMMAND_ONLY_PATTERN.test(clean(value))
@@ -192,7 +193,7 @@ const COMPLETION_WORD = new RegExp(`\\b${COMPLETION_WORD_SOURCE}\\b`, 'iu')
 const START_LEAD = /^(?:comecei|iniciei|estou\s+come[cç]ando|estou\s+fazendo)(?:\s+|\s*:?[.!]?\s*$)/iu
 const trimEdges = (value) => clean(value).replace(/\s{2,}/g, ' ').replace(/^[\s,.\-:]+|[\s,.\-:]+$/g, '')
 const TASK_DATE_SUFFIX = /\s+(?:hoje|amanhã|depois\s+de\s+amanhã|segunda(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|domingo|fim\s+da\s+semana|semana\s+que\s+vem)\s*$/iu
-const TASK_TIME_SUFFIX = /\s+(?:(?:às?|as)\s*\d{1,2}(?::\d{2})?(?:\s*(?:h|hrs?|horas?))?|\d{1,2}(?::\d{2}|\s*(?:h|hrs?|horas?)))\s*$/iu
+const TASK_TIME_SUFFIX = /\s+(?:(?:(?:às?|as|até|ate)\s+)*(?:às?|as|até|ate)\s*\d{1,2}(?::\d{2})?(?:\s*(?:h|hrs?|horas?))?|\d{1,2}(?::\d{2}|\s*(?:h|hrs?|horas?)))\s*$/iu
 const TASK_MONTH_DATE_SUFFIX = /\s+(?:dia\s+)?\d{1,2}\s+de\s+(?:janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s*$/iu
 export function taskTitleFromText(value) {
   let title = clean(value)
@@ -375,12 +376,13 @@ function parseSingle(rawInput, now) {
   if (TASK_CREATE_LEAD_PATTERN.test(raw)) {
     // "pra" é a mesma coisa que "para" na fala natural; "pra mim"/"para mim" é autoatribuição (não é
     // um responsável de verdade) e nunca vira assignee_name.
-    const assigneeMatch = raw.match(/\b(?:para|pra)\s+([\p{L}'-]+)\s*,?(?:\s+.+)?$/iu)
-    const assignee = assigneeMatch && !['mim', 'eu'].includes(foldText(assigneeMatch[1])) ? assigneeMatch[1] : null
+    // "pra Julia", "para a Julia" — o artigo nunca vira nome de responsável.
+    const assigneeMatch = raw.match(/\b(?:para|pra)\s+(?:(?:a|o)\s+)?([\p{L}'-]+)\s*[,:]?(?:\s+.+)?$/iu)
+    const assignee = assigneeMatch && !NOT_A_PERSON.has(foldText(assigneeMatch[1])) ? assigneeMatch[1] : null
     const dateWord = /(hoje|amanhã|depois de amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo|fim da semana|semana que vem)/iu
     let title = clean(raw.replace(TASK_CREATE_LEAD_PATTERN, ''))
     title = title.replace(/^\s*,?\s*(?:para|pra)\s+mim\s*,?\s*/iu, '')
-    if (assignee) title = title.replace(new RegExp(`^\\s*,?\\s*(?:para|pra)\\s+${assignee}\\s*,?\\s*`, 'iu'), '').replace(new RegExp(`\\s+(?:para|pra)\\s+${assignee}$`, 'iu'), '')
+    if (assignee) title = title.replace(new RegExp(`^\\s*,?\\s*(?:para|pra)\\s+(?:(?:a|o)\\s+)?${assignee}\\s*[,:]?\\s*`, 'iu'), '').replace(new RegExp(`\\s+(?:para|pra)\\s+${assignee}$`, 'iu'), '')
     // A data pode vir ANTES do restante do título ("sexta reunião...") ou DEPOIS ("revisar site
     // amanhã") — nos dois casos ela já foi capturada em base.due_date; aqui só remove a palavra da
     // data do texto, nunca o conteúdo real da tarefa que vier depois dela.

@@ -813,6 +813,10 @@ async function execute(admin: any, event: any, command: any) {
     }
     const assignee = await findMember(admin, event, command.assignee_name)
     if (command.assignee_name && !assignee) return {status:'awaiting_context',reply:`Não encontrei um único membro ativo chamado “${clean(command.assignee_name)}”. Confira o nome e tente novamente.`}
+    // "pra Julia me enviar X" vira "Enviar X para Kleber" na tarefa da Julia.
+    const forOther=assignee&&assignee.id!==event.team_member?.id
+    const tidyTitle=(value:any)=>{let title=clean(value);if(forOther&&/^me\s+/iu.test(title))title=`${title.replace(/^me\s+/iu,'')} para ${clean(event.team_member?.name).split(' ')[0]||'mim'}`;return title?title[0].toLocaleUpperCase('pt-BR')+title.slice(1):title}
+    if(clean(command.title))command={...command,title:tidyTitle(command.title)}
     const items = Array.isArray(command.items) && command.items.length ? command.items : [{ title: command.title, due_date: command.due_date, due_time: command.due_time, task_type: command.task_type, participant_name: command.participant_name }]
     if (items.some((item:any)=>!clean(item.title)||isTaskCreationCommandOnly(item.title))) {
       await saveAssistantSession(admin,event,{state:'awaiting_context',active_intent:'CREATE_TASK',context:{},pending_action:'describe_tasks',pending_entity_type:null,pending_entity_id:null})
@@ -829,7 +833,7 @@ async function execute(admin: any, event: any, command: any) {
       await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'CREATE_TASK',context:{pending_items:items,assignee_name:command.assignee_name||null,task_type:command.task_type||null,priority:command.priority||null},pending_action:'confirm_task_date',pending_entity_type:null,pending_entity_id:null})
       return items.length>1
         ? `Confirmo estas tarefas?\n${items.map((item:any)=>`"${clean(item.title)}" — ${describeDatePt(item.due_date)}`).join('\n')}`
-        : `Confirmo "${clean(items[0].title)}" para ${describeDatePt(items[0].due_date)}?`
+        : `Confirmo "${clean(items[0].title)}"${command.assignee_name&&assignee?` para ${clean(assignee.name).split(' ')[0]}`:''} — ${describeDatePt(items[0].due_date)}${items[0].due_time?` até ${String(items[0].due_time).slice(0,5)}`:''}? Responda *sim* para criar.`
     }
     const created: any[] = []
     for (let index = 0; index < items.length; index += 1) {
@@ -1086,6 +1090,9 @@ async function processEvent(admin: any, event: any) {
     const undoCompletionProbe=safeUndoLastCompletionRescue(event.raw_text,{recentCompletedTasks})
     const deterministicShortcut=['document','image'].includes(event.message_type)
       || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE'].includes(command.intent)
+      // Tarefa única, com título e data entendidos pelo parser: vai direto (o handler sempre pede confirmação
+      // antes de gravar). Pedidos com mais de uma ação ("... e coloca pra Julia ...") continuam com a IA.
+      || (command.intent==='CREATE_TASK'&&clean(command.title)&&command.due_date&&Number(command.confidence)>=.95&&!(Array.isArray(command.items)&&command.items.length>1)&&!/\b(?:e|tamb[eé]m)\s+(?:cria|crie|coloca|bota|registra|marca|anota|lan[cç]a)\b/iu.test(cleanedRaw))
       || (!secretaryOwnsTurn&&(
         standaloneGreeting
         || ['HELP','ACTIVITY_DATE_RESOLUTION','SESSION_SELECTION','TASK_CONTEXT_LIST','CREATE_TASK_DATE_UNRESOLVED','TAKE_CONVERSATION_BY_ID','CONVERSATION_CONTEXT'].includes(command.intent)
