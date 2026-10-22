@@ -2,7 +2,7 @@
 // Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TASK_COMMAND_WORKER_KEY,
 // META_ACCESS_TOKEN e, opcionalmente, OPENAI_API_KEY/TASK_COMMAND_MODEL.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { HELP_TEXT, REFERENTIAL_ALL_WORDS, parseMultiSelection, parseNamedDelegation, selectionActionIntent, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
+import { HELP_TEXT, REFERENTIAL_ALL_WORDS, parseMultiSelection, parseNamedDelegation, parseSelfTask, selectionActionIntent, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
 import {advanceConversationState,scopedConversationState,conversationTrace} from '../_shared/conversationKernel.js'
 import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeSecretaryWriteRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
@@ -1104,6 +1104,7 @@ async function processEvent(admin: any, event: any) {
       const names=await admin.from('team_members').select('name').eq('organization_id',event.organization_id).eq('active',true)
       const delegation=names.error?null:parseNamedDelegation(cleanedRaw,(names.data||[]).map((item:any)=>item.name))
       if(delegation)command=delegation
+      else{const own=parseSelfTask(cleanedRaw);if(own)command=own}
     }
     const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
     const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4

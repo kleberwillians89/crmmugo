@@ -233,7 +233,7 @@ function messageFor(item: any, memberName = '') {
   if (p.kind === 'handoff_escalation') return `Escalonamento: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.${contactLines(p)}`
   if (p.kind === 'handoff_critical') return `Alerta crítico: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.${contactLines(p)}`
   if (p.kind === 'qualified_lead_handoff') return [`Novo lead aguardando atendimento:`,p.name||p.company||'Lead',p.need?`Demanda: ${p.need}`:null,p.summary?`Contexto: ${p.summary}`:null,p.next_action?`Próximo passo: ${p.next_action}`:null,'','1. Assumir','2. Ver contexto'].filter(Boolean).join('\n')+contactLines(p)
-  return 'Atualização da Mugô.'
+  return ''
 }
 
 async function saveNotificationContext(admin:any,item:any,member:any,conversationId:string,messageId:string|null){
@@ -252,6 +252,14 @@ async function processItem(admin: any, item: any) {
   if(!operationalWindow.open)return false
   const claim = await admin.from('team_notification_outbox').update({ status: 'processing', attempts: Number(item.attempts || 0) + 1 }).eq('id', item.id).in('status', ['pending', 'failed']).select('id').maybeSingle()
   if (claim.error || !claim.data) return false
+  // Alerta de atendimento velho (fila travada, fora do horário) não serve mais: fecha sem enviar.
+  const STALE_TYPES = ['human_mode_message', 'handoff_reminder', 'handoff_escalation', 'handoff_critical']
+  const ageHours = (Date.now() - new Date(item.created_at).getTime()) / 3_600_000
+  const stale = (STALE_TYPES.includes(item.notification_type) && ageHours > 2) || (item.payload?.kind === 'overdue_tasks' && ageHours > 6)
+  if (stale || !messageFor(item)) {
+    await admin.from('team_notification_outbox').update({ status: 'completed', last_error: stale ? 'EXPIRED_STALE' : 'NO_MESSAGE' }).eq('id', item.id)
+    return false
+  }
   try {
     const member = await admin.from('team_members').select('id,name,phone').eq('id', item.team_member_id).eq('organization_id', item.organization_id).eq('active', true).single()
     if (member.error) throw Object.assign(new Error('Membro interno não está mais ativo.'), { code: 'TEAM_MEMBER_INACTIVE', terminal: true })

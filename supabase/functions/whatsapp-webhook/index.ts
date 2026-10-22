@@ -466,7 +466,8 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
       if(settings.error&&!['42P01','PGRST205'].includes(settings.error.code))throw settings.error
       responsibleId=settings.data?.commercial_owner_id||null
     }
-    if(responsibleId){
+    // Reação, figurinha e tipo não suportado não são mensagem de verdade: não acordam o time.
+    if(responsibleId&&!['reaction','unsupported','sticker','system','unknown'].includes(content.type)){
       // Sinal só informativo (nunca cria opportunity nem retoma automação) — uma nova demanda comercial
       // chegando durante um handoff de suporte não pode ficar invisível para quem já está com a conversa.
       const commercialSignal=classifyConversationKind(content.body||'',{hasExistingClient:Boolean(contactResult.data.client_id)}).kind
