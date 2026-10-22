@@ -16,7 +16,8 @@ const describeDatePt = (dueDate: string) => {
   const ddmm = `${dueDate.slice(8, 10)}/${dueDate.slice(5, 7)}`
   if (dueDate === today()) return `hoje, ${ddmm}`
   if (dueDate === tomorrowDate()) return `amanhã, ${ddmm}`
-  return ddmm
+  const weekday = ['domingo','segunda','terça','quarta','quinta','sexta','sábado'][new Date(`${dueDate}T12:00:00Z`).getUTCDay()]
+  return `${weekday}, ${ddmm}`
 }
 // due_date é uma DATE (sem timezone) — só reordena os dígitos, nunca reconstrói via new Date().
 const ddmmyyyy = (dueDate: string) => { const [y, m, d] = String(dueDate).split('-'); return `${d}/${m}/${y}` }
@@ -698,12 +699,18 @@ async function execute(admin: any, event: any, command: any) {
     const allItems=[...taskModel.candidateItems,...upcoming]
     await saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'TASK_BROWSE',context:{candidate_items:allItems},pending_action:'select_task',pending_entity_type:'crm_tasks',pending_entity_id:null})
     const when=(item:any)=>`${['dom','seg','ter','qua','qui','sex','sáb'][new Date(`${item.due_date}T12:00:00Z`).getUTCDay()]} ${item.due_date.slice(8,10)}/${item.due_date.slice(5,7)}${item.due_time?` ${String(item.due_time).slice(0,5)}`:''}`
-    const currentList=taskModel.candidateItems.length?`\n\n${taskModel.candidateItems.map((item:any)=>`${item.index}. ${item.label}${item.due_date<queryDay?' — atrasada':item.due_time?` — ${String(item.due_time).slice(0,5)}`:''}`).join('\n')}`:`\n\nNada para ${isToday?'hoje':'essa data'} nem atrasado.`
-    const taskList=`${currentList}${upcoming.length?`\n\nPróximos dias:\n${upcoming.map((item:any)=>`${item.index}. ${item.label} — ${when(item)}`).join('\n')}`:''}`
-    // Atividades/horas/cobranças são leitura do que já aconteceu — só fazem sentido para o dia de hoje.
-    const activitySuffix=isToday?`\n\n${ongoing} atividade${ongoing===1?'':'s'} em andamento · ${completed} concluída${completed===1?'':'s'} · ${hours}h registradas · ${followUps} cobrança${followUps===1?'':'s'} para acompanhar.`:''
-    const heading=isToday?'Hoje você tem:':`Em ${queryDay} você tem:`
-    return `${heading}\n\n${taskModel.today.length} tarefa${taskModel.today.length===1?'':'s'} e ${taskModel.overdue.length} atrasada${taskModel.overdue.length===1?'':'s'}.${taskList}${activitySuffix}`
+    const line=(item:any)=>`${item.index}. ${item.label}${item.due_time&&item.due_date>=queryDay?` — ${String(item.due_time).slice(0,5)}`:''}`
+    const overdueItems=taskModel.candidateItems.filter((item:any)=>item.due_date<queryDay),todayItems=taskModel.candidateItems.filter((item:any)=>item.due_date>=queryDay)
+    const sections=[]
+    if(overdueItems.length)sections.push(`*Atrasadas*\n${overdueItems.map(line).join('\n')}`)
+    sections.push(`*${isToday?'Pra hoje':`Pra ${describeDatePt(queryDay)}`}*\n${todayItems.length?todayItems.map(line).join('\n'):'Nada marcado.'}`)
+    if(upcoming.length)sections.push(`*Próximos dias*\n${upcoming.map((item:any)=>`${item.index}. ${item.label} — ${when(item)}`).join('\n')}`)
+    // Atividades/horas/cobranças só aparecem quando existem (zeros viram ruído).
+    const stats=isToday?[ongoing?`${ongoing} atividade${ongoing===1?'':'s'} em andamento`:null,completed?`${completed} concluída${completed===1?'':'s'} hoje`:null,hours?`${hours}h registradas`:null,followUps?`${followUps} cobrança${followUps===1?'':'s'} para acompanhar`:null].filter(Boolean):[]
+    const firstName=clean(event.team_member?.name).split(' ')[0]
+    const heading=isToday?`${firstName?`${firstName}, seu`:'Seu'} dia:`:`Sua agenda — ${describeDatePt(queryDay)}:`
+    const hint=allItems.length?'\n\nPra concluir, me manda *feito* + o número (ex.: feito 2).':''
+    return `${heading}\n\n${sections.join('\n\n')}${stats.length?`\n\n${stats.join(' · ')}`:''}${hint}`
   }
   if(command.intent==='PLAN_MY_DAY'){
     const queryDay=command.due_date||today()
@@ -864,8 +871,8 @@ async function execute(admin: any, event: any, command: any) {
     if (!command.date_confirmed && !command.secretary_direct) {
       await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'CREATE_TASK',context:{pending_items:items,assignee_name:command.assignee_name||null,task_type:command.task_type||null,priority:command.priority||null},pending_action:'confirm_task_date',pending_entity_type:null,pending_entity_id:null})
       return items.length>1
-        ? `Confirmo estas tarefas?\n${items.map((item:any)=>`"${clean(item.title)}" — ${describeDatePt(item.due_date)}`).join('\n')}`
-        : `Confirmo "${clean(items[0].title)}"${command.assignee_name&&assignee?` para ${clean(assignee.name).split(' ')[0]}`:''} — ${describeDatePt(items[0].due_date)}${items[0].due_time?` até ${String(items[0].due_time).slice(0,5)}`:''}? Responda *sim* para criar.`
+        ? `Fechado? Vou criar:\n${items.map((item:any)=>`• ${clean(item.title)} — ${describeDatePt(item.due_date)}`).join('\n')}\nResponde *sim* que eu crio.`
+        : `Fechado? *${clean(items[0].title)}*${command.assignee_name&&assignee&&assignee.id!==event.team_member_id?` pra ${clean(assignee.name).split(' ')[0]}`:''} — ${describeDatePt(items[0].due_date)}${items[0].due_time?` até ${String(items[0].due_time).slice(0,5)}`:''}.\nResponde *sim* que eu crio.`
     }
     const created: any[] = []
     for (let index = 0; index < items.length; index += 1) {
@@ -886,11 +893,12 @@ async function execute(admin: any, event: any, command: any) {
     await clearAssistantSession(admin, event)
     event.entity_type='crm_tasks';event.entity_id=created[0].id
     if (created.length > 1) {
-      return `Prontinho. Criei ${created.length} tarefas ✓\n\n${created.map((t: any, i: number) => `${i + 1}. ${taskShortId(t.id)} ${t.title}${t.due_date ? ` — ${ddmmyyyy(t.due_date)}` : ''}`).join('\n')}\n\nRegistradas: ${formatRegisteredAt(created[0].created_at)}`
+      return `Prontinho, criei ${created.length} tarefas ✓\n\n${created.map((t: any, i: number) => `${i + 1}. ${t.title}${t.due_date ? ` — ${describeDatePt(t.due_date)}` : ''}`).join('\n')}`
     }
     const task = created[0]
-    const notice = assignee?.id && assignee.id !== event.team_member_id ? `\nJá mandei o aviso para ${clean(assignee.name).split(' ')[0]} no WhatsApp, e no dia o lembrete sai de manhã.` : ''
-    return `Tarefa criada ✓\n${taskShortId(task.id)} ${task.title}${task.client ? ` — ${task.client.trade_name||task.client.company_name}` : ''}${task.due_date ? `\nPrazo: ${ddmmyyyy(task.due_date)}${task.due_time ? ` às ${String(task.due_time).slice(0,5)}` : ''}` : ''}\nRegistrada: ${formatRegisteredAt(task.created_at)}${notice}`
+    const otherName = forOther ? clean(assignee.name).split(' ')[0] : ''
+    const notice = forOther ? `\n\nJá avisei ${otherName} no WhatsApp${task.due_time ? ' — e 1h antes do prazo vai um lembrete' : ''}.` : (task.due_time ? '\n\nTe lembro 1h antes.' : '')
+    return `Tarefa criada ✓\n*${task.title}*${task.client ? ` — ${task.client.trade_name||task.client.company_name}` : ''}${forOther ? `\nCom: ${otherName}` : ''}${task.due_date ? `\nPrazo: ${describeDatePt(task.due_date)}${task.due_time ? ` até ${String(task.due_time).slice(0,5)}` : ''}` : ''}${notice}`
   }
   if (['REOPEN_TASK','COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK'].includes(command.intent)) {
     const found = await findTask(admin, event, command)
@@ -1046,6 +1054,12 @@ async function processEvent(admin: any, event: any) {
       command={intent:'SESSION_SELECTION_MULTI',selections:all,task_intent:'COMPLETE_TASK',confidence:1}
     }
     const taskCandidates=candidateItems.filter((item:any)=>item.task_id)
+    // "feito 2", "2 feito", "conclui 3": conclui o número da lista apresentada.
+    const doneNumber=foldedRaw.match(/^(?:(?:feito|feita|pronto|pronta|conclui|concluido|concluida|finalizei|finalizado|finalizada|terminei)\s*(?:o|a|numero|n)?\s*(\d{1,2})|(\d{1,2})\s*(?:feito|feita|pronto|pronta|concluido|concluida|finalizado|finalizada|ok))[.!]*$/)
+    if(doneNumber&&['TASK_BROWSE','TASK_SELECTION'].includes(event.session?.active_intent)){
+      const wanted=Number(doneNumber[1]||doneNumber[2]),hit=taskCandidates.find((item:any)=>item.index===wanted)
+      if(hit)command={intent:'SESSION_SELECTION_MULTI',selections:[hit.index],task_intent:'COMPLETE_TASK',confidence:1}
+    }
     // Aviso de uma tarefa só ("Kleber criou uma tarefa para você") + resposta curta "feito/pronto": conclui essa.
     if(command.intent!=='SESSION_SELECTION_MULTI'&&taskCandidates.length===1&&event.session?.active_intent==='TASK_BROWSE'&&cleanedRaw.split(/\s+/).length<=4&&/^(?:ja\s+)?(?:(?:ta|esta|foi)\s+)?(?:feito|feita|pronto|pronta|terminei|finalizei|finalizado|finalizada|conclui|concluido|concluida|entregue|fiz|ja fiz)\b/.test(foldedRaw)){
       command={intent:'SESSION_SELECTION_MULTI',selections:[taskCandidates[0].index],task_intent:'COMPLETE_TASK',confidence:1}

@@ -50,7 +50,7 @@ test('criar tarefa para outra pessoa: parser entende e worker não manda para a 
   assert.equal(parseInternalCommand('Cria tarefa pra mim ligar pro cliente sexta às 15h', { now }).assignee_name, null)
   const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
   assert.match(worker, /command\.intent==='CREATE_TASK'&&clean\(command\.title\)&&command\.due_date/)
-  assert.match(worker, /Responda \*sim\* para criar/)
+  assert.match(worker, /Responde \*sim\* que eu crio/)
   assert.match(worker, /command.items.map\(\(item:any\)=>\(\{...item,title:tidyTitle\(item.title\)\}\)\)/)
 })
 
@@ -72,7 +72,7 @@ test('equipe: sessão não é apagada antes da seleção, aviso para quem recebe
   const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
   assert.match(worker, /'SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE',(?:'ACK_CONVERSATION',)?'GREETING'/)
   assert.match(worker, /kind: 'task_assigned'/)
-  assert.match(worker, /Próximos dias:/)
+  assert.match(worker, /\*Próximos dias\*/)
   assert.match(worker, /feito\|feita\|pronto/)
   const notifier = fs.readFileSync('supabase/functions/team-notification-worker/index.ts', 'utf8')
   assert.match(notifier, /p\.kind === 'task_assigned'/)
