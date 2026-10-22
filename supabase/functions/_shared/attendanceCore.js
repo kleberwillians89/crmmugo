@@ -87,3 +87,36 @@ export const FOLLOWUP_SCHEMA = Object.freeze({
   properties: { send: { type: 'boolean' }, text: { type: 'string' } },
   required: ['send', 'text'],
 })
+
+/**
+ * Botão de triagem: no repasse para o time, a mensagem sai com um botão que abre o WhatsApp da equipe Mugô.
+ * Se o link for wa.me, já leva uma mensagem pronta com o assunto, para a equipe saber quem é e o que precisa.
+ * Limites da Meta: texto do botão até 20 caracteres, corpo até 1024.
+ */
+export function buildTriageCta(settings = {}, { summary = '', contactName = '' } = {}) {
+  const url = clean(settings.triage_cta_url, 500)
+  if (!/^https:\/\//i.test(url)) return null
+  const label = clean(settings.triage_cta_label, 20) || 'Falar com a equipe'
+  let finalUrl = url
+  if (/^https:\/\/(wa\.me|api\.whatsapp\.com)\//i.test(url) && !/[?&]text=/.test(url)) {
+    const intro = [contactName ? `Oi! Aqui é ${clean(contactName, 60)}` : 'Oi!', 'vim do atendimento da Mugô', summary ? `Assunto: ${clean(summary, 200)}` : ''].filter(Boolean).join(' — ')
+    finalUrl = `${url}${url.includes('?') ? '&' : '?'}text=${encodeURIComponent(intro)}`
+  }
+  return { label, url: finalUrl }
+}
+
+export function interactiveCtaBody(text, cta) {
+  return { type: 'cta_url', body: { text: clean(text, 1024) }, action: { name: 'cta_url', parameters: { display_text: cta.label, url: cta.url } } }
+}
+
+/** Até 2 botões de triagem (o WhatsApp aceita 1 por mensagem; o segundo vai numa mensagem curta logo depois). */
+export function buildTriageCtas(settings = {}, context = {}) {
+  const first = buildTriageCta(settings, context)
+  const second = buildTriageCta({ triage_cta_url: settings.triage_cta_url_2, triage_cta_label: settings.triage_cta_label_2 || 'Outro atendente' }, context)
+  return [first, second].filter(Boolean)
+}
+export const SECOND_CTA_TEXT = 'Se preferir, você também pode falar com a gente por aqui:'
+
+// A mensagem fala em passar para o time? Então os botões da equipe vão junto.
+const TEAM_MENTION = /\b(nosso time|do time|o time|nossa equipe|da equipe|a equipe|pessoa respons[aá]vel|algu[eé]m (?:do|da) (?:time|equipe)|vou encaminhar|vou passar|encaminhei|especialista|consultor|comercial (?:vai|continua|te chama))/i
+export const mentionsTeam = (text) => TEAM_MENTION.test(String(text || ''))

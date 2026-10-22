@@ -100,3 +100,33 @@ test('GPT: schema estrito sem palavras-chave recusadas, busca na web com recuo',
   assert.deepEqual(bodies[0].tools, [{ type: 'web_search' }])
   assert.equal(bodies[1].tools, undefined)
 })
+
+test('botão de triagem: wa.me com assunto, limites da Meta e link inválido ignorado', async () => {
+  const { buildTriageCta, interactiveCtaBody } = await import('../supabase/functions/_shared/attendanceCore.js')
+  const cta = buildTriageCta({ triage_cta_url: 'https://wa.me/5511999999999', triage_cta_label: 'Falar com a equipe Mugô agora' }, { summary: 'site + tráfego', contactName: 'Ana' })
+  assert.equal(cta.label.length <= 20, true)
+  assert.match(cta.url, /^https:\/\/wa\.me\/5511999999999\?text=/)
+  assert.match(decodeURIComponent(cta.url), /Ana.*Assunto: site \+ tráfego/)
+  assert.equal(buildTriageCta({ triage_cta_url: 'https://chat.whatsapp.com/abc' }).url, 'https://chat.whatsapp.com/abc')
+  assert.equal(buildTriageCta({ triage_cta_url: 'http://inseguro.com' }), null)
+  assert.equal(buildTriageCta({}), null)
+  const body = interactiveCtaBody('Perfeito!', cta)
+  assert.equal(body.type, 'cta_url')
+  assert.equal(body.action.parameters.display_text, cta.label)
+})
+
+test('dois números da equipe: dois botões, na ordem configurada', async () => {
+  const { buildTriageCtas } = await import('../supabase/functions/_shared/attendanceCore.js')
+  const ctas = buildTriageCtas({ triage_cta_url: 'https://wa.me/5511972769605', triage_cta_label: 'Falar com Kleber', triage_cta_url_2: 'https://wa.me/5511973510549', triage_cta_label_2: 'Falar com Danilo' }, { summary: 'site' })
+  assert.deepEqual(ctas.map((c) => c.label), ['Falar com Kleber', 'Falar com Danilo'])
+  assert.match(ctas[1].url, /^https:\/\/wa\.me\/5511973510549\?text=/)
+  assert.equal(buildTriageCtas({ triage_cta_url: 'https://wa.me/5511972769605' }).length, 1)
+})
+
+test('mensagem que fala do time leva os botões; pergunta de qualificação não', async () => {
+  const { mentionsTeam } = await import('../supabase/functions/_shared/attendanceCore.js')
+  for (const text of ['Certo. Vou encaminhar o contexto desta conversa para a pessoa responsável continuar com você.', 'Ainda estou acionando nosso time por aqui.', 'Perfeito! O Kleber, do nosso time, continua com você.', 'Vou passar para a nossa equipe comercial.'])
+    assert.equal(mentionsTeam(text), true, text)
+  for (const text of ['Hoje vocês já fazem anúncios ou seria começar do zero?', 'O site já está pronto para vender?'])
+    assert.equal(mentionsTeam(text), false, text)
+})

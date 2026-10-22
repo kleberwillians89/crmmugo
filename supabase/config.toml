@@ -431,3 +431,6 @@ verify_jwt = false
 
 [functions.newsletter]
 verify_jwt = false
+
+[functions.team-notification-worker]
+verify_jwt = false
