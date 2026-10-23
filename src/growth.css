@@ -144,3 +144,10 @@
 .g-chips .g-chip.active{background:var(--accent,#004f6e);border-color:var(--accent,#004f6e);color:#fff}
 .g-chip:focus-within{outline:2px solid var(--accent,#004f6e);outline-offset:2px}
 .g-label{display:block;font-size:13px;font-weight:600;margin-bottom:4px}
+.g-copy-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.g-copy-row code{flex:1 1 260px;min-width:0;overflow-wrap:anywhere;font-size:12px;background:var(--surface-muted,#f4f5f7);border:1px solid var(--border,#e4e7ec);border-radius:8px;padding:8px 10px}
+.g-signups{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.g-signups div{border:1px solid var(--border,#e4e7ec);border-radius:10px;padding:10px 12px}
+.g-signups strong{display:block;font-size:22px}
+.g-signups small{color:var(--text-muted,#667085)}
+.g-origins{width:100%;margin-bottom:16px}

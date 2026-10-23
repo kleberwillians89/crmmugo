@@ -78,6 +78,11 @@ export const convertProspect = (id, channel, note) => invoke('prospecting', { ac
 export const sendProspectTest = (id) => invoke('prospecting', { action: 'send_test', prospect_id: id })
 
 // ---------------------------------------------------------------- E-mail marketing
+export const listNewsletterSignups = async () => {
+  const since = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString()
+  const result = await db().from('newsletter_signups').select('id,email,name,status,wants_contact,attribution,created_at,confirmed_at,opportunity_id').gte('created_at', since).order('created_at', { ascending: false }).limit(5000)
+  return result.error ? [] : result.data || []
+}
 export const listEmailContacts = async () => unwrap(await db().from('email_contacts').select('*').order('created_at', { ascending: false }).limit(5000))
 export const addEmailContact = async (values) => unwrap(await db().from('email_contacts').insert({ ...values, email: values.email.trim().toLowerCase() }).select().single())
 export const updateEmailContact = async (id, patch) => unwrap(await db().from('email_contacts').update(patch).eq('id', id).select().single())

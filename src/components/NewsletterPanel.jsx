@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, Copy, Download, Newspaper, Plus, RefreshCw, Save, Send, Settings2, SkipForward, Sparkles, Trash2, Zap } from 'lucide-react'
+import { CheckCircle2, Copy, Download, Link2, Newspaper, Plus, RefreshCw, Save, Send, Settings2, SkipForward, Sparkles, Trash2, Zap } from 'lucide-react'
 import { toPng } from 'html-to-image'
 import { FeedbackMessage } from './FeedbackMessage'
 import { composeLinkedinPost, renderLinkedinSlides, renderNewsletterHtml } from '../../supabase/functions/_shared/newsletterCore.js'
@@ -9,6 +9,8 @@ import {
   listRecentNews, newsletterAction, newsletterFlash, saveNewsletterSettings, updateEdition, updateNewsletterSource,
 } from '../services/data/growthRepository'
 
+const SIGNUP_URL = 'https://crm.mugoagencia.com.br/news'
+const AD_URL = `${SIGNUP_URL}?utm_source=meta&utm_medium=paid&utm_campaign={{campaign.name}}&utm_term={{adset.name}}&utm_content={{ad.name}}`
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 const statusLabel = { draft: 'Aguardando aprovação', approved: 'Aprovada — agendada', sent: 'Enviada', skipped: 'Pulada', failed: 'Falhou' }
 const dateBr = (iso) => String(iso || '').split('-').reverse().join('/')
@@ -172,8 +174,9 @@ function SourcesBlock({ sources, run, reload, busy }) {
 function SettingsBlock({ settings, run, onSaved, busy }) {
   const [form, setForm] = useState(() => ({ ...settings, generate_time: String(settings.generate_time).slice(0, 5), send_time: String(settings.send_time).slice(0, 5), tags: (settings.audience?.tags || []).join(', ') }))
   const set = (key) => (e) => setForm({ ...form, [key]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })
+  const onlySignups = form.tags.split(',').map((t) => t.trim().toLowerCase()).includes('newsletter')
   const submit = (e) => { e.preventDefault(); run('settings', async () => {
-    const values = { themes: form.themes || [], enabled: form.enabled, auto_send: form.auto_send, generate_weekday: Number(form.generate_weekday), generate_time: form.generate_time, send_weekday: Number(form.send_weekday), send_time: form.send_time, items_count: Number(form.items_count), focus: form.focus || null, template_html: form.template_html || null, item_template_html: form.item_template_html || null, from_name: form.from_name || null, from_email: form.from_email || null, reply_to: form.reply_to || null, audience: { tags: form.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean), sources: [] }, linkedin_cover_html: form.linkedin_cover_html || null, linkedin_slide_html: form.linkedin_slide_html || null, linkedin_hashtags: form.linkedin_hashtags || null }
+    const values = { themes: form.themes || [], enabled: form.enabled, auto_send: form.auto_send, generate_weekday: Number(form.generate_weekday), generate_time: form.generate_time, send_weekday: Number(form.send_weekday), send_time: form.send_time, items_count: Number(form.items_count), focus: form.focus || null, template_html: form.template_html || null, item_template_html: form.item_template_html || null, from_name: form.from_name || null, from_email: form.from_email || null, reply_to: form.reply_to || null, audience: { tags: form.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean), sources: [] }, linkedin_cover_html: form.linkedin_cover_html || null, linkedin_slide_html: form.linkedin_slide_html || null, linkedin_hashtags: form.linkedin_hashtags || null, signup_enabled: form.signup_enabled !== false, meta_pixel_id: String(form.meta_pixel_id || '').replace(/\D/g, '') || null }
     onSaved(await saveNewsletterSettings(values))
   }, 'Configuração salva.') }
   return <form className="dashboard-panel g-settings" onSubmit={submit}>
@@ -185,13 +188,22 @@ function SettingsBlock({ settings, run, onSaved, busy }) {
       <label>Enviar na<select value={form.send_weekday} onChange={set('send_weekday')}>{WEEKDAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}</select></label>
       <label>Às<input type="time" value={form.send_time} onChange={set('send_time')} /></label>
       <label>Notícias por edição<input type="number" min="3" max="8" value={form.items_count} onChange={set('items_count')} /></label>
-      <label>Público (tags, vazio = todos)<input value={form.tags} onChange={set('tags')} placeholder="cliente, lead" /></label>
+      <label>Público (tags, vazio = todos)<input value={form.tags} onChange={set('tags')} placeholder="newsletter" /></label>
+      <label className="g-check g-wide"><input type="checkbox" checked={onlySignups} onChange={() => setForm({ ...form, tags: onlySignups ? form.tags.split(',').map((t) => t.trim()).filter((t) => t && t !== 'newsletter').join(', ') : [...form.tags.split(',').map((t) => t.trim()).filter(Boolean), 'newsletter'].join(', ') })} /> Enviar só para quem se inscreveu e confirmou pela página (tag “newsletter”)</label>
       <div className="g-wide"><span className="g-label">Temas padrão da edição automática (nenhum = todos)</span><div className="g-chips">{NEWS_CATEGORIES.map(([id, label]) => <label key={id} className={`g-chip${(form.themes || []).includes(id) ? ' active' : ''}`}><input type="checkbox" checked={(form.themes || []).includes(id)} onChange={() => setForm({ ...form, themes: (form.themes || []).includes(id) ? form.themes.filter((t) => t !== id) : [...(form.themes || []), id] })} /> {label}</label>)}</div></div>
       <label className="g-wide">Foco editorial<textarea rows="2" value={form.focus || ''} onChange={set('focus')} placeholder="Ex.: priorizar mudanças em Meta Ads e Google, e-commerce no Brasil e criadores de conteúdo." /></label>
       <label>Nome do remetente<input value={form.from_name || ''} onChange={set('from_name')} /></label>
       <label>E-mail do remetente<input type="email" value={form.from_email || ''} onChange={set('from_email')} placeholder="novidades@news.mugoagencia.com.br" /></label>
       <label>Responder para<input type="email" value={form.reply_to || ''} onChange={set('reply_to')} /></label>
       <label className="g-check g-wide"><input type="checkbox" checked={Boolean(form.auto_send)} onChange={set('auto_send')} /> Enviar sem aprovação (não recomendado no começo)</label>
+    </div>
+    <header><Link2 size={18} /><div><strong>Página de inscrição</strong><small>Quem se inscreve recebe um e-mail de confirmação; só entra na lista (tag “newsletter”) depois do clique.</small></div></header>
+    <div className="form-grid">
+      <label className="g-check g-wide"><input type="checkbox" checked={form.signup_enabled !== false} onChange={set('signup_enabled')} /> Inscrições abertas</label>
+      <div className="g-wide"><span className="g-label">Link da página</span><div className="g-copy-row"><code>{SIGNUP_URL}</code><button type="button" className="button secondary small" onClick={() => navigator.clipboard?.writeText(SIGNUP_URL)}><Copy size={13} /> Copiar</button></div></div>
+      <div className="g-wide"><span className="g-label">Link para os anúncios da Meta (a campanha e o anúncio entram sozinhos)</span><div className="g-copy-row"><code>{AD_URL}</code><button type="button" className="button secondary small" onClick={() => navigator.clipboard?.writeText(AD_URL)}><Copy size={13} /> Copiar</button></div></div>
+      <label>Pixel da Meta (ID)<input inputMode="numeric" value={form.meta_pixel_id || ''} onChange={set('meta_pixel_id')} placeholder="Ex.: 123456789012345" /></label>
+      <p className="data-note g-wide">Com o pixel, a página registra <b>Lead</b> quando a pessoa envia o formulário e <b>CompleteRegistration</b> quando confirma o e-mail — use esse segundo evento para otimizar a campanha.</p>
     </div>
     <header><Newspaper size={18} /><div><strong>Layout do e-mail</strong><small>Cole o HTML de vocês. Campos: {'{{intro}}'}, {'{{itens}}'}, {'{{preheader}}'}, {'{{nome}}'}, {'{{descadastro}}'}. Vazio = layout provisório.</small></div></header>
     <div className="form-grid">

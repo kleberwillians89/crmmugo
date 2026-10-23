@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Newsletter da Mugô — marketing, negócios e cultura</title>
+<meta name="description" content="Toda terça, 7h45: o que importa em marketing, negócios e o melhor da cultura de São Paulo, em 5 minutos.">
+<meta property="og:title" content="Newsletter da Mugô">
+<meta property="og:description" content="Marketing, negócios e o melhor de São Paulo. Toda terça, em 5 minutos.">
+<meta property="og:image" content="/news/mugo-logo.png">
+<link rel="icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--red:#b22234;--red-dark:#8f1b2a;--cream:#fffdf8;--paper:#f6f1e7;--ink:#111;--muted:#5b5750;--line:#e4ddd0;--ok:#1f7a4d}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--cream);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+.wrap{max-width:1120px;margin:0 auto;padding:24px 20px 48px}
+header{display:flex;align-items:center;justify-content:space-between;gap:16px}
+header img{width:118px;height:auto;display:block}
+header span{font-size:13px;color:var(--muted);font-weight:500}
+.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:56px;align-items:start;margin-top:56px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--red)}
+.eyebrow::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--red)}
+h1{font-family:"Bricolage Grotesque",Inter,sans-serif;font-weight:800;font-size:clamp(38px,6vw,68px);line-height:.98;letter-spacing:-.035em;margin:18px 0 20px}
+h1 em{font-style:normal;color:var(--red)}
+.lead{font-size:19px;line-height:1.55;color:#2c2a26;max-width:34ch;margin:0}
+.pillars{list-style:none;padding:0;margin:36px 0 0;display:grid;gap:0;border-top:1px solid var(--line)}
+.pillars li{display:grid;grid-template-columns:120px 1fr;gap:16px;padding:16px 0;border-bottom:1px solid var(--line);font-size:16px;line-height:1.45;color:#2c2a26}
+.pillars b{font-family:"Bricolage Grotesque",Inter,sans-serif;font-size:20px;letter-spacing:-.02em;color:var(--ink)}
+.card{background:#fff;border:1px solid var(--line);border-radius:22px;padding:28px;box-shadow:0 18px 50px rgba(60,30,20,.08);position:sticky;top:24px}
+.card h2{font-family:"Bricolage Grotesque",Inter,sans-serif;font-size:28px;letter-spacing:-.03em;margin:0 0 6px}
+.card p.sub{margin:0 0 22px;color:var(--muted);font-size:15px;line-height:1.5}
+label.f{display:block;font-size:14px;font-weight:600;margin:0 0 14px}
+label.f input,label.f textarea{display:block;width:100%;margin-top:6px;font:inherit;font-weight:400;font-size:16px;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;background:var(--cream);color:var(--ink);outline:none;transition:border-color .15s,box-shadow .15s}
+label.f textarea{min-height:76px;resize:vertical}
+label.f input:focus,label.f textarea:focus{border-color:var(--red);box-shadow:0 0 0 4px rgba(178,34,52,.12)}
+.check{display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start;font-size:14px;line-height:1.45;color:#2c2a26;margin:4px 0 14px;cursor:pointer}
+.check input{width:20px;height:20px;margin:1px 0 0;accent-color:var(--red);cursor:pointer}
+.extra{display:none;border-left:3px solid var(--red);padding:4px 0 2px 14px;margin:0 0 16px}
+.extra.open{display:block}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 14px}
+.chips button{font:inherit;font-size:13px;font-weight:500;padding:8px 12px;border-radius:100px;border:1.5px solid var(--line);background:var(--cream);color:var(--ink);cursor:pointer}
+.chips button[aria-pressed="true"]{background:var(--red);border-color:var(--red);color:#fff}
+.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+button.go{width:100%;font:inherit;font-size:17px;font-weight:600;padding:16px;border:0;border-radius:100px;background:var(--red);color:#fff;cursor:pointer;transition:background .15s,transform .05s;margin-top:4px}
+button.go:hover{background:var(--red-dark)}
+button.go:active{transform:translateY(1px)}
+button.go[disabled]{opacity:.6;cursor:wait}
+.err{color:var(--red);font-size:14px;font-weight:500;min-height:20px;margin:10px 0 0}
+.fine{font-size:12px;line-height:1.5;color:var(--muted);margin:16px 0 0}
+.done{display:none;text-align:left}
+.done.show{display:block}
+.done .big{font-size:44px;line-height:1}
+.done h2{margin-top:12px}
+.done p{font-size:16px;line-height:1.55;color:#2c2a26}
+footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+@media (max-width:860px){.grid{display:flex;flex-direction:column;gap:0;margin-top:32px}.grid>section{display:contents}.grid>section>*{order:1}.grid .pillars{order:3;margin-top:36px}.card{order:2;margin-top:28px}.card{position:static;padding:22px}.pillars li{grid-template-columns:1fr;gap:4px}.lead{font-size:17px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a href="https://mugoagencia.com.br" aria-label="Mugô"><img src="/news/mugo-logo.png" alt="Mugô"></a>
+    <span>Toda terça · 7h45</span>
+  </header>
+
+  <main class="grid">
+    <section>
+      <div class="eyebrow">Newsletter da Mugô</div>
+      <h1>O que importa em marketing, negócios e <em>cultura</em> — em 5 minutos.</h1>
+      <p class="lead">Uma seleção curta com o “e daí?” pra sua marca. E o melhor de São Paulo pra sua semana.</p>
+      <ul class="pillars">
+        <li><b>Marketing</b><span>O que mudou em mídia paga, redes e IA — sem enrolação e sem dica rasa.</span></li>
+        <li><b>Negócios</b><span>Movimentos de mercado, e-commerce e investimento, com o impacto explicado.</span></li>
+        <li><b>Cultura SP</b><span>Shows, exposições, teatro e onde comer. Porque a Mugô também é isso.</span></li>
+      </ul>
+    </section>
+
+    <aside class="card" aria-live="polite">
+      <form id="form" novalidate>
+        <h2>Quero receber</h2>
+        <p class="sub">Grátis. Um e-mail por semana. Sai quando quiser.</p>
+        <label class="f">Seu nome<input name="name" autocomplete="given-name" required maxlength="120" placeholder="Como a gente te chama?"></label>
+        <label class="f">Seu melhor e-mail<input name="email" type="email" autocomplete="email" inputmode="email" required maxlength="320" placeholder="voce@empresa.com.br"></label>
+        <div class="hp" aria-hidden="true"><label>Site<input name="website" tabindex="-1" autocomplete="off"></label></div>
+
+        <label class="check"><input type="checkbox" name="consent" required><span>Quero receber a newsletter da Mugô por e-mail. Posso me descadastrar quando quiser, com um clique.</span></label>
+        <label class="check"><input type="checkbox" name="wants_contact" id="wants"><span>Também quero que a Mugô fale comigo sobre um projeto.</span></label>
+        <div class="extra" id="extra">
+          <label class="f">WhatsApp com DDD<input name="whatsapp" type="tel" autocomplete="tel" inputmode="tel" maxlength="20" placeholder="(11) 98888-7777"></label>
+          <label class="f">Empresa ou marca <span style="font-weight:400;color:var(--muted)">(opcional)</span><input name="company" autocomplete="organization" maxlength="160"></label>
+          <div style="font-size:14px;font-weight:600">No que podemos ajudar? <span style="font-weight:400;color:var(--muted)">(opcional)</span></div>
+          <div class="chips" id="chips">
+            <button type="button" aria-pressed="false">Tráfego pago</button>
+            <button type="button" aria-pressed="false">Redes sociais</button>
+            <button type="button" aria-pressed="false">Site ou e-commerce</button>
+            <button type="button" aria-pressed="false">Branding</button>
+            <button type="button" aria-pressed="false">Automação e IA</button>
+          </div>
+        </div>
+
+        <button class="go" type="submit">Quero receber a newsletter</button>
+        <p class="err" id="err" role="alert"></p>
+        <p class="fine">Usamos seus dados só para enviar a newsletter (e falar com você, se pedir). Nada de spam, nada de repasse. Vai chegar um e-mail para confirmar a inscrição.</p>
+      </form>
+
+      <div class="done" id="done">
+        <div class="big">💌</div>
+        <h2>Confere seu e-mail</h2>
+        <p>Mandamos um link de confirmação para <b id="doneEmail"></b>. É só clicar — sem isso você não entra na lista.</p>
+        <p style="color:var(--muted);font-size:14px">Não chegou em 2 minutos? Olha a aba Promoções ou o spam.</p>
+      </div>
+      <div class="done" id="already">
+        <div class="big">✓</div>
+        <h2>Você já está na lista</h2>
+        <p>A próxima edição chega na terça, às 7h45.</p>
+        <p id="alreadyContact" style="display:none">E já avisamos o time: a gente vai te chamar no WhatsApp.</p>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    <span>Mugô · São Paulo</span>
+    <a href="https://mugoagencia.com.br">mugoagencia.com.br</a>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var ENDPOINT = 'https://hdyjuyhiybjqvxsukmbn.supabase.co/functions/v1/newsletter-signup'
+  var startedAt = Date.now()
+  var form = document.getElementById('form'), err = document.getElementById('err')
+  var wants = document.getElementById('wants'), extra = document.getElementById('extra')
+
+  // Origem da campanha: guarda os UTMs da primeira visita (sobrevive a navegação na mesma aba).
+  var KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 'gclid']
+  var params = new URLSearchParams(location.search), attribution = {}
+  try { attribution = JSON.parse(sessionStorage.getItem('mugo_news_attr') || '{}') } catch (e) {}
+  if (KEYS.some(function (k) { return params.get(k) })) {
+    attribution = {}
+    KEYS.forEach(function (k) { if (params.get(k)) attribution[k] = params.get(k) })
+    attribution.referrer = document.referrer || ''
+    attribution.landing_url = location.href
+  }
+  if (!attribution.landing_url) { attribution.landing_url = location.href; attribution.referrer = document.referrer || '' }
+  try { sessionStorage.setItem('mugo_news_attr', JSON.stringify(attribution)) } catch (e) {}
+
+  // Pixel da Meta (só se configurado no CRM).
+  var pixelReady = false
+  fetch(ENDPOINT + '?action=config').then(function (r) { return r.json() }).then(function (cfg) {
+    if (!cfg || !cfg.pixel_id) return
+    !function (f, b, e, v, n, t, s) { if (f.fbq) return; n = f.fbq = function () { n.callMethod ? n.callMethod.apply(n, arguments) : n.queue.push(arguments) }; if (!f._fbq) f._fbq = n; n.push = n; n.loaded = !0; n.version = '2.0'; n.queue = []; t = b.createElement(e); t.async = !0; t.src = v; s = b.getElementsByTagName(e)[0]; s.parentNode.insertBefore(t, s) }(window, document, 'script', 'https://connect.facebook.net/en_US/fbevents.js')
+    fbq('init', cfg.pixel_id); fbq('track', 'PageView'); pixelReady = true
+  }).catch(function () {})
+
+  wants.addEventListener('change', function () { extra.classList.toggle('open', wants.checked) })
+  document.getElementById('chips').addEventListener('click', function (event) {
+    var b = event.target.closest('button'); if (!b) return
+    b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') === 'true' ? 'false' : 'true')
+  })
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault(); err.textContent = ''
+    var data = new FormData(form)
+    var email = String(data.get('email') || '').trim(), name = String(data.get('name') || '').trim()
+    if (!name) { err.textContent = 'Como a gente te chama?'; return }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { err.textContent = 'Confere o e-mail? Parece que falta alguma coisa.'; return }
+    if (!form.consent.checked) { err.textContent = 'Marca a caixinha de aceite pra gente poder te enviar a newsletter.'; return }
+    if (wants.checked && String(data.get('whatsapp') || '').replace(/\D/g, '').length < 10) { err.textContent = 'Deixa um WhatsApp com DDD pra gente falar com você.'; return }
+    var interest = Array.prototype.slice.call(document.querySelectorAll('#chips button[aria-pressed="true"]')).map(function (b) { return b.textContent }).join(', ')
+    var payload = Object.assign({}, attribution, {
+      action: 'signup', name: name, email: email, consent: true, wants_contact: wants.checked,
+      whatsapp: data.get('whatsapp') || '', company: data.get('company') || '', interest: interest,
+      website: data.get('website') || '', started_at: startedAt,
+    })
+    var button = form.querySelector('button.go'); button.disabled = true; button.textContent = 'Enviando…'
+    fetch(ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      .then(function (r) { return r.json().catch(function () { return {} }) })
+      .then(function (res) {
+        if (!res || !res.ok) throw new Error((res && res.message) || 'Não deu certo agora. Tenta de novo?')
+        if (pixelReady) fbq('track', 'Lead', { content_name: 'newsletter' })
+        form.style.display = 'none'
+        if (res.already) {
+          document.getElementById('already').classList.add('show')
+          if (wants.checked) document.getElementById('alreadyContact').style.display = 'block'
+        } else {
+          document.getElementById('doneEmail').textContent = email
+          document.getElementById('done').classList.add('show')
+        }
+      })
+      .catch(function (e) { err.textContent = e.message || 'Não deu certo agora. Tenta de novo?' })
+      .finally(function () { button.disabled = false; button.textContent = 'Quero receber a newsletter' })
+  })
+})()
+</script>
+</body>
+</html>

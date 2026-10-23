@@ -5,13 +5,14 @@ import { PageHeader } from './PageHeader'
 import { FeedbackMessage } from './FeedbackMessage'
 import { useAuth } from '../contexts/AuthContext'
 import { NewsletterPanel } from './NewsletterPanel'
+import { attributionLabel, summarizeSignups } from '../../supabase/functions/_shared/newsletterSignupCore.js'
 import {
-  addEmailContact, campaignAudienceCount, listCampaigns, listEmailContacts, refreshCampaignStats, saveCampaign, scheduleCampaign,
+  addEmailContact, campaignAudienceCount, listCampaigns, listEmailContacts, listNewsletterSignups, refreshCampaignStats, saveCampaign, scheduleCampaign,
   sendCampaignNow, sendCampaignTest, syncContactsFromCrm, unscheduleCampaign, updateEmailContact,
 } from '../services/data/growthRepository'
 
 const statusLabel = { draft: 'Rascunho', scheduled: 'Agendada', sending: 'Enviando', sent: 'Enviada', failed: 'Falhou' }
-const sourceLabel = { manual: 'Manual', crm_client: 'Cliente (CRM)', crm_lead: 'Lead (CRM)', prospect_replied: 'Prospect que respondeu', import: 'Importado', form: 'Formulário' }
+const sourceLabel = { manual: 'Manual', crm_client: 'Cliente (CRM)', crm_lead: 'Lead (CRM)', prospect_replied: 'Prospect que respondeu', import: 'Importado', form: 'Página de inscrição' }
 const dateTime = (value) => value ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(value)) : '—'
 const pct = (part, total) => total ? `${Math.round(part / total * 100)}%` : '—'
 const STARTER = '<!doctype html>\n<html><body style="margin:0;background:#f4f6f8">\n  <div style="max-width:600px;margin:0 auto;background:#fff;font-family:Arial,sans-serif;padding:32px">\n    <h1 style="font-size:22px">Olá, {{nome}}!</h1>\n    <p>Cole aqui o HTML da newsletter.</p>\n    <p style="font-size:12px;color:#8b97a7"><a href="{{descadastro}}">Descadastrar</a></p>\n  </div>\n</body></html>'
@@ -19,14 +20,14 @@ const STARTER = '<!doctype html>\n<html><body style="margin:0;background:#f4f6f8
 export function EmailCampaignsPage() {
   const { canWrite } = useAuth()
   const [tab, setTab] = useState('campaigns')
-  const [campaigns, setCampaigns] = useState([]), [contacts, setContacts] = useState([])
+  const [campaigns, setCampaigns] = useState([]), [contacts, setContacts] = useState([]), [signups, setSignups] = useState([]), [loadedAt, setLoadedAt] = useState(0)
   const [editing, setEditing] = useState(null), [audienceCount, setAudienceCount] = useState(null)
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(''), [error, setError] = useState(''), [feedback, setFeedback] = useState('')
   const [contactQuery, setContactQuery] = useState(''), [newContact, setNewContact] = useState(null)
 
   async function load() {
     setError('')
-    try { const [rows, people] = await Promise.all([listCampaigns(), listEmailContacts()]); setCampaigns(rows); setContacts(people) }
+    try { const [rows, people, forms] = await Promise.all([listCampaigns(), listEmailContacts(), listNewsletterSignups()]); setCampaigns(rows); setContacts(people); setSignups(forms); setLoadedAt(Date.now()) }
     catch (cause) { setError(cause.message) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -38,6 +39,7 @@ export function EmailCampaignsPage() {
 
   const tags = useMemo(() => [...new Set(contacts.flatMap((contact) => contact.tags || []))].sort(), [contacts])
   const subscribed = contacts.filter((contact) => contact.subscribed).length
+  const signupStats = useMemo(() => summarizeSignups(signups, loadedAt), [signups, loadedAt])
   const visibleContacts = contacts.filter((contact) => !contactQuery || [contact.email, contact.name, ...(contact.tags || [])].some((value) => String(value || '').toLowerCase().includes(contactQuery.toLowerCase())))
 
   async function persist() {
@@ -114,10 +116,22 @@ export function EmailCampaignsPage() {
         <label className="g-search"><input placeholder="Buscar e-mail, nome ou tag…" value={contactQuery} onChange={(event) => setContactQuery(event.target.value)} /></label>
         <button className="button secondary small" disabled={Boolean(busy)} onClick={() => run('sync', async () => { const count = await syncContactsFromCrm(); await load(); return count }, (count) => `${count} contatos novos vindos do CRM (clientes, ex-clientes e leads com e-mail).`)}><RefreshCw size={13} /> Importar do CRM</button>
       </div>
+      {signups.length > 0 && <>
+        <div className="g-signups">
+          <div><strong>{signupStats.confirmed}</strong><small>inscritos pela página (90 dias)</small></div>
+          <div><strong>{signupStats.week}</strong><small>confirmados nos últimos 7 dias</small></div>
+          <div><strong>{signupStats.pending}</strong><small>aguardando confirmar o e-mail</small></div>
+          <div><strong>{signupStats.leads}</strong><small>pediram contato (viraram lead)</small></div>
+        </div>
+        <div className="g-table-wrap g-origins"><table className="g-table">
+          <thead><tr><th>Origem / campanha</th><th>Inscrições</th><th>Confirmaram</th><th>Taxa</th><th>Pediram contato</th></tr></thead>
+          <tbody>{signupStats.origins.map((row) => <tr key={row.origin}><td>{row.origin}</td><td>{row.total}</td><td>{row.confirmed}</td><td>{pct(row.confirmed, row.total)}</td><td>{row.contact}</td></tr>)}</tbody>
+        </table></div>
+      </>}
       <div className="g-table-wrap"><table className="g-table">
         <thead><tr><th>E-mail</th><th>Nome</th><th>Origem</th><th>Tags</th><th>Situação</th></tr></thead>
         <tbody>{visibleContacts.slice(0, 500).map((contact) => <tr key={contact.id}>
-          <td>{contact.email}</td><td>{contact.name || '—'}</td><td>{sourceLabel[contact.source]}</td>
+          <td>{contact.email}</td><td>{contact.name || '—'}</td><td>{sourceLabel[contact.source]}{contact.attribution && Object.keys(contact.attribution).length ? <small className="g-sub"> · {attributionLabel(contact.attribution)}</small> : null}</td>
           <td><input className="g-inline" defaultValue={(contact.tags || []).join(', ')} onBlur={(event) => { const next = event.target.value.split(',').map((tag) => tag.trim().toLowerCase()).filter(Boolean); if (next.join() !== (contact.tags || []).join()) run('tags', async () => { await updateEmailContact(contact.id, { tags: next }); await load() }) }} aria-label={`Tags de ${contact.email}`} /></td>
           <td>{contact.subscribed ? 'Inscrito' : `Descadastrado ${dateTime(contact.unsubscribed_at)}`}</td>
         </tr>)}</tbody>
