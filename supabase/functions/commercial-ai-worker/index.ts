@@ -3,7 +3,8 @@ import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {brazilianPhoneCandidates} from '../_shared/internalCommandCore.js'
 import {getOperationalWindow} from '../_shared/operationalCalendar.js'
 import {generateStructured,transcribeAudio} from '../_shared/aiProvider.js'
-import {FOLLOWUP_FALLBACK,FOLLOWUP_SCHEMA,buildKnowledgePrompt,SECOND_CTA_TEXT,buildTriageCtas,interactiveCtaBody,mentionsTeam,composeHandoffResponse,followupDue,pendingInboundText,stripUnauthorizedLinks} from '../_shared/attendanceCore.js'
+import {CTA_RESEND_TEXT,PRICE_HANDOFF_TEXT,ctaResendDue,isPriceRequest,orderCtasForOwner,FOLLOWUP_FALLBACK,FOLLOWUP_SCHEMA,buildKnowledgePrompt,SECOND_CTA_TEXT,buildTriageCtas,interactiveCtaBody,mentionsTeam,composeHandoffResponse,followupDue,pendingInboundText,stripUnauthorizedLinks} from '../_shared/attendanceCore.js'
+import {trackCtas} from '../_shared/ctaTracking.js'
 import {CONVERSATION_PRINCIPLES,UNDERSTANDING_SCHEMA,conversationModelInput,conversationTrace,scopedConversationState,advanceConversationState} from '../_shared/conversationKernel.js'
 import {COMMERCIAL_INTENTS,COMMERCIAL_LEAD_KINDS,COMMERCIAL_SYSTEM_PROMPT,applyInterestCorrection,assessCommercialTemperature,buildCommercialSummary,classifyConversationKind,defaultCommercialDecision,enforceCommercialHandoffPolicy,enforceCommercialPrivacyPolicy,enforceCommercialResponsePolicy,hasMinimumCommercialContext,qualificationClassification,validateCommercialDecision} from '../_shared/commercialAgentCore.js'
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}})
@@ -89,6 +90,8 @@ async function transcribePendingAudio(admin:any,event:any){
 // Modo copiloto: a IA escreve, uma pessoa aprova no CRM. Modo automático: envia.
 async function deliver(admin:any,event:any,conversation:any,text:string,mode:string,ctas:any[]=[]){
   if(mode!=='copilot'){
+    // botões com clique registrado (para reenviar se o lead não abrir)
+    if(ctas.length)ctas=await trackCtas(admin,{organizationId:event.organization_id,conversationId:event.conversation_id,ctas,baseUrl:Deno.env.get('SUPABASE_URL')}).catch(()=>ctas)
     const id=await sendMessage(admin,event,conversation,text,undefined,ctas[0]||null)
     // segundo número da equipe: mensagem curta com o outro botão
     if(ctas[1])await sendMessage(admin,event,conversation,SECOND_CTA_TEXT,`commercial-ai:${event.id}:cta2`,ctas[1]).catch(()=>null)
@@ -285,6 +288,8 @@ async function processEvent(admin:any,event:any){
     const temperature=(temperatureRank.get(opportunity.temperature)??-1)>(temperatureRank.get(assessedTemperature.temperature)??-1)?{temperature:opportunity.temperature,reason:opportunity.temperature_reason||assessedTemperature.reason}:assessedTemperature
     if(!decision.handoff&&temperature.temperature==='hot'&&hasMinimumCommercialContext(q)){decision.handoff=true;decision.handoff_reason='hot_lead_with_context'}
     if(!decision.handoff&&Number(decision.confidence)<.45){decision.handoff=true;decision.handoff_reason='low_confidence'}
+    // Pediu valor/preço/orçamento: o time assume na hora, com os botões (sem mais perguntas de qualificação).
+    if(isPriceRequest(inbound)&&leadKind.kind==='new_business'){decision.handoff=true;decision.handoff_reason=decision.handoff_reason||'price_request';decision.response=PRICE_HANDOFF_TEXT}
     q.needs_human=Boolean(decision.handoff);q.classification=qualificationClassification(q)
     delete q.id;delete q.created_at;delete q.updated_at
     const savedQ=await admin.from('commercial_qualifications').upsert(q,{onConflict:'opportunity_id'});if(savedQ.error)throw savedQ.error
@@ -325,13 +330,50 @@ async function processEvent(admin:any,event:any){
     }
 
     const finalText=finalize(decision.response)
-    const triageCta=(decision.handoff||mentionsTeam(finalText))?buildTriageCtas(settingsResult.data,{summary:interests.length?interests.join(' + ').toLowerCase():clean(inbound,120),contactName:client.contact_name}):[]
+    const triageCta=(decision.handoff||mentionsTeam(finalText))?orderCtasForOwner(buildTriageCtas(settingsResult.data,{summary:interests.length?interests.join(' + ').toLowerCase():clean(inbound,120),contactName:client.contact_name}),finalText.match(/\b(Kleber|Julia|Danilo|Liliu)\b/i)?.[1]||attendance.ownerFirstName):[]
     const providerMessageId=await deliver(admin,event,conversation,finalText,aiMode,triageCta)
     await admin.from('commercial_ai_events').update({status:'completed',decision:{...decision,temperature,lead_kind:leadKind,provider_message_id:providerMessageId,opportunity_id:opportunity.id,conversation_trace:trace(decision,decision.response,{opportunity_id:opportunity.id,handoff:decision.handoff})},processed_at:new Date().toISOString(),error_code:null,error_message:null}).eq('id',event.id)
     return true
   }catch(error:any){const attempts=Number(event.attempts||0)+1,terminal=attempts>=6||['META_CONFIGURATION_MISSING','AI_REQUEST_FAILED'].includes(error?.code);await admin.from('commercial_ai_events').update({decision:{...(event.decision||{}),conversation_trace:conversationTrace({identityType:'external',understanding:null,state:event.conversation_state,plannerStatus:event.planner_status||'error',path:'failed',response:null,startedAt,error:error?.code||error?.name})},status:terminal?'dead_letter':'failed',next_attempt_at:new Date(Date.now()+Math.min(3600,2**attempts*30)*1000).toISOString(),error_code:clean(error?.code||error?.name,100),error_message:clean(error?.message,500),processed_at:terminal?new Date().toISOString():null}).eq('id',event.id);return false}
 }
 // Retomada única de lead que parou de responder (dentro da janela de 24h e do horário de atendimento).
+// Reenvio único dos botões da equipe quando o lead não tocou em nenhum (dentro da janela de 24h).
+async function processCtaResends(admin:any){
+  const settings=await admin.from('commercial_settings').select('organization_id,ai_mode,cta_resend_after_minutes').eq('ai_mode','controlled_auto')
+  if(settings.error)return 0
+  let sent=0
+  for(const config of settings.data||[]){
+    const window=await getOperationalWindow(admin,config.organization_id);if(!window.open)continue
+    const afterMinutes=Number(config.cta_resend_after_minutes||1200)
+    const links=await admin.from('whatsapp_cta_links').select('id,batch_id,conversation_id,label,created_at,clicked_at,resent_at').eq('organization_id',config.organization_id).is('resent_at',null).lte('created_at',new Date(Date.now()-afterMinutes*60_000).toISOString()).gte('created_at',new Date(Date.now()-26*3_600_000).toISOString()).order('created_at').limit(60)
+    if(links.error)continue
+    const batches=new Map<string,any[]>()
+    for(const link of links.data||[])batches.set(link.batch_id,[...(batches.get(link.batch_id)||[]),link])
+    for(const [batchId,rows] of batches){
+      const conversationId=rows[0].conversation_id
+      // só o botão mais recente de cada conversa conta (um envio novo substitui o anterior)
+      const newer=await admin.from('whatsapp_cta_links').select('id').eq('conversation_id',conversationId).gt('created_at',rows[0].created_at).neq('batch_id',batchId).limit(1)
+      const conversation=await admin.from('whatsapp_conversations').select('id,organization_id,connection_id,wa_id,last_inbound_at,status').eq('id',conversationId).maybeSingle()
+      const outbound=await admin.from('whatsapp_messages').select('idempotency_key').eq('conversation_id',conversationId).eq('direction','out').gt('created_at',rows[0].created_at)
+      const automated=['commercial-ai:','team-notify:','commercial-notify:','automation:','handoff-client-sla-15:','waiting-cta:','commercial-followup:','cta-resend:']
+      const humanReplied=(outbound.data||[]).some((row:any)=>!automated.some(prefix=>String(row.idempotency_key||'').startsWith(prefix)))
+      const due=!newer.data?.length&&conversation.data&&conversation.data.status!=='closed'&&ctaResendDue({createdAt:rows[0].created_at,clicked:rows.some((row:any)=>row.clicked_at),resent:false,lastInboundAt:conversation.data.last_inbound_at,humanReplied},{afterMinutes})
+      // marca antes de enviar: nunca reenvia duas vezes
+      const claim=await admin.from('whatsapp_cta_links').update({resent_at:new Date().toISOString()}).eq('batch_id',batchId).is('resent_at',null).select('id')
+      if(!due||claim.error||!claim.data?.length)continue
+      const base=Deno.env.get('SUPABASE_URL')||''
+      const ctas=rows.map((row:any)=>({label:row.label,url:`${base.replace(/\/+$/,'')}/functions/v1/cta-redirect?l=${row.id}`}))
+      const eventLike={id:`cta-resend-${batchId}`,organization_id:conversation.data.organization_id,connection_id:conversation.data.connection_id,conversation_id:conversationId}
+      try{
+        await sendMessage(admin,eventLike,conversation.data,CTA_RESEND_TEXT,`cta-resend:${batchId}`,ctas[0])
+        if(ctas[1])await sendMessage(admin,eventLike,conversation.data,SECOND_CTA_TEXT,`cta-resend:${batchId}:2`,ctas[1]).catch(()=>null)
+        sent+=1
+      }catch{/* fica marcado: não insiste */}
+    }
+  }
+  return sent
+}
+
 async function processFollowups(admin:any){
   const settings=await admin.from('commercial_settings').select('*').eq('ai_mode','controlled_auto').eq('followup_enabled',true)
   if(settings.error)return 0
@@ -385,7 +427,7 @@ Deno.serve(async request=>{
     runtime.waitUntil(drainQueue(admin).catch(()=>null))
     return json({ok:true,accepted:true},202)
   }
-  return json({ok:true,...await drainQueue(admin),followups:await processFollowups(admin).catch(()=>0)})
+  return json({ok:true,...await drainQueue(admin),followups:await processFollowups(admin).catch(()=>0),cta_resends:await processCtaResends(admin).catch(()=>0)})
 })
 
 async function drainQueue(admin:any){

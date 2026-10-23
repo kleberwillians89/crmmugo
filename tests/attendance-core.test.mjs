@@ -138,3 +138,29 @@ test('cliente esperando o time: pedido de contato ou "?" recebe os botões; conv
   for (const text of ['Combinado, aguardo!', 'https://www.roove.com.br/', 'Obrigado'])
     assert.equal(isWaitingNudge(text), false, text)
 })
+
+test('pedido de valores vai para o time com botões; botão da pessoa citada primeiro; reenvio só sem clique e dentro de 24h', async () => {
+  const { isPriceRequest, orderCtasForOwner, ctaResendDue } = await import('../supabase/functions/_shared/attendanceCore.js')
+  for (const text of ['Conversão, quais valores para esses serviços vocês cobram?', 'quanto custa?', 'me passa um orçamento', 'Qual o preço do site?', 'qual é o investimento?'])
+    assert.equal(isPriceRequest(text), true, text)
+  for (const text of ['Vender On line', 'quero valorizar minha marca', 'Roupas de skinwear para mulheres'])
+    assert.equal(isPriceRequest(text), false, text)
+  const ctas = [{ label: 'Falar com Kleber', url: 'k' }, { label: 'Falar com Julia', url: 'j' }]
+  assert.deepEqual(orderCtasForOwner(ctas, 'Julia').map((c) => c.label), ['Falar com Julia', 'Falar com Kleber'])
+  assert.deepEqual(orderCtasForOwner(ctas, 'Kleber').map((c) => c.label), ['Falar com Kleber', 'Falar com Julia'])
+  const now = Date.parse('2026-10-24T11:00:00Z')
+  const base = { createdAt: '2026-10-23T15:00:00Z', clicked: false, resent: false, lastInboundAt: '2026-10-23T14:58:00Z', humanReplied: false }
+  assert.equal(ctaResendDue(base, { afterMinutes: 1200 }, now), true)
+  assert.equal(ctaResendDue({ ...base, clicked: true }, { afterMinutes: 1200 }, now), false)
+  assert.equal(ctaResendDue({ ...base, humanReplied: true }, { afterMinutes: 1200 }, now), false)
+  assert.equal(ctaResendDue(base, { afterMinutes: 1200 }, Date.parse('2026-10-24T09:00:00Z')), false) // ainda cedo
+  assert.equal(ctaResendDue({ ...base, lastInboundAt: '2026-10-23T10:00:00Z' }, { afterMinutes: 1200 }, now), false) // janela de 24h fechou
+})
+
+test('prompt do atendimento: sem repetir o lead, máximo 3 perguntas e preço é handoff', async () => {
+  const { COMMERCIAL_SYSTEM_PROMPT } = await import('../supabase/functions/_shared/commercialAgentCore.js')
+  assert.match(COMMERCIAL_SYSTEM_PROMPT, /NÃO repita, resuma nem parafraseie/)
+  assert.match(COMMERCIAL_SYSTEM_PROMPT, /no máximo 3 perguntas de qualificação/)
+  assert.match(COMMERCIAL_SYSTEM_PROMPT, /pedido de preço, valor, orçamento ou proposta é handoff imediato/)
+  assert.doesNotMatch(COMMERCIAL_SYSTEM_PROMPT, /não justifica handoff/)
+})
