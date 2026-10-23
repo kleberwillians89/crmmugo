@@ -9,7 +9,10 @@ export function unsubscribeUrl(baseUrl, token) {
 /** Personaliza o HTML do Kleber: {{nome}}, {{email}}, {{descadastro}}. Sem {{descadastro}}, adiciona rodapé. */
 export function renderCampaignHtml(html, { name = '', email = '', unsubscribe = '' } = {}) {
   const firstName = clean(name, 120).split(/\s+/)[0] || ''
+  // Sem nome: "Oi, {{nome}}!" vira "Oi!" (nunca "Oi, !").
   let output = String(html || '')
+  if (!firstName) output = output.replace(/,?[ \t]*\{\{nome\}\}/g, '')
+  output = output
     .replaceAll('{{nome}}', escapeHtml(firstName))
     .replaceAll('{{email}}', escapeHtml(email))
   if (output.includes('{{descadastro}}')) output = output.replaceAll('{{descadastro}}', escapeHtml(unsubscribe))
