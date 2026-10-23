@@ -176,3 +176,21 @@ test('edição padrão (sem tema) pede marketing + 1 de cultura SP; nova versão
   assert.match(onlyCulture.system, /melhores dicas culturais/)
   assert.doesNotMatch(onlyCulture.system, /mudanças de plataforma/)
 })
+
+test('última atualização em português: hoje, ontem ou data', async () => {
+  const { whenBr } = await import('../src/lib/whenBr.js')
+  const now = Date.parse('2026-10-23T20:17:00Z') // 17:17 em SP
+  assert.equal(whenBr('2026-10-23T17:45:00Z', now), 'hoje às 14:45')
+  assert.equal(whenBr('2026-10-22T12:10:00Z', now), 'ontem às 09:10')
+  assert.equal(whenBr('2026-10-20T21:00:00Z', now), '20/10 às 18:00')
+  assert.equal(whenBr(null, now), 'nunca')
+})
+
+test('notícias escolhidas nos cards: a IA usa todas e não escolhe outras', async () => {
+  const { buildCurationPrompt } = await import('../supabase/functions/_shared/newsletterCore.js')
+  const candidates = [{ url: 'https://a', title: 'a', source_name: 's', category: 'marketing' }, { url: 'https://b', title: 'b', source_name: 'f', category: 'gastronomia' }, { url: 'https://c', title: 'c', source_name: 'g', category: 'ia' }]
+  const p = buildCurationPrompt({ candidates, settings: { themes: ['ads'] }, count: 3, picked: true, previousUrls: ['https://a'] })
+  assert.match(p.system, /já escolheu estas 3 notícias\. Use TODAS/)
+  assert.match(p.system, /por que vale ir\/conhecer/)
+  assert.doesNotMatch(p.system, /Escolha só notícias desses temas/)
+})

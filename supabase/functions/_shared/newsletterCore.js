@@ -220,7 +220,7 @@ export function themeGuidance(themes = [], { count = 5, hasCulture = false } = {
   ].filter(Boolean).join('\n')
 }
 
-export function buildCurationPrompt({ candidates, settings = {}, count = 5, knowledge = [], previousUrls = [] }) {
+export function buildCurationPrompt({ candidates, settings = {}, count = 5, knowledge = [], previousUrls = [], picked = false }) {
   const tone = knowledge.filter((entry) => entry.category === 'tom').map((entry) => clean(entry.content, 600)).join('\n')
   const themes = (Array.isArray(settings.themes) ? settings.themes : []).filter((theme) => THEME_LABELS[theme])
   const onlyCulture = themes.length > 0 && themes.every((theme) => CULTURE_THEMES.has(theme))
@@ -229,13 +229,15 @@ export function buildCurationPrompt({ candidates, settings = {}, count = 5, know
   const system = [
     'Você é editor da newsletter semanal da Mugô, agência criativa e estratégica de São Paulo (marketing, tráfego pago, social, sites, automação, IA) que também vive cultura e lifestyle.',
     'Leitores: donos e gestores de e-commerce, gestoras de investimento e criadores/talentos — ocupados, querem saber o que muda no negócio deles e o que vale a pena em SP.',
-    onlyCulture
+    picked
+      ? `O time já escolheu estas ${candidates.length} notícias. Use TODAS (nenhuma a mais, nenhuma a menos), na ordem que fizer mais sentido para a leitura — marketing/negócios primeiro e cultura no fim. Seu trabalho é escrever título, resumo e impacto de cada uma.`
+      : onlyCulture
       ? `Escolha as ${count} melhores dicas culturais da lista: o que acontece em São Paulo nesta e nas próximas semanas. Evite notícia repetida e fofoca sem utilidade.`
       : `Escolha as ${count} notícias mais úteis e recentes da lista. Em marketing/negócios, prefira mudanças de plataforma (Meta, Google, TikTok, Instagram), tendências com dado concreto e novidades de e-commerce no Brasil. Evite notícias repetidas, puramente corporativas ou sem impacto prático.`,
     'Escreva tudo em português do Brasil, com resumo PRÓPRIO (nunca copie frases da fonte) e um "impacto" prático e honesto. Não invente números ou fatos além do que o título/trecho indica.',
     'Use a URL exatamente como recebida. O assunto do e-mail deve refletir o que a edição traz de fato (se tiver cultura, pode citar).',
     settings.focus ? `Foco definido pelo time: ${clean(settings.focus, 800)}` : '',
-    themeGuidance(themes, { count, hasCulture }),
+    picked ? (hasCulture ? themeGuidance(['cultura']).split('\n').slice(1).join('\n') : '') : themeGuidance(themes, { count, hasCulture }),
     previous.length ? `O time pediu uma NOVA versão. Na anterior saíram estas URLs: ${previous.join(' , ')}. Traga uma seleção diferente — repita no máximo 1 delas, só se for muito mais relevante que as outras.` : '',
     tone ? `Tom de voz da Mugô:\n${tone}` : 'Tom: direto, leve, sem jargão e sem emoji.',
   ].filter(Boolean).join('\n')

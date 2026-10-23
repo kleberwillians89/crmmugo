@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Copy, Download, Link2, Newspaper, Plus, RefreshCw, Save, Send, Settings2, SkipForward, Sparkles, Trash2, Zap } from 'lucide-react'
 import { toPng } from 'html-to-image'
 import { FeedbackMessage } from './FeedbackMessage'
+import { whenBr } from '../lib/whenBr'
+import { NewsPicker } from './NewsPicker'
 import { composeLinkedinPost, renderLinkedinSlides, renderNewsletterHtml } from '../../supabase/functions/_shared/newsletterCore.js'
 import {
   NEWS_CATEGORIES, addNewsletterSource, deleteNewsletterSource, getNewsletterSettings, listEditions, listNewsletterSources,
@@ -22,13 +24,14 @@ export function NewsletterPanel() {
   const [settings, setSettings] = useState(null), [sources, setSources] = useState([]), [editions, setEditions] = useState([]), [news, setNews] = useState([])
   const [view, setView] = useState('edition'), [selectedId, setSelectedId] = useState(null), [draft, setDraft] = useState(null)
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [feedback, setFeedback] = useState('')
-  const [weekThemes, setWeekThemes] = useState(null), [weekFocus, setWeekFocus] = useState(''), [pickTheme, setPickTheme] = useState('')
+  const [loadedAt, setLoadedAt] = useState(0)
+  const [weekThemes, setWeekThemes] = useState(null), [weekFocus, setWeekFocus] = useState('')
 
   async function load(keepSelection = true) {
     setError('')
     try {
       const [config, sourceRows, editionRows, newsRows] = await Promise.all([getNewsletterSettings(), listNewsletterSources(), listEditions(), listRecentNews()])
-      setSettings({ ...DEFAULTS, ...(config || {}) }); setSources(sourceRows); setEditions(editionRows); setNews(newsRows)
+      setSettings({ ...DEFAULTS, ...(config || {}) }); setSources(sourceRows); setEditions(editionRows); setNews(newsRows); setLoadedAt(Date.now())
       const current = keepSelection && selectedId ? editionRows.find((row) => row.id === selectedId) : editionRows[0]
       setSelectedId(current?.id || null); setDraft(current ? structuredClone(current) : null)
     } catch (cause) { setError(cause.message) }
@@ -44,8 +47,20 @@ export function NewsletterPanel() {
   const dirty = Boolean(selected && draft && JSON.stringify(['subject', 'preheader', 'intro', 'items', 'linkedin_post'].map((k) => draft[k])) !== JSON.stringify(['subject', 'preheader', 'intro', 'items', 'linkedin_post'].map((k) => selected[k])))
   const editable = draft && ['draft', 'failed'].includes(draft.status)
   const themes = weekThemes ?? (draft?.themes?.length ? draft.themes : settings?.themes || [])
-  const candidates = useMemo(() => news.filter((item) => !(draft?.items || []).some((chosen) => chosen.url === item.url)).filter((item) => !pickTheme || item.category === pickTheme), [news, draft, pickTheme])
   const newsCountByTheme = useMemo(() => news.reduce((acc, item) => ({ ...acc, [item.category]: (acc[item.category] || 0) + 1 }), {}), [news])
+  const freshness = useMemo(() => {
+    const active = sources.filter((source) => source.active)
+    const fetched = active.map((source) => Date.parse(source.last_fetched_at || '')).filter(Number.isFinite)
+    const generatedAt = selected ? (selected.generated_at || selected.created_at) : null
+    const generatedMs = Date.parse(generatedAt || '')
+    return {
+      fetchedAt: fetched.length ? new Date(Math.max(...fetched)).toISOString() : null,
+      sources: active.length,
+      failing: active.filter((source) => source.last_error).length,
+      generatedAt,
+      newSince: Number.isFinite(generatedMs) ? news.filter((item) => Date.parse(item.created_at || '') > generatedMs).length : 0,
+    }
+  }, [sources, news, selected])
   const toggleTheme = (id) => setWeekThemes(themes.includes(id) ? themes.filter((t) => t !== id) : [...themes, id])
 
   if (!settings) return <div className="dashboard-panel page-skeleton">Carregando newsletter…</div>
@@ -68,8 +83,15 @@ export function NewsletterPanel() {
         {editions.length > 1 && <select value={selectedId || ''} onChange={(event) => { const row = editions.find((item) => item.id === event.target.value); setSelectedId(row.id); setDraft(structuredClone(row)) }}>{editions.map((row) => <option key={row.id} value={row.id}>{dateBr(row.week_start)} — {statusLabel[row.status]}</option>)}</select>}
         <button className="button small" disabled={Boolean(busy)} onClick={() => (!selected || window.confirm('Gerar de novo a edição desta semana? As edições manuais serão substituídas.')) && run('generate', async () => { await newsletterAction('generate_now', null, { themes, focus: weekFocus.trim() || null }); setWeekThemes(null); await load(false) }, 'Edição gerada. Revise as notícias abaixo.')}><Sparkles size={13} /> {busy === 'generate' ? 'Gerando…' : selected ? 'Gerar de novo' : 'Gerar edição agora'}</button>
       </section>
+      <section className="dashboard-panel g-freshness" aria-label="Última atualização">
+        <div><small>Notícias buscadas</small><strong>{whenBr(freshness.fetchedAt, loadedAt)}</strong><span>{freshness.sources} fontes{freshness.failing ? ` · ${freshness.failing} com erro` : ''}</span></div>
+        <div><small>Edição gerada</small><strong>{selected ? whenBr(freshness.generatedAt, loadedAt) : 'ainda não'}</strong><span>{selected && freshness.newSince > 0 ? `${freshness.newSince} notícias novas chegaram depois` : selected ? 'nada novo desde então' : '—'}</span></div>
+        <button className="button secondary small" disabled={Boolean(busy)} onClick={() => run('feeds', async () => { const r = await newsletterAction('refresh_feeds'); await load(); return r }, (r) => `${r.added} notícias novas coletadas.`)}><RefreshCw size={13} /> {busy === 'feeds' ? 'Buscando…' : 'Buscar notícias agora'}</button>
+      </section>
+      {editable || !selected ? <NewsPicker key={`${selected?.id || 'nova'}-${selected?.generated_at || selected?.updated_at || ''}`} news={news} categories={NEWS_CATEGORIES} edition={selected} busy={busy} now={loadedAt}
+        onGenerate={(ids) => (!selected || window.confirm(`Escrever a edição com as ${ids.length} notícias escolhidas? O texto atual da edição será substituído.`)) && run('compose', async () => { await newsletterAction('generate_now', null, { news_ids: ids, focus: weekFocus.trim() || null }); await load(false) }, 'Edição escrita com as notícias escolhidas. Revise o texto abaixo.')} /> : null}
       <section className="dashboard-panel g-settings g-themes">
-        <header><Sparkles size={18} /><div><strong>Temas desta semana</strong><small>Escolha do que a newsletter vai falar. Nenhum marcado = todos os temas. O número é quantas notícias chegaram nos últimos dias.</small></div></header>
+        <header><Sparkles size={18} /><div><strong>Ou deixe a IA escolher</strong><small>Marque os temas da semana e clique em “{selected ? 'Gerar de novo' : 'Gerar edição agora'}” lá em cima. Nenhum marcado = marketing e negócios + uma dica cultural de SP.</small></div></header>
         <div className="g-chips">{NEWS_CATEGORIES.map(([id, label]) => <label key={id} className={`g-chip${themes.includes(id) ? ' active' : ''}`}><input type="checkbox" checked={themes.includes(id)} onChange={() => toggleTheme(id)} /> {label} <small>{newsCountByTheme[id] || 0}</small></label>)}</div>
         <label>Foco da semana (opcional)<input value={weekFocus} onChange={(e) => setWeekFocus(e.target.value)} placeholder="Ex.: agenda cultural do feriado em SP + novidades de IA para anúncios" /></label>
         <small>Os temas e o foco valem ao clicar em “{selected ? 'Gerar de novo' : 'Gerar edição agora'}”. O padrão da geração automática fica em Configuração.</small>
@@ -88,11 +110,6 @@ export function NewsletterPanel() {
             <label>Resumo<textarea rows="3" value={item.summary_pt} onChange={(e) => setItem(index, { summary_pt: e.target.value })} disabled={!editable} /></label>
             <label>Na prática<textarea rows="2" value={item.impact_pt} onChange={(e) => setItem(index, { impact_pt: e.target.value })} disabled={!editable} /></label>
           </article>)}
-          {editable && <label>Filtrar notícias por tema<select value={pickTheme} onChange={(e) => setPickTheme(e.target.value)}><option value="">Todos os temas</option>{NEWS_CATEGORIES.map(([id, label]) => <option key={id} value={id}>{label} ({newsCountByTheme[id] || 0})</option>)}</select></label>}
-          {editable && candidates.length > 0 && <label>Adicionar outra notícia da semana<select value="" onChange={(e) => { const pick = news.find((n) => n.url === e.target.value); if (pick) setDraft({ ...draft, items: [...draft.items, { url: pick.url, source_name: pick.source_name, news_id: pick.id, title_pt: pick.title, summary_pt: pick.excerpt || '', impact_pt: '', segments: ['todos'] }] }) }}>
-            <option value="">Escolha… ({candidates.length} candidatas)</option>
-            {candidates.slice(0, 80).map((n) => <option key={n.id} value={n.url}>{n.source_name} — {n.title.slice(0, 90)}</option>)}
-          </select><small>Notícia adicionada entra com o trecho original: reescreva o resumo com suas palavras.</small></label>}
           <div className="row-actions">
             {editable && <button className="button secondary" disabled={!dirty || Boolean(busy)} onClick={saveDraft}><Save size={14} /> Salvar</button>}
             {editable && <button className="button" disabled={dirty || draft.items.length < 3 || Boolean(busy)} title={dirty ? 'Salve antes de aprovar' : ''} onClick={() => window.confirm(`Aprovar e agendar o envio para ${WEEKDAYS[settings.send_weekday].toLowerCase()} às ${String(settings.send_time).slice(0, 5)}?`) && run('approve', async () => { const r = await newsletterAction('approve', draft.id); await load(); return r }, (r) => `Aprovada. Envio agendado para ${new Date(r.scheduled_for).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.`)}><CheckCircle2 size={14} /> Aprovar newsletter</button>}
