@@ -160,3 +160,15 @@ test('respostas da prospecção: só interesse/dúvida viram oportunidade; saíd
   assert.match(conversion, /not\('stage', 'in', '\(won,lost\)'\)/)
   assert.match(conversion, /linked_to_existing_opportunity/)
 })
+
+test('newsletter da Mugô: modelo tem todos os campos e "Oi, {{nome}}" sem nome vira "Oi."', async () => {
+  const { renderNewsletterHtml } = await import('../supabase/functions/_shared/newsletterCore.js')
+  const tpl = fs.readFileSync('docs/newsletter/mugo-newsletter.html', 'utf8'), item = fs.readFileSync('docs/newsletter/mugo-newsletter-item.html', 'utf8')
+  for (const field of ['{{preheader}}', '{{nome}}', '{{intro}}', '{{itens}}', '{{descadastro}}']) assert.ok(tpl.includes(field), field)
+  for (const field of ['{{fonte}}', '{{titulo}}', '{{resumo}}', '{{impacto}}', '{{link}}']) assert.ok(item.includes(field), field)
+  const html = renderCampaignHtml(renderNewsletterHtml({ template: tpl, itemTemplate: item, edition: { intro: 'x', preheader: 'p', items: [{ source_name: 'S', title_pt: 'T', summary_pt: 'R', impact_pt: 'I', url: 'https://a' }] } }), { name: '', unsubscribe: 'https://u' })
+  assert.doesNotMatch(html, /\{\{[a-z_]+\}\}/)
+  assert.match(html, /Oi\.<\/td>/)
+  assert.equal((html.match(/Descadastrar/g) || []).length, 1)
+  assert.match(renderCampaignHtml('<p>Oi, {{nome}}!</p>{{descadastro}}', { name: 'Ana Lima', unsubscribe: 'u' }), /Oi, Ana!/)
+})
