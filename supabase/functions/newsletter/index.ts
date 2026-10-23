@@ -5,7 +5,7 @@
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {generateStructured} from '../_shared/aiProvider.js'
 import {extractSiteSignals} from '../_shared/prospectingCore.js'
-import {CURATION_SCHEMA,FLASH_SCHEMA,buildCurationPrompt,expiryDue,extractArticleText,generationDue,parseFeed,reminderDue,renderNewsletterHtml,sendAtAfterApproval,validateCuration,weekStart} from '../_shared/newsletterCore.js'
+import {CURATION_SCHEMA,FLASH_SCHEMA,balanceCandidates,buildCurationPrompt,expiryDue,extractArticleText,generationDue,parseFeed,reminderDue,renderNewsletterHtml,sendAtAfterApproval,validateCuration,weekStart} from '../_shared/newsletterCore.js'
 
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type, x-email-worker-key','Content-Type':'application/json'}
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:cors})
@@ -60,18 +60,19 @@ async function generateEdition(admin:any,settings:any,{force=false,themes=null,f
   let newsQuery=admin.from('industry_news').select('id,url,title,excerpt,source_name,category,published_at,edition_id').eq('organization_id',org).gte('published_at',since)
   if(chosenThemes.length)newsQuery=newsQuery.in('category',chosenThemes)
   const [news,knowledge]=await Promise.all([
-    newsQuery.order('published_at',{ascending:false}).limit(150),
+    newsQuery.order('published_at',{ascending:false}).limit(400),
     admin.from('ai_knowledge_entries').select('category,content').eq('organization_id',org).eq('active',true).limit(40),
   ])
   // no máximo 12 por fonte, para uma fonte barulhenta não dominar a seleção
-  const perSource=new Map<string,number>()
-  const candidates=(news.data||[]).filter((item:any)=>!item.edition_id||item.edition_id===existing.data?.id).filter((item:any)=>{const n=(perSource.get(item.source_name)||0)+1;perSource.set(item.source_name,n);return n<=12}).slice(0,60)
+  // e alterna entre temas, para cultura não sumir no meio de 100 notícias de marketing
+  const candidates=balanceCandidates((news.data||[]).filter((item:any)=>!item.edition_id||item.edition_id===existing.data?.id),{perSource:12,max:60})
   if(candidates.length<3)throw Object.assign(new Error(chosenThemes.length?`Poucas notícias desta semana nos temas escolhidos (${chosenThemes.join(', ')}). Escolha mais temas ou atualize as fontes.`:'Poucas notícias novas nas fontes nesta semana.'),{code:'NOT_ENOUGH_NEWS'})
   // Feed com trecho curto (só título): abre a página da notícia e traz descrição + primeiros parágrafos,
   // para a IA resumir com conteúdo de verdade. Fica salvo, então cada notícia é buscada uma vez só.
   await enrichShortExcerpts(admin,candidates.slice(0,25))
   const count=Number(settings.items_count||5)
-  const prompt=buildCurationPrompt({candidates,settings,count,knowledge:knowledge.data||[]})
+  const previousUrls=force&&existing.data?(existing.data.items||[]).map((item:any)=>item.url).filter(Boolean):[]
+  const prompt=buildCurationPrompt({candidates,settings,count,knowledge:knowledge.data||[],previousUrls})
   const result=await generateStructured({system:prompt.system,user:prompt.user,schema:CURATION_SCHEMA,schemaName:'newsletter_edition',maxTokens:3000,timeoutMs:90_000})
   const edition=validateCuration(result.data,candidates,count)
   if(!edition)throw Object.assign(new Error('A IA não montou uma edição válida. Tente gerar de novo.'),{code:'AI_INVALID_OUTPUT'})
