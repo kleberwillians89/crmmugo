@@ -103,10 +103,10 @@ test('GPT: schema estrito sem palavras-chave recusadas, busca na web com recuo',
 
 test('botão de triagem: wa.me com assunto, limites da Meta e link inválido ignorado', async () => {
   const { buildTriageCta, interactiveCtaBody } = await import('../supabase/functions/_shared/attendanceCore.js')
-  const cta = buildTriageCta({ triage_cta_url: 'https://wa.me/5511999999999', triage_cta_label: 'Falar com a equipe Mugô agora' }, { summary: 'site + tráfego', contactName: 'Ana' })
+  const cta = buildTriageCta({ triage_cta_url: 'https://wa.me/5511999999999', triage_cta_label: 'Falar com a equipe Mugô agora' }, { summary: 'SITE + PAID_TRAFFIC', contactName: 'Ana' })
   assert.equal(cta.label.length <= 20, true)
   assert.match(cta.url, /^https:\/\/wa\.me\/5511999999999\?text=/)
-  assert.match(decodeURIComponent(cta.url), /Ana.*Assunto: site \+ tráfego/)
+  assert.match(decodeURIComponent(cta.url), /Aqui é Ana\. Acabei de conversar com a Mugô sobre site e tráfego pago/)
   assert.equal(buildTriageCta({ triage_cta_url: 'https://chat.whatsapp.com/abc' }).url, 'https://chat.whatsapp.com/abc')
   assert.equal(buildTriageCta({ triage_cta_url: 'http://inseguro.com' }), null)
   assert.equal(buildTriageCta({}), null)
@@ -163,4 +163,13 @@ test('prompt do atendimento: sem repetir o lead, máximo 3 perguntas e preço é
   assert.match(COMMERCIAL_SYSTEM_PROMPT, /no máximo 3 perguntas de qualificação/)
   assert.match(COMMERCIAL_SYSTEM_PROMPT, /pedido de preço, valor, orçamento ou proposta é handoff imediato/)
   assert.doesNotMatch(COMMERCIAL_SYSTEM_PROMPT, /não justifica handoff/)
+})
+
+test('mensagem do botão: na voz do lead, com o nome da pessoa e o assunto em português', async () => {
+  const { buildTriageCta, humanizeInterests } = await import('../supabase/functions/_shared/attendanceCore.js')
+  assert.equal(humanizeInterests('paid_traffic + site'), 'tráfego pago e site')
+  assert.equal(humanizeInterests('Quero um site novo'), '')
+  const text = decodeURIComponent(buildTriageCta({ triage_cta_url: 'https://wa.me/5511973510549', triage_cta_label: 'Falar com Julia' }, { summary: 'paid_traffic + site' }).url.split('text=')[1])
+  assert.equal(text, 'Oi, Julia! Acabei de conversar com a Mugô sobre tráfego pago e site e quero dar o próximo passo com vocês. Podemos conversar?')
+  assert.doesNotMatch(text, /Assunto|paid_traffic|—/)
 })
