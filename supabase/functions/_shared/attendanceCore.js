@@ -126,3 +126,30 @@ const CONTACT_REQUEST = /(contato|n[uú]mero|telefone|whats|zap|falar com|atende
 const NUDGE = /^\s*(\?+|oi+\s*\?*|ol[aá]\s*\?*|e a[ií]\s*\?*|al[oô]+\s*\?*|tem algu[eé]m.*|\.{2,})\s*$/i
 export const isWaitingNudge = (text) => CONTACT_REQUEST.test(String(text || '')) || NUDGE.test(String(text || ''))
 export const WAITING_CTA_TEXT = 'Já avisei o nosso time e alguém te responde por aqui. Se preferir falar agora, é só tocar no botão:'
+
+// Pedido de preço/valor/orçamento: vai direto para o time (com os botões), sem mais perguntas.
+const PRICE_REQUEST = /(quanto custa|quanto (?:sai|fica|cobra)|qua(?:l|is) (?:[eé] )?(?:o |os )?(?:valor|valores|pre[cç]o|pre[cç]os|investimento)|\bvalores?\b|\bpre[cç]os?\b|or[cç]amento|tabela de pre[cç]o|proposta comercial)/i
+export const isPriceRequest = (text) => PRICE_REQUEST.test(String(text || ''))
+export const PRICE_HANDOFF_TEXT = 'Os valores dependem do escopo, então quem passa certinho é o nosso time. Toque no botão para falar direto com a pessoa responsável — ou, se preferir, ela continua com você por aqui.'
+
+/** Se a mensagem cita a pessoa responsável, o botão dela vem primeiro (evita "vou chamar a Julia" + botão do Kleber). */
+export function orderCtasForOwner(ctas = [], ownerFirstName = '') {
+  const owner = String(ownerFirstName || '').trim().toLowerCase()
+  if (!owner || ctas.length < 2) return ctas
+  const index = ctas.findIndex((cta) => String(cta.label || '').toLowerCase().includes(owner))
+  return index > 0 ? [ctas[index], ...ctas.filter((_, i) => i !== index)] : ctas
+}
+
+export const CTA_RESEND_TEXT = 'Oi! Deixo aqui de novo o contato direto do nosso time, caso ainda não tenha conseguido falar com a gente:'
+/**
+ * Reenvio único dos botões da equipe quando o lead não tocou em nenhum deles. Só dentro da janela de 24h
+ * do WhatsApp (contada da última mensagem do lead) e só se ninguém do time já respondeu a conversa.
+ */
+export function ctaResendDue({ createdAt, clicked, resent, lastInboundAt, humanReplied }, { afterMinutes = 1200 } = {}, now = Date.now()) {
+  if (clicked || resent || humanReplied) return false
+  const created = Date.parse(createdAt || ''), inbound = Date.parse(lastInboundAt || '')
+  if (!Number.isFinite(created) || !Number.isFinite(inbound)) return false
+  const waitMs = Math.max(60, Math.min(1380, Number(afterMinutes) || 1200)) * 60_000
+  if (now - created < waitMs) return false
+  return now - inbound < 23.5 * 3_600_000
+}

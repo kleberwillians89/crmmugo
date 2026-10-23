@@ -19,6 +19,7 @@ import {
 import { findInternalMemberByPhone } from '../_shared/internalCommandCore.js'
 import { classifyConversationKind, extractLeadAttribution } from '../_shared/commercialAgentCore.js'
 import { SECOND_CTA_TEXT, WAITING_CTA_TEXT, buildTriageCtas, interactiveCtaBody, isWaitingNudge } from '../_shared/attendanceCore.js'
+import { trackCtas } from '../_shared/ctaTracking.js'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: jsonHeaders })
@@ -232,7 +233,7 @@ const sendWaitingButtons = async (admin: any, connection: any, conversation: any
   const org = connection.organization_id
   const settings = await admin.from('commercial_settings').select('triage_cta_url,triage_cta_label,triage_cta_url_2,triage_cta_label_2').eq('organization_id', org).maybeSingle()
   if (settings.error) return
-  const ctas = buildTriageCtas(settings.data || {}, { summary: text(inboundText, 120), contactName })
+  let ctas = buildTriageCtas(settings.data || {}, { summary: text(inboundText, 120), contactName })
   if (!ctas.length) return
   const since = conversation.handoff_at || new Date(Date.now() - 86_400_000).toISOString()
   const recent = await admin.from('whatsapp_messages').select('idempotency_key,created_at').eq('organization_id', org).eq('conversation_id', conversation.id).eq('direction', 'out').gt('created_at', since)
@@ -241,6 +242,7 @@ const sendWaitingButtons = async (admin: any, connection: any, conversation: any
   // alguém do time já respondeu: deixa com a pessoa
   if ((recent.data || []).some((row: any) => !automated.some((prefix) => String(row.idempotency_key || '').startsWith(prefix)))) return
   if ((recent.data || []).some((row: any) => String(row.idempotency_key || '').startsWith('waiting-cta:') && Date.now() - Date.parse(row.created_at) < 15 * 60_000)) return
+  ctas = await trackCtas(admin, { organizationId: org, conversationId: conversation.id, ctas, baseUrl: Deno.env.get('SUPABASE_URL') }).catch(() => ctas)
   const send = async (body: string, cta: any, key: string) => {
     const response = await fetch(`https://graph.facebook.com/${Deno.env.get('GRAPH_API_VERSION') || 'v23.0'}/${phoneNumberId}/messages`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

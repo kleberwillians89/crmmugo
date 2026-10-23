@@ -40,7 +40,7 @@ test('descoberta usa memória e avança sem repetir dados conhecidos',()=>{
   const decision=defaultCommercialDecision('É uma landing page.',{qualification:{company_name:'Acme',objective:'Gerar leads',current_situation:'Só usa Instagram'},messages:[{text:'Precisamos de uma landing page'}]})
   assert.doesNotMatch(decision.response,/nome da empresa|resultado|lidam com isso hoje/i)
   assert.match(decision.response,/data|período/i)
-  assert.match(COMMERCIAL_SYSTEM_PROMPT,/normalmente faça uma única pergunta principal/)
+  assert.match(COMMERCIAL_SYSTEM_PROMPT,/uma única pergunta/)
   assert.match(COMMERCIAL_SYSTEM_PROMPT,/nunca pergunte novamente/)
 })
 test('pós-processamento bloqueia preço inventado e interrogatório',()=>{

@@ -434,3 +434,6 @@ verify_jwt = false
 
 [functions.team-notification-worker]
 verify_jwt = false
+
+[functions.cta-redirect]
+verify_jwt = false
