@@ -108,7 +108,7 @@ export function parseTaskSchedule(value, now = new Date()) {
 const MEETING_CREATE_LEAD = /^(?:(?:quero|preciso|gostaria\s+de|pode|por\s+favor)\s+)?(?:crie|cria|criar|marca|marque|marcar|coloca|colocar|bota|p[õo]e)\s+/iu
 const stripScheduleWords = (value) => trimEdges(value
   .replace(/(?:^|\s)(?:às?|as)\s*\d{1,2}(?::\d{2})?(?:\s*(?:h|hrs?|horas?))?\b|\b\d{1,2}(?::\d{2})?\s*(?:h|hrs?|horas?)\b|\b\d{1,2}:\d{2}\b/giu, '')
-  .replace(/(?:^|\s)(hoje|amanhã|depois de amanhã|segunda(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|domingo)(?=\s|$)/giu, ''))
+  .replace(/(?:^|\s)(hoje|amanhã|depois de amanhã|segunda(?:[- ]feira)?|terça(?:[- ]feira)?|quarta(?:[- ]feira)?|quinta(?:[- ]feira)?|sexta(?:[- ]feira)?|sábado|domingo)(?=\s|$)/giu, ''))
 function meetingCommand(raw, now) {
   const withoutLead = raw.replace(MEETING_CREATE_LEAD, '')
   const match = withoutLead.match(/^\s*(?:uma\s+)?(reuni[aã]o|call|liga[cç][aã]o)\s+(.+)$/iu)
@@ -192,7 +192,7 @@ const COMPLETION_WORD_SOURCE = '(?:finalizad[oa]s?|conclu[ií]d[oa]s?|pronta?s?|
 const COMPLETION_WORD = new RegExp(`\\b${COMPLETION_WORD_SOURCE}\\b`, 'iu')
 const START_LEAD = /^(?:comecei|iniciei|estou\s+come[cç]ando|estou\s+fazendo)(?:\s+|\s*:?[.!]?\s*$)/iu
 const trimEdges = (value) => clean(value).replace(/\s{2,}/g, ' ').replace(/^[\s,.\-:]+|[\s,.\-:]+$/g, '')
-const TASK_DATE_SUFFIX = /\s+(?:hoje|amanhã|depois\s+de\s+amanhã|segunda(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sábado|domingo|fim\s+da\s+semana|semana\s+que\s+vem)\s*$/iu
+const TASK_DATE_SUFFIX = /\s+(?:hoje|amanhã|depois\s+de\s+amanhã|segunda(?:[- ]feira)?|terça(?:[- ]feira)?|quarta(?:[- ]feira)?|quinta(?:[- ]feira)?|sexta(?:[- ]feira)?|sábado|domingo|fim\s+da\s+semana|semana\s+que\s+vem)\s*$/iu
 const TASK_TIME_SUFFIX = /\s+(?:(?:(?:às?|as|até|ate)\s+)*(?:às?|as|até|ate)\s*\d{1,2}(?::\d{2})?(?:\s*(?:h|hrs?|horas?))?|\d{1,2}(?::\d{2}|\s*(?:h|hrs?|horas?)))\s*$/iu
 const TASK_MONTH_DATE_SUFFIX = /\s+(?:dia\s+)?\d{1,2}\s+de\s+(?:janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s*$/iu
 export function taskTitleFromText(value) {
@@ -453,8 +453,12 @@ export function splitInlineNumberedList(value) {
   return items.length >= 2 ? { header, items } : null
 }
 export function parseInternalCommand(rawText, { now = new Date() } = {}) {
-  const raw = clean(rawText)
-  let lines = raw.split(/\r?\n/).flatMap((line) => line.split(/\s*[•;]\s*/)).map((line) => clean(line.replace(/^[-*]\s+/, ''))).filter(Boolean)
+  const original = clean(rawText)
+  const raw = /\r?\n/.test(original) ? original : original.replace(/\s+•\s+/g, ' — ')
+  // "•" no meio de uma linha só é separador de assunto dentro do título ("Reunião com Kaio terça 20h • app
+  // e tráfego Curavino"), não uma segunda tarefa. Lista de verdade vem em linhas (com ou sem marcador).
+  const multiline = /\r?\n/.test(raw)
+  let lines = raw.split(/\r?\n/).flatMap((line) => multiline ? line.split(/\s*;\s*/) : line.replace(/\s+•\s+/g, ' — ').split(/\s*;\s*/)).map((line) => clean(line.replace(/^[-*•]\s*/, ''))).filter(Boolean)
   if (lines.length <= 1) {
     // Sem newline/bullet/";" — ainda pode ser uma lista numerada na mesma linha. Quando for, ela se
     // comporta exatamente como uma lista multilinha (cabeçalho opcional + itens) daqui em diante.

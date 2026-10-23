@@ -517,7 +517,8 @@ async function execute(admin: any, event: any, command: any) {
       if(outcome?.status==='awaiting_context')failed.push(task.data.title);else done.push(task.data.title)
     }
     await clearAssistantSession(admin,event)
-    return [done.length?'Pronto ✓':null,...done.map((title)=>`• ${title} — ${label[command.task_intent]||'atualizada'}`),failed.length?`Não consegui atualizar: ${failed.join(', ')}.`:null].filter(Boolean).join('\n')
+    const pendingHint=command.pending_note?'\n\nVi que ficou algo pendente. Se quiser que eu cobre alguém, me manda assim: *Julia enviar o retorno do material até hoje 17h*.':''
+    return [done.length?'Pronto ✓':null,...done.map((title)=>`• ${title} — ${label[command.task_intent]||'atualizada'}`),failed.length?`Não consegui atualizar: ${failed.join(', ')}.`:null].filter(Boolean).join('\n')+pendingHint
   }
   if(command.intent==='SESSION_SELECTION'&&event.session?.active_intent==='TASK_SELECTION'){
     const items=event.session.context?.candidate_items||[]
@@ -1061,6 +1062,10 @@ async function processEvent(admin: any, event: any) {
       if(hit)command={intent:'SESSION_SELECTION_MULTI',selections:[hit.index],task_intent:'COMPLETE_TASK',confidence:1}
     }
     // Aviso de uma tarefa só ("Kleber criou uma tarefa para você") + resposta curta "feito/pronto": conclui essa.
+    // "Esse projeto já foi entregue, falta o retorno da Julia…": com uma tarefa só na lista apresentada, conclui ela.
+    if(command.intent!=='SESSION_SELECTION_MULTI'&&taskCandidates.length===1&&['TASK_BROWSE','TASK_SELECTION'].includes(event.session?.active_intent)&&/\b(ja foi entregue|foi entregue|ja entreguei|entreguei|ja (?:esta|ta) pronto|ja (?:esta|ta) pronta|ja finalizei|ja terminei|ja foi feito|ja foi feita|ja conclui)\b/.test(foldedRaw)&&!/\bnao (?:foi|esta|ta|entreguei|finalizei|terminei)\b/.test(foldedRaw)){
+      command={intent:'SESSION_SELECTION_MULTI',selections:[taskCandidates[0].index],task_intent:'COMPLETE_TASK',confidence:1,pending_note:/\b(falta|aguardando|esperando|pendente|retorno)\b/.test(foldedRaw)?cleanedRaw:null}
+    }
     if(command.intent!=='SESSION_SELECTION_MULTI'&&taskCandidates.length===1&&event.session?.active_intent==='TASK_BROWSE'&&cleanedRaw.split(/\s+/).length<=4&&/^(?:ja\s+)?(?:(?:ta|esta|foi)\s+)?(?:feito|feita|pronto|pronta|terminei|finalizei|finalizado|finalizada|conclui|concluido|concluida|entregue|fiz|ja fiz)\b/.test(foldedRaw)){
       command={intent:'SESSION_SELECTION_MULTI',selections:[taskCandidates[0].index],task_intent:'COMPLETE_TASK',confidence:1}
     }
@@ -1151,6 +1156,9 @@ async function processEvent(admin: any, event: any) {
     // Botão "Feito" de um alerta de atendimento: marca aquele contato como atendido.
     else if(/^(feito|pronto|ok feito)[.!]*$/.test(foldedRaw)&&event.session?.active_intent==='CONVERSATION_BROWSE'&&candidateItems[0]?.conversation_id){
       command={intent:'ACK_CONVERSATION',conversation_id:candidateItems[0].conversation_id,name_hint:'',confidence:1}
+    }
+    if(['LIST_TODAY','LIST_OVERDUE'].includes(command.intent)&&!/\b(equipe|time|todos|todo mundo|geral|de todo mundo|da mugo inteira)\b/.test(foldedRaw)){
+      command={intent:'LIST_MINE',confidence:1}
     }
     const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
     const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4
