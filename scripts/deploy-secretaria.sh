@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 git pull --ff-only
-for fn in task-command-worker team-notification-worker whatsapp-webhook; do
+for fn in task-command-worker team-notification-worker whatsapp-webhook commercial-ai-worker; do
   echo "→ publicando $fn"
   npx supabase functions deploy "$fn"
 done

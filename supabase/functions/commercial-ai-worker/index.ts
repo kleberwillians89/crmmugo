@@ -339,9 +339,12 @@ async function processFollowups(admin:any){
   for(const config of settings.data||[]){
     const window=await getOperationalWindow(admin,config.organization_id);if(!window.open)continue
     const since=new Date(Date.now()-23.5*3_600_000).toISOString()
-    const candidates=await admin.from('whatsapp_conversations').select('id,organization_id,connection_id,wa_id,attendance_mode,automation_paused,last_inbound_at,last_outbound_at,opportunity_id').eq('organization_id',config.organization_id).eq('attendance_mode','bot').eq('automation_paused',false).gt('last_inbound_at',since).limit(50)
+    const candidates=await admin.from('whatsapp_conversations').select('id,organization_id,connection_id,wa_id,attendance_mode,automation_paused,last_inbound_at,last_outbound_at,opportunity_id,whatsapp_contacts(contact_type,team_member_id)').eq('organization_id',config.organization_id).eq('attendance_mode','bot').eq('automation_paused',false).gt('last_inbound_at',since).limit(50)
     if(candidates.error)continue
     for(const conversation of candidates.data||[]){
+      // Conversa da equipe (secretária interna) nunca recebe "retomada de lead".
+      const contact:any=Array.isArray(conversation.whatsapp_contacts)?conversation.whatsapp_contacts[0]:conversation.whatsapp_contacts
+      if(contact?.contact_type==='internal'||contact?.team_member_id)continue
       if(!followupDue(conversation,config))continue
       const recent=await admin.from('whatsapp_messages').select('id,direction,text_content,idempotency_key,created_at').eq('organization_id',config.organization_id).eq('conversation_id',conversation.id).order('created_at',{ascending:false}).limit(12)
       if(recent.error||!recent.data?.length)continue
