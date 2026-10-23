@@ -6,6 +6,34 @@
   },
   "routes": [
     {
+      "src": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "newsletter.mugoagencia.com.br"
+        }
+      ],
+      "dest": "/news/index.html"
+    },
+    {
+      "src": "/confirmar/?",
+      "has": [
+        {
+          "type": "host",
+          "value": "newsletter.mugoagencia.com.br"
+        }
+      ],
+      "dest": "/news/confirmar.html"
+    },
+    {
+      "src": "/news/?",
+      "dest": "/news/index.html"
+    },
+    {
+      "src": "/news/confirmar/?",
+      "dest": "/news/confirmar.html"
+    },
+    {
       "handle": "filesystem"
     },
     {
