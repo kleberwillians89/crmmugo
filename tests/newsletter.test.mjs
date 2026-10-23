@@ -151,3 +151,28 @@ test('temas da semana: só notícias dos temas escolhidos e orientação de agen
   for (const theme of ['musica', 'shows', 'exposicoes', 'teatro', 'gastronomia']) assert.match(migration, new RegExp(`'${theme}'`))
   assert.match(migration, /add column if not exists themes text\[\]/)
 })
+
+test('lista para a IA alterna temas: cultura não some no meio do marketing', async () => {
+  const { balanceCandidates } = await import('../supabase/functions/_shared/newsletterCore.js')
+  const marketing = Array.from({ length: 80 }, (_, i) => ({ url: `m${i}`, source_name: `M${i % 4}`, category: 'marketing' }))
+  const culture = Array.from({ length: 20 }, (_, i) => ({ url: `c${i}`, source_name: 'Folha Ilustrada', category: 'cultura' }))
+  const out = balanceCandidates([...marketing, ...culture], { perSource: 12, max: 30 })
+  assert.equal(out.length, 30)
+  assert.equal(out.filter((item) => item.category === 'cultura').length, 12) // limite por fonte
+  assert.equal(out[1].category, 'cultura')
+})
+
+test('edição padrão (sem tema) pede marketing + 1 de cultura SP; nova versão evita repetir', async () => {
+  const { buildCurationPrompt, themeGuidance } = await import('../supabase/functions/_shared/newsletterCore.js')
+  assert.match(themeGuidance([], { count: 5, hasCulture: true }), /4 notícia\(s\) de marketing\/negócios \+ 1 de cultura/)
+  assert.match(themeGuidance([], { count: 7, hasCulture: true }), /\+ 2 de cultura/)
+  const candidates = [{ url: 'https://a', title: 'a', source_name: 's', category: 'marketing' }, { url: 'https://b', title: 'b', source_name: 'Folha', category: 'shows' }]
+  const p = buildCurationPrompt({ candidates, settings: {}, count: 5, previousUrls: ['https://a', 'https://zz'] })
+  assert.match(p.system, /cultura\/lifestyle em São Paulo/)
+  assert.match(p.system, /NOVA versão.*https:\/\/a/)
+  assert.doesNotMatch(p.system, /https:\/\/zz/)
+  assert.match(p.user, /"tema":"Shows"/)
+  const onlyCulture = buildCurationPrompt({ candidates, settings: { themes: ['shows', 'teatro'] }, count: 5 })
+  assert.match(onlyCulture.system, /melhores dicas culturais/)
+  assert.doesNotMatch(onlyCulture.system, /mudanças de plataforma/)
+})

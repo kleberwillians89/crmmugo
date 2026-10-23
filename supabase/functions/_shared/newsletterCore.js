@@ -179,30 +179,67 @@ export const CURATION_SCHEMA = Object.freeze({
 const CULTURE_THEMES = new Set(['cultura', 'musica', 'shows', 'exposicoes', 'teatro', 'gastronomia', 'lifestyle'])
 export const THEME_LABELS = Object.freeze({ marketing: 'Marketing', ads: 'Anúncios', seo: 'SEO', social: 'Redes sociais', ecommerce: 'E-commerce', investimentos: 'Investimentos', criadores: 'Criadores', ia: 'IA', negocios: 'Negócios', cultura: 'Cultura', musica: 'Música', shows: 'Shows', exposicoes: 'Exposições', teatro: 'Teatro', gastronomia: 'Restaurantes', lifestyle: 'São Paulo / lifestyle' })
 /** Orientação extra quando o time escolhe temas (inclusive a agenda cultural de SP, que também é a cara da Mugô). */
-export function themeGuidance(themes = []) {
+export const isCultureTheme = (theme) => CULTURE_THEMES.has(theme)
+
+/**
+ * Monta a lista que vai para a IA sem deixar um tema ou uma fonte dominar:
+ * alterna entre temas (round-robin, do mais recente para o mais antigo) e limita por fonte.
+ */
+export function balanceCandidates(news = [], { perSource = 12, max = 60 } = {}) {
+  const bySource = new Map()
+  const byTheme = new Map()
+  for (const item of news) {
+    const n = (bySource.get(item.source_name) || 0) + 1
+    bySource.set(item.source_name, n)
+    if (n > perSource) continue
+    const key = item.category || 'outros'
+    if (!byTheme.has(key)) byTheme.set(key, [])
+    byTheme.get(key).push(item)
+  }
+  const queues = [...byTheme.values()]
+  const out = []
+  while (out.length < max && queues.some((queue) => queue.length)) {
+    for (const queue of queues) { if (queue.length && out.length < max) out.push(queue.shift()) }
+  }
+  return out
+}
+
+export function themeGuidance(themes = [], { count = 5, hasCulture = false } = {}) {
   const list = (Array.isArray(themes) ? themes : []).filter((theme) => THEME_LABELS[theme])
-  if (!list.length) return ''
+  const cultureRule = 'Para cultura e lifestyle: priorize o que acontece em São Paulo (shows, exposições, peças, restaurantes, aberturas), com data/local quando o trecho trouxer. Nesses itens, "impacto" vira "por que vale ir/conhecer" — leve e com referência, sem forçar ligação com marketing. Nunca invente data, preço ou endereço.'
+  if (!list.length) {
+    if (!hasCulture) return ''
+    const culture = count >= 6 ? 2 : 1
+    return [`Edição padrão da Mugô: ${count - culture} notícia(s) de marketing/negócios + ${culture} de cultura/lifestyle em São Paulo (a Mugô também é cultura). Use os itens com tema de cultura, música, shows, exposições, teatro, restaurantes ou lifestyle para essa parte.`, cultureRule].join('\n')
+  }
   const labels = list.map((theme) => THEME_LABELS[theme]).join(', ')
   const cultural = list.some((theme) => CULTURE_THEMES.has(theme))
   return [
     `Temas desta edição (escolhidos pelo time): ${labels}. Escolha só notícias desses temas.`,
-    cultural ? 'Para cultura e lifestyle: priorize o que acontece em São Paulo (shows, exposições, peças, restaurantes, aberturas), com data/local quando o trecho trouxer. Nesses itens, "impacto" vira "por que vale ir/conhecer" — leve e com referência, sem forçar ligação com marketing. Nunca invente data, preço ou endereço.' : '',
+    cultural ? cultureRule : '',
   ].filter(Boolean).join('\n')
 }
 
-export function buildCurationPrompt({ candidates, settings = {}, count = 5, knowledge = [] }) {
+export function buildCurationPrompt({ candidates, settings = {}, count = 5, knowledge = [], previousUrls = [] }) {
   const tone = knowledge.filter((entry) => entry.category === 'tom').map((entry) => clean(entry.content, 600)).join('\n')
+  const themes = (Array.isArray(settings.themes) ? settings.themes : []).filter((theme) => THEME_LABELS[theme])
+  const onlyCulture = themes.length > 0 && themes.every((theme) => CULTURE_THEMES.has(theme))
+  const hasCulture = candidates.some((item) => CULTURE_THEMES.has(item.category))
+  const previous = previousUrls.filter((url) => candidates.some((item) => item.url === url))
   const system = [
-    'Você é editor da newsletter semanal da Mugô, agência brasileira de marketing digital (tráfego pago, SEO, social media, analytics, design, sites e automação).',
-    'Leitores: donos e gestores de e-commerce, gestoras de investimento e criadores/talentos — ocupados, querem saber o que muda no negócio deles.',
-    `Escolha as ${count} notícias mais úteis e recentes da lista. Prefira mudanças de plataforma (Meta, Google, TikTok, Instagram), tendências com dado concreto e novidades de e-commerce no Brasil. Evite notícias repetidas, puramente corporativas ou sem impacto prático.`,
+    'Você é editor da newsletter semanal da Mugô, agência criativa e estratégica de São Paulo (marketing, tráfego pago, social, sites, automação, IA) que também vive cultura e lifestyle.',
+    'Leitores: donos e gestores de e-commerce, gestoras de investimento e criadores/talentos — ocupados, querem saber o que muda no negócio deles e o que vale a pena em SP.',
+    onlyCulture
+      ? `Escolha as ${count} melhores dicas culturais da lista: o que acontece em São Paulo nesta e nas próximas semanas. Evite notícia repetida e fofoca sem utilidade.`
+      : `Escolha as ${count} notícias mais úteis e recentes da lista. Em marketing/negócios, prefira mudanças de plataforma (Meta, Google, TikTok, Instagram), tendências com dado concreto e novidades de e-commerce no Brasil. Evite notícias repetidas, puramente corporativas ou sem impacto prático.`,
     'Escreva tudo em português do Brasil, com resumo PRÓPRIO (nunca copie frases da fonte) e um "impacto" prático e honesto. Não invente números ou fatos além do que o título/trecho indica.',
-    'Use a URL exatamente como recebida.',
+    'Use a URL exatamente como recebida. O assunto do e-mail deve refletir o que a edição traz de fato (se tiver cultura, pode citar).',
     settings.focus ? `Foco definido pelo time: ${clean(settings.focus, 800)}` : '',
-    themeGuidance(settings.themes),
+    themeGuidance(themes, { count, hasCulture }),
+    previous.length ? `O time pediu uma NOVA versão. Na anterior saíram estas URLs: ${previous.join(' , ')}. Traga uma seleção diferente — repita no máximo 1 delas, só se for muito mais relevante que as outras.` : '',
     tone ? `Tom de voz da Mugô:\n${tone}` : 'Tom: direto, leve, sem jargão e sem emoji.',
   ].filter(Boolean).join('\n')
-  const list = candidates.map((item, index) => ({ n: index + 1, url: item.url, fonte: item.source_name, data: item.published_at?.slice(0, 10) || null, titulo: item.title, trecho: clean(item.excerpt, 900) }))
+  const list = candidates.map((item, index) => ({ n: index + 1, url: item.url, fonte: item.source_name, tema: THEME_LABELS[item.category] || item.category || null, data: item.published_at?.slice(0, 10) || null, titulo: item.title, trecho: clean(item.excerpt, 900) }))
   return { system, user: `Notícias da semana:\n${JSON.stringify(list)}` }
 }
 
