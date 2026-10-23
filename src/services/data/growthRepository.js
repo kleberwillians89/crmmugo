@@ -110,6 +110,6 @@ export const updateNewsletterSource = async (id, patch) => unwrap(await db().fro
 export const deleteNewsletterSource = async (id) => unwrap(await db().from('newsletter_sources').delete().eq('id', id))
 export const listEditions = async () => unwrap(await db().from('newsletter_editions').select('*').order('week_start', { ascending: false }).limit(12))
 export const updateEdition = async (id, patch) => unwrap(await db().from('newsletter_editions').update(patch).eq('id', id).select().single())
-export const listRecentNews = async (days = 9) => unwrap(await db().from('industry_news').select('id,url,title,excerpt,source_name,category,published_at,edition_id').gte('published_at', new Date(Date.now() - days * 86_400_000).toISOString()).order('published_at', { ascending: false }).limit(150))
+export const listRecentNews = async (days = 9) => unwrap(await db().from('industry_news').select('id,url,title,excerpt,source_name,category,published_at,edition_id,created_at').gte('published_at', new Date(Date.now() - days * 86_400_000).toISOString()).order('published_at', { ascending: false }).limit(800))
 export const newsletterAction = (action, editionId, extra = {}) => invoke('newsletter', { action, edition_id: editionId, ...extra })
 export const newsletterFlash = ({ news_id, url, note }) => invoke('newsletter', { action: 'flash', news_id: news_id || null, url: url || null, note: note || null })
