@@ -88,6 +88,31 @@ export const FOLLOWUP_SCHEMA = Object.freeze({
   required: ['send', 'text'],
 })
 
+const INTEREST_WORDS = Object.freeze({
+  PAID_TRAFFIC: 'tráfego pago', SITE: 'site', ECOMMERCE: 'e-commerce', SOCIAL_MEDIA: 'redes sociais', AUTOMATION: 'automação',
+  WHATSAPP: 'atendimento no WhatsApp', CRM: 'CRM', DEVELOPMENT: 'um app/sistema', INTEGRATION: 'integrações', SEO: 'SEO',
+  BRANDING: 'branding', DESIGN: 'design', SUPPORT: 'suporte', FINANCE: 'financeiro', PARTNERSHIP: 'parceria',
+})
+/** "paid_traffic + site" → "tráfego pago e site"; texto livre passa limpo. */
+export function humanizeInterests(summary = '') {
+  const raw = clean(summary, 200)
+  const parts = raw.split(/\s*\+\s*|,\s*/).map((part) => part.trim()).filter(Boolean)
+  // Texto livre (a frase do lead) não entra na mensagem: fica estranho na boca dele.
+  if (!parts.length || !parts.every((part) => /^[a-z_]+$/i.test(part))) return ''
+  const words = [...new Set(parts.map((part) => INTEREST_WORDS[part.toUpperCase()]).filter(Boolean))]
+  if (!words.length) return ''
+  return words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} e ${words.at(-1)}`
+}
+
+/** Mensagem que já vem escrita quando o lead toca no botão — na voz dele, curta e do jeito Mugô. */
+export function leadIntroMessage({ person = '', contactName = '', summary = '' } = {}) {
+  const topic = humanizeInterests(summary)
+  const hello = person ? `Oi, ${clean(person, 40)}! ` : 'Oi! '
+  const me = contactName ? `Aqui é ${clean(contactName, 60).split(/\s+/)[0]}. ` : ''
+  const about = topic ? `Acabei de conversar com a Mugô sobre ${topic} e quero dar o próximo passo com vocês.` : 'Acabei de conversar com a Mugô pelo WhatsApp e quero dar o próximo passo com vocês.'
+  return `${hello}${me}${about} Podemos conversar?`
+}
+
 /**
  * Botão de triagem: no repasse para o time, a mensagem sai com um botão que abre o WhatsApp da equipe Mugô.
  * Se o link for wa.me, já leva uma mensagem pronta com o assunto, para a equipe saber quem é e o que precisa.
@@ -99,8 +124,8 @@ export function buildTriageCta(settings = {}, { summary = '', contactName = '' }
   const label = clean(settings.triage_cta_label, 20) || 'Falar com a equipe'
   let finalUrl = url
   if (/^https:\/\/(wa\.me|api\.whatsapp\.com)\//i.test(url) && !/[?&]text=/.test(url)) {
-    const intro = [contactName ? `Oi! Aqui é ${clean(contactName, 60)}` : 'Oi!', 'vim do atendimento da Mugô', summary ? `Assunto: ${clean(summary, 200)}` : ''].filter(Boolean).join(' — ')
-    finalUrl = `${url}${url.includes('?') ? '&' : '?'}text=${encodeURIComponent(intro)}`
+    const person = (label.match(/(?:falar|fale|conversar)\s+com\s+(?:a\s+|o\s+)?([\p{L}'-]+)/iu) || [])[1] || ''
+    finalUrl = `${url}${url.includes('?') ? '&' : '?'}text=${encodeURIComponent(leadIntroMessage({ person, contactName, summary }))}`
   }
   return { label, url: finalUrl }
 }
