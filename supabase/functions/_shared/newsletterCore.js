@@ -176,6 +176,20 @@ export const CURATION_SCHEMA = Object.freeze({
   required: ['subject', 'preheader', 'intro', 'items', 'linkedin_post'],
 })
 
+const CULTURE_THEMES = new Set(['cultura', 'musica', 'shows', 'exposicoes', 'teatro', 'gastronomia', 'lifestyle'])
+export const THEME_LABELS = Object.freeze({ marketing: 'Marketing', ads: 'Anúncios', seo: 'SEO', social: 'Redes sociais', ecommerce: 'E-commerce', investimentos: 'Investimentos', criadores: 'Criadores', ia: 'IA', negocios: 'Negócios', cultura: 'Cultura', musica: 'Música', shows: 'Shows', exposicoes: 'Exposições', teatro: 'Teatro', gastronomia: 'Restaurantes', lifestyle: 'São Paulo / lifestyle' })
+/** Orientação extra quando o time escolhe temas (inclusive a agenda cultural de SP, que também é a cara da Mugô). */
+export function themeGuidance(themes = []) {
+  const list = (Array.isArray(themes) ? themes : []).filter((theme) => THEME_LABELS[theme])
+  if (!list.length) return ''
+  const labels = list.map((theme) => THEME_LABELS[theme]).join(', ')
+  const cultural = list.some((theme) => CULTURE_THEMES.has(theme))
+  return [
+    `Temas desta edição (escolhidos pelo time): ${labels}. Escolha só notícias desses temas.`,
+    cultural ? 'Para cultura e lifestyle: priorize o que acontece em São Paulo (shows, exposições, peças, restaurantes, aberturas), com data/local quando o trecho trouxer. Nesses itens, "impacto" vira "por que vale ir/conhecer" — leve e com referência, sem forçar ligação com marketing. Nunca invente data, preço ou endereço.' : '',
+  ].filter(Boolean).join('\n')
+}
+
 export function buildCurationPrompt({ candidates, settings = {}, count = 5, knowledge = [] }) {
   const tone = knowledge.filter((entry) => entry.category === 'tom').map((entry) => clean(entry.content, 600)).join('\n')
   const system = [
@@ -185,6 +199,7 @@ export function buildCurationPrompt({ candidates, settings = {}, count = 5, know
     'Escreva tudo em português do Brasil, com resumo PRÓPRIO (nunca copie frases da fonte) e um "impacto" prático e honesto. Não invente números ou fatos além do que o título/trecho indica.',
     'Use a URL exatamente como recebida.',
     settings.focus ? `Foco definido pelo time: ${clean(settings.focus, 800)}` : '',
+    themeGuidance(settings.themes),
     tone ? `Tom de voz da Mugô:\n${tone}` : 'Tom: direto, leve, sem jargão e sem emoji.',
   ].filter(Boolean).join('\n')
   const list = candidates.map((item, index) => ({ n: index + 1, url: item.url, fonte: item.source_name, data: item.published_at?.slice(0, 10) || null, titulo: item.title, trecho: clean(item.excerpt, 900) }))

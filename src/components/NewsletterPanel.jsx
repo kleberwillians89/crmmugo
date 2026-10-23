@@ -12,7 +12,7 @@ import {
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 const statusLabel = { draft: 'Aguardando aprovação', approved: 'Aprovada — agendada', sent: 'Enviada', skipped: 'Pulada', failed: 'Falhou' }
 const dateBr = (iso) => String(iso || '').split('-').reverse().join('/')
-const DEFAULTS = { enabled: false, auto_send: false, generate_weekday: 1, generate_time: '07:00', send_weekday: 2, send_time: '07:45', items_count: 5, focus: '', template_html: '', item_template_html: '', from_name: 'Mugô', from_email: '', reply_to: 'mugo.agencia@gmail.com', linkedin_cover_html: '', linkedin_slide_html: '', linkedin_hashtags: '#marketingdigital #trafegopago #ecommerce' }
+const DEFAULTS = { enabled: false, auto_send: false, generate_weekday: 1, generate_time: '07:00', send_weekday: 2, send_time: '07:45', items_count: 5, focus: '', themes: [], template_html: '', item_template_html: '', from_name: 'Mugô', from_email: '', reply_to: 'mugo.agencia@gmail.com', linkedin_cover_html: '', linkedin_slide_html: '', linkedin_hashtags: '#marketingdigital #trafegopago #ecommerce' }
 
 function copy(text, done) { navigator.clipboard?.writeText(text || '').then(done, () => window.prompt('Copie o texto:', text || '')) }
 
@@ -20,6 +20,7 @@ export function NewsletterPanel() {
   const [settings, setSettings] = useState(null), [sources, setSources] = useState([]), [editions, setEditions] = useState([]), [news, setNews] = useState([])
   const [view, setView] = useState('edition'), [selectedId, setSelectedId] = useState(null), [draft, setDraft] = useState(null)
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [feedback, setFeedback] = useState('')
+  const [weekThemes, setWeekThemes] = useState(null), [weekFocus, setWeekFocus] = useState(''), [pickTheme, setPickTheme] = useState('')
 
   async function load(keepSelection = true) {
     setError('')
@@ -40,7 +41,10 @@ export function NewsletterPanel() {
   const selected = editions.find((row) => row.id === selectedId) || null
   const dirty = Boolean(selected && draft && JSON.stringify(['subject', 'preheader', 'intro', 'items', 'linkedin_post'].map((k) => draft[k])) !== JSON.stringify(['subject', 'preheader', 'intro', 'items', 'linkedin_post'].map((k) => selected[k])))
   const editable = draft && ['draft', 'failed'].includes(draft.status)
-  const candidates = useMemo(() => news.filter((item) => !(draft?.items || []).some((chosen) => chosen.url === item.url)), [news, draft])
+  const themes = weekThemes ?? (draft?.themes?.length ? draft.themes : settings?.themes || [])
+  const candidates = useMemo(() => news.filter((item) => !(draft?.items || []).some((chosen) => chosen.url === item.url)).filter((item) => !pickTheme || item.category === pickTheme), [news, draft, pickTheme])
+  const newsCountByTheme = useMemo(() => news.reduce((acc, item) => ({ ...acc, [item.category]: (acc[item.category] || 0) + 1 }), {}), [news])
+  const toggleTheme = (id) => setWeekThemes(themes.includes(id) ? themes.filter((t) => t !== id) : [...themes, id])
 
   if (!settings) return <div className="dashboard-panel page-skeleton">Carregando newsletter…</div>
   const setItem = (index, patch) => setDraft({ ...draft, items: draft.items.map((item, i) => i === index ? { ...item, ...patch } : item) })
@@ -60,7 +64,13 @@ export function NewsletterPanel() {
         <Newspaper size={18} />
         <div><strong>{selected ? `Semana de ${dateBr(selected.week_start)} · ${statusLabel[selected.status]}` : 'Nenhuma edição ainda'}</strong><small>Gerada {WEEKDAYS[settings.generate_weekday].toLowerCase()} às {String(settings.generate_time).slice(0, 5)}; enviada {WEEKDAYS[settings.send_weekday].toLowerCase()} às {String(settings.send_time).slice(0, 5)} depois de aprovada.</small></div>
         {editions.length > 1 && <select value={selectedId || ''} onChange={(event) => { const row = editions.find((item) => item.id === event.target.value); setSelectedId(row.id); setDraft(structuredClone(row)) }}>{editions.map((row) => <option key={row.id} value={row.id}>{dateBr(row.week_start)} — {statusLabel[row.status]}</option>)}</select>}
-        <button className="button small" disabled={Boolean(busy)} onClick={() => (!selected || window.confirm('Gerar de novo a edição desta semana? As edições manuais serão substituídas.')) && run('generate', async () => { await newsletterAction('generate_now'); await load(false) }, 'Edição gerada. Revise as notícias abaixo.')}><Sparkles size={13} /> {busy === 'generate' ? 'Gerando…' : selected ? 'Gerar de novo' : 'Gerar edição agora'}</button>
+        <button className="button small" disabled={Boolean(busy)} onClick={() => (!selected || window.confirm('Gerar de novo a edição desta semana? As edições manuais serão substituídas.')) && run('generate', async () => { await newsletterAction('generate_now', null, { themes, focus: weekFocus.trim() || null }); setWeekThemes(null); await load(false) }, 'Edição gerada. Revise as notícias abaixo.')}><Sparkles size={13} /> {busy === 'generate' ? 'Gerando…' : selected ? 'Gerar de novo' : 'Gerar edição agora'}</button>
+      </section>
+      <section className="dashboard-panel g-settings g-themes">
+        <header><Sparkles size={18} /><div><strong>Temas desta semana</strong><small>Escolha do que a newsletter vai falar. Nenhum marcado = todos os temas. O número é quantas notícias chegaram nos últimos dias.</small></div></header>
+        <div className="g-chips">{NEWS_CATEGORIES.map(([id, label]) => <label key={id} className={`g-chip${themes.includes(id) ? ' active' : ''}`}><input type="checkbox" checked={themes.includes(id)} onChange={() => toggleTheme(id)} /> {label} <small>{newsCountByTheme[id] || 0}</small></label>)}</div>
+        <label>Foco da semana (opcional)<input value={weekFocus} onChange={(e) => setWeekFocus(e.target.value)} placeholder="Ex.: agenda cultural do feriado em SP + novidades de IA para anúncios" /></label>
+        <small>Os temas e o foco valem ao clicar em “{selected ? 'Gerar de novo' : 'Gerar edição agora'}”. O padrão da geração automática fica em Configuração.</small>
       </section>
       {draft?.error_message && <FeedbackMessage type="error">{draft.error_message}</FeedbackMessage>}
 
@@ -76,6 +86,7 @@ export function NewsletterPanel() {
             <label>Resumo<textarea rows="3" value={item.summary_pt} onChange={(e) => setItem(index, { summary_pt: e.target.value })} disabled={!editable} /></label>
             <label>Na prática<textarea rows="2" value={item.impact_pt} onChange={(e) => setItem(index, { impact_pt: e.target.value })} disabled={!editable} /></label>
           </article>)}
+          {editable && <label>Filtrar notícias por tema<select value={pickTheme} onChange={(e) => setPickTheme(e.target.value)}><option value="">Todos os temas</option>{NEWS_CATEGORIES.map(([id, label]) => <option key={id} value={id}>{label} ({newsCountByTheme[id] || 0})</option>)}</select></label>}
           {editable && candidates.length > 0 && <label>Adicionar outra notícia da semana<select value="" onChange={(e) => { const pick = news.find((n) => n.url === e.target.value); if (pick) setDraft({ ...draft, items: [...draft.items, { url: pick.url, source_name: pick.source_name, news_id: pick.id, title_pt: pick.title, summary_pt: pick.excerpt || '', impact_pt: '', segments: ['todos'] }] }) }}>
             <option value="">Escolha… ({candidates.length} candidatas)</option>
             {candidates.slice(0, 80).map((n) => <option key={n.id} value={n.url}>{n.source_name} — {n.title.slice(0, 90)}</option>)}
@@ -162,7 +173,7 @@ function SettingsBlock({ settings, run, onSaved, busy }) {
   const [form, setForm] = useState(() => ({ ...settings, generate_time: String(settings.generate_time).slice(0, 5), send_time: String(settings.send_time).slice(0, 5), tags: (settings.audience?.tags || []).join(', ') }))
   const set = (key) => (e) => setForm({ ...form, [key]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })
   const submit = (e) => { e.preventDefault(); run('settings', async () => {
-    const values = { enabled: form.enabled, auto_send: form.auto_send, generate_weekday: Number(form.generate_weekday), generate_time: form.generate_time, send_weekday: Number(form.send_weekday), send_time: form.send_time, items_count: Number(form.items_count), focus: form.focus || null, template_html: form.template_html || null, item_template_html: form.item_template_html || null, from_name: form.from_name || null, from_email: form.from_email || null, reply_to: form.reply_to || null, audience: { tags: form.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean), sources: [] }, linkedin_cover_html: form.linkedin_cover_html || null, linkedin_slide_html: form.linkedin_slide_html || null, linkedin_hashtags: form.linkedin_hashtags || null }
+    const values = { themes: form.themes || [], enabled: form.enabled, auto_send: form.auto_send, generate_weekday: Number(form.generate_weekday), generate_time: form.generate_time, send_weekday: Number(form.send_weekday), send_time: form.send_time, items_count: Number(form.items_count), focus: form.focus || null, template_html: form.template_html || null, item_template_html: form.item_template_html || null, from_name: form.from_name || null, from_email: form.from_email || null, reply_to: form.reply_to || null, audience: { tags: form.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean), sources: [] }, linkedin_cover_html: form.linkedin_cover_html || null, linkedin_slide_html: form.linkedin_slide_html || null, linkedin_hashtags: form.linkedin_hashtags || null }
     onSaved(await saveNewsletterSettings(values))
   }, 'Configuração salva.') }
   return <form className="dashboard-panel g-settings" onSubmit={submit}>
@@ -175,6 +186,7 @@ function SettingsBlock({ settings, run, onSaved, busy }) {
       <label>Às<input type="time" value={form.send_time} onChange={set('send_time')} /></label>
       <label>Notícias por edição<input type="number" min="3" max="8" value={form.items_count} onChange={set('items_count')} /></label>
       <label>Público (tags, vazio = todos)<input value={form.tags} onChange={set('tags')} placeholder="cliente, lead" /></label>
+      <div className="g-wide"><span className="g-label">Temas padrão da edição automática (nenhum = todos)</span><div className="g-chips">{NEWS_CATEGORIES.map(([id, label]) => <label key={id} className={`g-chip${(form.themes || []).includes(id) ? ' active' : ''}`}><input type="checkbox" checked={(form.themes || []).includes(id)} onChange={() => setForm({ ...form, themes: (form.themes || []).includes(id) ? form.themes.filter((t) => t !== id) : [...(form.themes || []), id] })} /> {label}</label>)}</div></div>
       <label className="g-wide">Foco editorial<textarea rows="2" value={form.focus || ''} onChange={set('focus')} placeholder="Ex.: priorizar mudanças em Meta Ads e Google, e-commerce no Brasil e criadores de conteúdo." /></label>
       <label>Nome do remetente<input value={form.from_name || ''} onChange={set('from_name')} /></label>
       <label>E-mail do remetente<input type="email" value={form.from_email || ''} onChange={set('from_email')} placeholder="novidades@news.mugoagencia.com.br" /></label>

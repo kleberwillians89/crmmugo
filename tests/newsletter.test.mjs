@@ -133,3 +133,21 @@ test('funções chamadas pela tela liberam o cabeçalho x-client-info (senão o 
     assert.match(source, /Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type/, name)
   }
 })
+
+test('temas da semana: só notícias dos temas escolhidos e orientação de agenda cultural de SP', async () => {
+  const { themeGuidance, buildCurationPrompt } = await import('../supabase/functions/_shared/newsletterCore.js')
+  assert.equal(themeGuidance([]), '')
+  const culture = themeGuidance(['shows', 'gastronomia'])
+  assert.match(culture, /Shows, Restaurantes/)
+  assert.match(culture, /São Paulo/)
+  assert.match(culture, /Nunca invente data/)
+  assert.doesNotMatch(themeGuidance(['ads']), /São Paulo/)
+  const prompt = buildCurationPrompt({ candidates: [{ url: 'https://x', title: 't', source_name: 's' }], settings: { themes: ['teatro'] } })
+  assert.match(prompt.system, /Temas desta edição \(escolhidos pelo time\): Teatro/)
+  const fn = fs.readFileSync('supabase/functions/newsletter/index.ts', 'utf8')
+  assert.match(fn, /if\(chosenThemes\.length\)newsQuery=newsQuery\.in\('category',chosenThemes\)/)
+  assert.match(fn, /themes:chosenThemes,error_message:null/)
+  const migration = fs.readFileSync('supabase/migrations/202610230001_newsletter_temas.sql', 'utf8')
+  for (const theme of ['musica', 'shows', 'exposicoes', 'teatro', 'gastronomia']) assert.match(migration, new RegExp(`'${theme}'`))
+  assert.match(migration, /add column if not exists themes text\[\]/)
+})

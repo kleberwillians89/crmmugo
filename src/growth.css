@@ -135,3 +135,12 @@
 .g-slide { flex: none; width: 216px; height: 270px; overflow: hidden; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: #fff; }
 .g-slide iframe { width: 1080px; height: 1350px; border: 0; transform: scale(.2); transform-origin: 0 0; pointer-events: none; }
 .g-source-form { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border-subtle); }
+
+/* Temas da newsletter */
+.g-chips{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 8px}
+.g-chips .g-chip,.g-settings .g-chips .g-chip{display:inline-flex;flex-direction:row;width:auto;margin:0;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border,#d0d5dd);border-radius:999px;font-size:13px;cursor:pointer;background:var(--surface,#fff);user-select:none}
+.g-chip input{position:absolute;opacity:0;pointer-events:none}
+.g-chip small{opacity:.6;font-size:11px}
+.g-chips .g-chip.active{background:var(--accent,#004f6e);border-color:var(--accent,#004f6e);color:#fff}
+.g-chip:focus-within{outline:2px solid var(--accent,#004f6e);outline-offset:2px}
+.g-label{display:block;font-size:13px;font-weight:600;margin-bottom:4px}
