@@ -46,21 +46,27 @@ async function enrichShortExcerpts(admin:any,items:any[]){
   }))
 }
 
-async function generateEdition(admin:any,settings:any,{force=false}={}){
+async function generateEdition(admin:any,settings:any,{force=false,themes=null,focus=null}:{force?:boolean,themes?:string[]|null,focus?:string|null}={}){
   const org=settings.organization_id,week=weekStart()
   const existing=await admin.from('newsletter_editions').select('*').eq('organization_id',org).eq('week_start',week).maybeSingle()
   if(existing.data&&!force)return existing.data
   if(existing.data&&['approved','sent'].includes(existing.data.status))throw Object.assign(new Error('A edição desta semana já foi aprovada.'),{code:'ALREADY_APPROVED'})
   await refreshFeeds(admin,org)
   const since=new Date(Date.now()-8*86_400_000).toISOString()
+  // Temas da semana (escolhidos pelo time na tela ou o padrão da configuração); vazio = todos.
+  const chosenThemes=[...new Set((themes&&themes.length?themes:(settings.themes||[])).map((theme:string)=>clean(theme,40)).filter(Boolean))]
+  if(focus!=null)settings={...settings,focus:clean(focus,800)||settings.focus}
+  settings={...settings,themes:chosenThemes}
+  let newsQuery=admin.from('industry_news').select('id,url,title,excerpt,source_name,category,published_at,edition_id').eq('organization_id',org).gte('published_at',since)
+  if(chosenThemes.length)newsQuery=newsQuery.in('category',chosenThemes)
   const [news,knowledge]=await Promise.all([
-    admin.from('industry_news').select('id,url,title,excerpt,source_name,category,published_at,edition_id').eq('organization_id',org).gte('published_at',since).order('published_at',{ascending:false}).limit(120),
+    newsQuery.order('published_at',{ascending:false}).limit(150),
     admin.from('ai_knowledge_entries').select('category,content').eq('organization_id',org).eq('active',true).limit(40),
   ])
   // no máximo 12 por fonte, para uma fonte barulhenta não dominar a seleção
   const perSource=new Map<string,number>()
   const candidates=(news.data||[]).filter((item:any)=>!item.edition_id||item.edition_id===existing.data?.id).filter((item:any)=>{const n=(perSource.get(item.source_name)||0)+1;perSource.set(item.source_name,n);return n<=12}).slice(0,60)
-  if(candidates.length<3)throw Object.assign(new Error('Poucas notícias novas nas fontes nesta semana.'),{code:'NOT_ENOUGH_NEWS'})
+  if(candidates.length<3)throw Object.assign(new Error(chosenThemes.length?`Poucas notícias desta semana nos temas escolhidos (${chosenThemes.join(', ')}). Escolha mais temas ou atualize as fontes.`:'Poucas notícias novas nas fontes nesta semana.'),{code:'NOT_ENOUGH_NEWS'})
   // Feed com trecho curto (só título): abre a página da notícia e traz descrição + primeiros parágrafos,
   // para a IA resumir com conteúdo de verdade. Fica salvo, então cada notícia é buscada uma vez só.
   await enrichShortExcerpts(admin,candidates.slice(0,25))
@@ -70,7 +76,7 @@ async function generateEdition(admin:any,settings:any,{force=false}={}){
   const edition=validateCuration(result.data,candidates,count)
   if(!edition)throw Object.assign(new Error('A IA não montou uma edição válida. Tente gerar de novo.'),{code:'AI_INVALID_OUTPUT'})
 
-  const values={organization_id:org,week_start:week,status:'draft',subject:edition.subject,preheader:edition.preheader,intro:edition.intro,items:edition.items,linkedin_post:edition.linkedin_post,error_message:null}
+  const values={organization_id:org,week_start:week,status:'draft',subject:edition.subject,preheader:edition.preheader,intro:edition.intro,items:edition.items,linkedin_post:edition.linkedin_post,themes:chosenThemes,error_message:null}
   const saved=existing.data
     ?await admin.from('newsletter_editions').update(values).eq('id',existing.data.id).select('*').single()
     :await admin.from('newsletter_editions').insert(values).select('*').single()
@@ -195,7 +201,8 @@ Deno.serve(async request=>{
     }
     if(action==='generate_now'){
       const existing=await admin.from('newsletter_editions').select('status').eq('organization_id',org).eq('week_start',weekStart()).maybeSingle()
-      return json({ok:true,data:await generateEdition(admin,{...config,auto_send:false},{force:Boolean(existing.data)})})
+      const themes=Array.isArray(body.themes)?body.themes.map((theme:unknown)=>clean(theme,40)).filter(Boolean).slice(0,20):null
+      return json({ok:true,data:await generateEdition(admin,{...config,auto_send:false},{force:Boolean(existing.data),themes,focus:typeof body.focus==='string'?body.focus:null})})
     }
     const edition=await admin.from('newsletter_editions').select('*').eq('organization_id',org).eq('id',clean(body.edition_id,60)).single()
     if(edition.error)return json({ok:false,code:'NOT_FOUND',message:'Edição não encontrada.'},404)

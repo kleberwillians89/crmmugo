@@ -96,7 +96,7 @@ export const sendCampaignNow = (id) => invoke('email-campaigns', { action: 'send
 export const refreshCampaignStats = (id) => invoke('email-campaigns', { action: 'refresh_stats', campaign_id: id })
 
 // ---------------------------------------------------------------- Newsletter automática
-export const NEWS_CATEGORIES = [['marketing', 'Marketing'], ['ads', 'Anúncios'], ['seo', 'SEO'], ['social', 'Redes sociais'], ['ecommerce', 'E-commerce'], ['investimentos', 'Investimentos'], ['criadores', 'Criadores'], ['ia', 'IA'], ['negocios', 'Negócios']]
+export const NEWS_CATEGORIES = [['marketing', 'Marketing'], ['ads', 'Anúncios'], ['seo', 'SEO'], ['social', 'Redes sociais'], ['ecommerce', 'E-commerce'], ['investimentos', 'Investimentos'], ['criadores', 'Criadores'], ['ia', 'IA'], ['negocios', 'Negócios'], ['cultura', 'Cultura'], ['musica', 'Música'], ['shows', 'Shows'], ['exposicoes', 'Exposições'], ['teatro', 'Teatro'], ['gastronomia', 'Restaurantes'], ['lifestyle', 'São Paulo / lifestyle']]
 export const getNewsletterSettings = async () => unwrap(await db().from('newsletter_settings').select('*').maybeSingle())
 export const saveNewsletterSettings = async (values) => unwrap(await db().from('newsletter_settings').upsert(values, { onConflict: 'organization_id' }).select().single())
 export const listNewsletterSources = async () => unwrap(await db().from('newsletter_sources').select('*').order('created_at'))
@@ -106,5 +106,5 @@ export const deleteNewsletterSource = async (id) => unwrap(await db().from('news
 export const listEditions = async () => unwrap(await db().from('newsletter_editions').select('*').order('week_start', { ascending: false }).limit(12))
 export const updateEdition = async (id, patch) => unwrap(await db().from('newsletter_editions').update(patch).eq('id', id).select().single())
 export const listRecentNews = async (days = 9) => unwrap(await db().from('industry_news').select('id,url,title,excerpt,source_name,category,published_at,edition_id').gte('published_at', new Date(Date.now() - days * 86_400_000).toISOString()).order('published_at', { ascending: false }).limit(150))
-export const newsletterAction = (action, editionId) => invoke('newsletter', { action, edition_id: editionId })
+export const newsletterAction = (action, editionId, extra = {}) => invoke('newsletter', { action, edition_id: editionId, ...extra })
 export const newsletterFlash = ({ news_id, url, note }) => invoke('newsletter', { action: 'flash', news_id: news_id || null, url: url || null, note: note || null })
