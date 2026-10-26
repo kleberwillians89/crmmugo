@@ -8,6 +8,7 @@
 // Secrets: ANTHROPIC_API_KEY (ou OPENAI_API_KEY), PROSPECTING_WORKER_KEY,
 //          GMAIL_SERVICE_ACCOUNT_JSON, GMAIL_SENDER
 import {APOLLO_MATCH_URL,APOLLO_SEARCH_URL,MAX_IMPORT,apolloErrorMessage,buildApolloSearchBody,matchToProspect,normalizeSearchPerson,searchRowToProspect} from '../_shared/apolloCore.js'
+import {dueSlots,normalizeTimes,pickNextProspect,reminderPayload,researchToQueue,saoPauloParts} from '../_shared/prospectReminderCore.js'
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {generateStructured,researchWithWebSearch} from '../_shared/aiProvider.js'
 import {PROSPECT_RESEARCH_SCHEMA,REPLY_CLASSIFICATION_SCHEMA,buildReplyClassificationPrompt,classifyReplyHeuristic,replyOutcome,resolveReplyCategory,buildResearchPrompt,extractSiteSignals,isValidEmail,normalizeResearch,personalize,planSequence,renderOutreachHtml} from '../_shared/prospectingCore.js'
@@ -220,6 +221,44 @@ async function runOutreach(admin:any){
 }
 
 
+
+// ---------------------------------------------------------------- lembretes do LinkedIn pela Secretária
+// A cada execução do cron: (1) uma vez por dia, enfileira pesquisa do suficiente da planilha para a fila
+// não secar; (2) em cada horário configurado, manda ao WhatsApp de quem prospecta o próximo convite pronto.
+async function linkedinReminders(admin:any){
+  const configs=await admin.from('outreach_settings').select('organization_id,prospector_member_id,linkedin_reminders_enabled,linkedin_reminder_times,auto_research_enabled').eq('linkedin_reminders_enabled',true).not('prospector_member_id','is',null)
+  if(configs.error)return {reminders:0,queued:0}
+  const now=saoPauloParts()
+  let reminders=0,queued=0
+  for(const config of configs.data||[]){
+    const org=config.organization_id,times=normalizeTimes(config.linkedin_reminder_times)
+    if(config.auto_research_enabled!==false&&!now.weekend&&now.minutes>=7*60){
+      const ready=await admin.from('prospects').select('id',{count:'exact',head:true}).eq('organization_id',org).eq('research_status','done').eq('linkedin_state','pending').gte('fit_score',50)
+      const inFlight=await admin.from('prospects').select('id',{count:'exact',head:true}).eq('organization_id',org).in('research_status',['queued','running'])
+      const need=researchToQueue(Number(ready.count||0)+Number(inFlight.count||0),times.length)
+      if(need>0){
+        const next=await admin.from('prospects').select('id').eq('organization_id',org).eq('status','new').eq('research_status','idle').order('created_at',{ascending:true}).limit(need)
+        const ids=(next.data||[]).map((row:any)=>row.id)
+        if(ids.length){await admin.from('prospects').update({research_status:'queued',research_error:null}).in('id',ids);queued+=ids.length}
+      }
+    }
+    for(const slot of dueSlots(times,now)){
+      const key=`prospect-invite:${org}:${now.date}:${slot}`
+      const already=await admin.from('team_notification_outbox').select('id').eq('organization_id',org).eq('idempotency_key',key).limit(1)
+      if(already.data?.length)continue
+      const rows=await admin.from('prospects').select('id,contact_name,contact_role,company_name,contact_linkedin_url,linkedin_note,linkedin_message,linkedin_state,research_status,fit_score,status,linkedin_reminded_at').eq('organization_id',org).in('linkedin_state',['pending','connected']).order('fit_score',{ascending:false,nullsFirst:false}).limit(200)
+      const pick=pickNextProspect(rows.data||[])
+      if(!pick)continue
+      const position=times.indexOf(slot)+1
+      const inserted=await admin.from('team_notification_outbox').insert({organization_id:org,team_member_id:config.prospector_member_id,notification_type:'operational_alert',idempotency_key:key,payload:reminderPayload({prospect:pick.prospect,stage:pick.stage,position,total:times.length})})
+      if(inserted.error){if(inserted.error.code!=='23505')console.log(JSON.stringify({event:'linkedin_reminder_failed',code:inserted.error.code}));continue}
+      await admin.from('prospects').update({linkedin_reminded_at:new Date().toISOString()}).eq('id',pick.prospect.id)
+      reminders+=1
+    }
+  }
+  return {reminders,queued}
+}
+
 // ---------------------------------------------------------------- Apollo
 async function apolloFetch(url:string,payload:any){
   const key=Deno.env.get('APOLLO_API_KEY')||''
@@ -285,9 +324,10 @@ Deno.serve(async request=>{
 
   const workerKey=Deno.env.get('PROSPECTING_WORKER_KEY')||''
   if(workerKey&&request.headers.get('X-Prospecting-Worker-Key')===workerKey){
+    const linkedin=await linkedinReminders(admin)
     const researched=await processResearchQueue(admin,3)
     const outreach=await runOutreach(admin)
-    return json({ok:true,researched,...outreach})
+    return json({ok:true,researched,linkedin,...outreach})
   }
 
   const authorization=request.headers.get('Authorization')||''
