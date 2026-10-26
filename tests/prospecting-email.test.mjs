@@ -172,3 +172,22 @@ test('newsletter da Mugô: modelo tem todos os campos e "Oi, {{nome}}" sem nome 
   assert.equal((html.match(/Descadastrar/g) || []).length, 1)
   assert.match(renderCampaignHtml('<p>Oi, {{nome}}!</p>{{descadastro}}', { name: 'Ana Lima', unsubscribe: 'u' }), /Oi, Ana!/)
 })
+
+test('prospecção na voz de quem prospecta e links da Mugô só depois do aceite', async () => {
+  const { buildResearchPrompt, senderLine, profileLinksRule } = await import('../supabase/functions/_shared/prospectingCore.js')
+  assert.match(senderLine({ sender_name: 'Kleber | Mugô', sender_role: 'sócio e estrategista' }), /Você escreve como Kleber, sócio e estrategista da Mugô/)
+  assert.match(senderLine({}), /alguém do time da Mugô/)
+  assert.equal(profileLinksRule({}), 'Não coloque links em nenhuma mensagem.')
+  const rule = profileLinksRule({ mugo_instagram_url: 'https://instagram.com/mugo', mugo_linkedin_url: 'javascript:alert(1)' })
+  assert.match(rule, /Instagram da Mugô: https:\/\/instagram\.com\/mugo/)
+  assert.doesNotMatch(rule, /javascript/)
+  assert.match(rule, /Nunca coloque link na nota de conexão/)
+  const prompt = buildResearchPrompt({ prospect: { company_name: 'Loja X' }, settings: { sender_name: 'Kleber', proof_points: 'Cuidamos da Roove.' } })
+  assert.match(prompt.system, /primeira pessoa do singular/)
+  assert.match(prompt.system, /Cuidamos da Roove/)
+})
+
+test('pessoa do time aparece com o nome da Equipe, não com o apelido do WhatsApp', () => {
+  const src = fs.readFileSync(new URL('../supabase/functions/whatsapp-webhook/index.ts', import.meta.url), 'utf8')
+  assert.match(src, /display_name: internalMember\?\.name \|\| profileName \|\| null/)
+})
