@@ -56,7 +56,9 @@ export function buildResearchPrompt({ prospect, settings = {}, knowledge = [], s
     senderLine(settings),
     'Pesquise a empresa do prospect e escreva uma abordagem 1-a-1, em português do Brasil, que pareça escrita à mão por uma pessoa.',
     'Regras: use só fatos que você verificou (site, busca, dados fornecidos). Nada de elogio genérico, nada de "espero que esteja bem", nada de promessas de resultado.',
-    'O gancho deve ser uma observação concreta e útil (ex.: site sem pixel da Meta, loja sem avaliações, Instagram sem link de compra, site lento no celular, não aparece no Google para o termo principal).',
+    'O gancho deve ser uma observação concreta e útil (ex.: loja sem avaliações visíveis, Instagram sem link de compra, criativos parados, site lento no celular, não aparece no Google para o termo principal, falta de captura de e-mail/WhatsApp, coleção nova sem campanha).',
+    'Nunca afirme que a empresa NÃO tem pixel, Analytics ou alguma ferramenta: a leitura do site é parcial (com Tag Manager os pixels não aparecem no HTML). Se o sinal for de mensuração, fale como hipótese ou pergunta ("vale conferir se…"), e prefira ganchos de criativo, conteúdo, loja e Instagram, que são visíveis e indiscutíveis.',
+    'Varie o gancho entre empresas; não use "um ponto de mensuração/técnico" como assunto padrão.',
     'Tom: direto, curioso, gentil. Uma pergunta no final, de baixo compromisso (ex.: "faz sentido eu te mandar 3 pontos que vi?").',
     `A nota do LinkedIn tem no máximo ${LINKEDIN_NOTE_LIMIT} caracteres. O e-mail é texto puro, sem links e sem assinatura (ela é adicionada depois).`,
     'Se não achar o tomador de decisão, devolva decision_maker com campos vazios. Se a empresa claramente não tem perfil, dê nota baixa e explique.',
@@ -110,6 +112,7 @@ export function extractSiteSignals(html = '', { url = '', elapsedMs = null } = {
         : lower.includes('wp-content') ? 'WordPress'
           : lower.includes('wix.com') || lower.includes('wixstatic') ? 'Wix'
             : lower.includes('lojaintegrada') ? 'Loja Integrada' : null
+  const gtm = /googletagmanager\.com\/gtm\.js|gtm-[a-z0-9]+/.test(lower)
   const text = clean(source.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' '), 3500)
   return {
     url,
@@ -117,10 +120,11 @@ export function extractSiteSignals(html = '', { url = '', elapsedMs = null } = {
     title,
     meta_description: description || null,
     platform,
-    meta_pixel: /fbq\(|connect\.facebook\.net\/[^"']*fbevents/.test(lower),
+    // Com Tag Manager, os pixels costumam carregar por dentro dele e não aparecem no HTML: "talvez", nunca "não tem".
+    meta_pixel: /fbq\(|connect\.facebook\.net\/[^"']*fbevents/.test(lower) ? true : gtm ? 'não visível no HTML (pode estar dentro do Tag Manager)' : false,
     google_analytics: /gtag\(|googletagmanager\.com\/gtag|google-analytics\.com/.test(lower),
-    google_tag_manager: /googletagmanager\.com\/gtm\.js|gtm-[a-z0-9]+/.test(lower),
-    tiktok_pixel: lower.includes('analytics.tiktok.com'),
+    google_tag_manager: gtm,
+    tiktok_pixel: lower.includes('analytics.tiktok.com') ? true : gtm ? 'não visível no HTML (pode estar dentro do Tag Manager)' : false,
     whatsapp_button: /wa\.me\/|api\.whatsapp\.com/.test(lower),
     mobile_viewport: /<meta[^>]+name=["']viewport["']/i.test(source),
     response_ms: elapsedMs,

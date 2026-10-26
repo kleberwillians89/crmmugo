@@ -122,7 +122,7 @@ export function ProspectingPage({ onNavigate }) {
 
       <div className="g-columns">
         <section className="dashboard-panel g-queue">
-          <header><Linkedin size={18} /><div><strong>LinkedIn — convites de hoje</strong><small>{today.linkedin.length} de {settings?.daily_linkedin_target || 20} sugeridos. Abra, cole a nota e marque.</small></div></header>
+          <header><Linkedin size={18} /><div><strong>LinkedIn — convites de hoje</strong><small>{today.linkedin.length} de {settings?.daily_linkedin_target || 20} sugeridos. O envio é pelo seu LinkedIn: Abrir perfil → Conectar → Adicionar nota → colar. Depois marque aqui.</small></div></header>
           {today.linkedin.map((prospect) => <article key={prospect.id} className="g-queue-item">
             <button type="button" className="g-link" onClick={() => setSelectedId(prospect.id)}><b>{prospect.contact_name || 'Decisor a confirmar'}</b><small>{prospect.contact_role ? `${prospect.contact_role} · ` : ''}{prospect.company_name}</small></button>
             <span className={`g-score ${scoreClass(prospect.fit_score)}`}>{prospect.fit_score ?? '—'}</span>
@@ -130,7 +130,7 @@ export function ProspectingPage({ onNavigate }) {
             <div className="row-actions">
               <a className="button secondary small" href={prospect.contact_linkedin_url || linkedinSearch(prospect)} target="_blank" rel="noreferrer"><ExternalLink size={13} /> {prospect.contact_linkedin_url ? 'Abrir perfil' : 'Buscar no LinkedIn'}</a>
               <button className="button secondary small" onClick={() => copy(prospect.linkedin_note, () => setFeedback('Nota copiada.'))}><Copy size={13} /> Copiar nota</button>
-              <button className="button small" disabled={Boolean(busy)} onClick={() => markLinkedin(prospect, 'connection_sent')}>Convite enviado</button>
+              <button className="button small" disabled={Boolean(busy)} onClick={() => markLinkedin(prospect, 'connection_sent')}>Já enviei o convite</button>
               <button className="button secondary small" disabled={Boolean(busy)} onClick={() => markLinkedin(prospect, 'skipped')}>Pular</button>
             </div>
           </article>)}
@@ -141,7 +141,7 @@ export function ProspectingPage({ onNavigate }) {
               <button type="button" className="g-link" onClick={() => setSelectedId(prospect.id)}><b>{prospect.contact_name || prospect.company_name}</b><small>{prospect.company_name}</small></button>
               <div className="row-actions">
                 <button className="button secondary small" onClick={() => copy(prospect.linkedin_message, () => setFeedback('Mensagem copiada.'))}><Copy size={13} /> Copiar mensagem</button>
-                <button className="button small" onClick={() => markLinkedin(prospect, 'messaged')}>Mensagem enviada</button>
+                <button className="button small" onClick={() => markLinkedin(prospect, 'messaged')}>Já enviei a mensagem</button>
               </div>
             </article>)}
           </>}
@@ -248,9 +248,9 @@ function ProspectDrawer({ prospect, busy, onClose, onChange, run, onLinkedin, on
         <a className="button secondary small" href={draft.contact_linkedin_url || linkedinSearch(prospect)} target="_blank" rel="noreferrer"><ExternalLink size={13} /> {draft.contact_linkedin_url ? 'Abrir perfil' : 'Buscar'}</a>
         <button className="button secondary small" onClick={() => copy(draft.linkedin_note)}><Copy size={13} /> Nota</button>
         <button className="button secondary small" onClick={() => copy(draft.linkedin_message)}><Copy size={13} /> Mensagem</button>
-        {prospect.linkedin_state === 'pending' && <button className="button small" onClick={() => onLinkedin(prospect, 'connection_sent')}>Convite enviado</button>}
+        {prospect.linkedin_state === 'pending' && <button className="button small" onClick={() => onLinkedin(prospect, 'connection_sent')}>Já enviei o convite</button>}
         {prospect.linkedin_state === 'connection_sent' && <button className="button small" onClick={() => onLinkedin(prospect, 'connected')}>Conectou</button>}
-        {prospect.linkedin_state === 'connected' && <button className="button small" onClick={() => onLinkedin(prospect, 'messaged')}>Mensagem enviada</button>}
+        {prospect.linkedin_state === 'connected' && <button className="button small" onClick={() => onLinkedin(prospect, 'messaged')}>Já enviei a mensagem</button>}
         <button className="button secondary small" onClick={() => onConvert(prospect, 'linkedin')}>Respondeu no LinkedIn</button>
       </div>
     </section>
