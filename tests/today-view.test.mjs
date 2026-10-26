@@ -65,3 +65,13 @@ test('tema Mugô carregado por último e função do diário só para logados', 
   assert.match(sql, /current_organization_id\(\)/)
   assert.match(sql, /revoke all on function public\.secretary_feed\(integer\) from public, anon/)
 })
+
+test('na visão Equipe, tarefa pessoal só aparece para o dono', () => {
+  const list = [
+    { id: 'p', title: 'Treino', category: 'Treino', due_date: today, assigned_to: 'k', status: 'pending' },
+    { id: 'w', title: 'Post', category: 'Trabalho', due_date: today, assigned_to: 'k', status: 'pending' },
+  ]
+  assert.deepEqual(buildTodayGroups(list, { today, memberId: 'j', scope: 'team' }).today.map((t) => t.id), ['w'])
+  assert.deepEqual(buildTodayGroups(list, { today, memberId: 'k', scope: 'team' }).today.map((t) => t.id), ['w', 'p'])
+  assert.deepEqual(buildTodayGroups(list, { today, memberId: 'k', scope: 'mine' }).today.map((t) => t.id), ['w', 'p'])
+})
