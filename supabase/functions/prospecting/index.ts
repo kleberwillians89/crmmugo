@@ -341,7 +341,7 @@ Deno.serve(async request=>{
       await gmailSend({mime:buildMimeMessage({from:sender,fromName:s.sender_name,to:sender,subject:`[TESTE] ${personalize(prospect.data.email_subject,prospect.data)}`,text:personalize(prospect.data.email_body,prospect.data),html}),token})
       return json({ok:true,data:{sent_to:sender}})
     }
-    return json({ok:false,code:'UNKNOWN_ACTION'},400)
+    return json({ok:false,code:'UNKNOWN_ACTION',message:`Ação desconhecida (${action}). Publique a versão nova: npx supabase functions deploy prospecting`},400)
   }catch(error:any){
     return json({ok:false,code:clean(error?.code||'PROSPECTING_FAILED',60),message:clean(error?.message||'Falha na prospecção.',300)},500)
   }

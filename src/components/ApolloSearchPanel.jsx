@@ -14,17 +14,18 @@ const fromPreset = (id) => {
 export function ApolloSearchPanel({ canOperate, onImported, onError }) {
   const [form, setForm] = useState(() => fromPreset('moda_beleza'))
   const [result, setResult] = useState(null), [picked, setPicked] = useState(new Set())
-  const [busy, setBusy] = useState(''), [listName, setListName] = useState('')
+  const [busy, setBusy] = useState(''), [listName, setListName] = useState(''), [problem, setProblem] = useState('')
+  const fail = (cause) => { setProblem(cause.message); onError(cause.message) }
   const set = (key) => (event) => setForm({ ...form, [key]: event.target.value })
   const toggleRange = (range) => setForm({ ...form, employees: form.employees.includes(range) ? form.employees.filter((r) => r !== range) : [...form.employees, range] })
 
   async function search(page = 1) {
-    setBusy('search'); onError('')
+    setBusy('search'); onError(''); setProblem('')
     try {
       const data = await apolloSearch({ ...form, page })
       setResult(data); setForm((current) => ({ ...current, page }))
       setPicked(new Set())
-    } catch (cause) { onError(cause.message) } finally { setBusy('') }
+    } catch (cause) { fail(cause) } finally { setBusy('') }
   }
 
   function toggle(id) {
@@ -37,13 +38,13 @@ export function ApolloSearchPanel({ canOperate, onImported, onError }) {
   async function bring() {
     if (!picked.size) return
     if (!window.confirm(`Trazer ${picked.size} pessoa${picked.size === 1 ? '' : 's'} para o CRM? A IA já começa a pesquisar as empresas.`)) return
-    setBusy('import'); onError('')
+    setBusy('import'); onError(''); setProblem('')
     try {
       const name = listName.trim() || `${APOLLO_PRESETS[form.preset]?.label || 'Apollo'} — ${new Date().toLocaleDateString('pt-BR')}`
       const data = await apolloImport(people.filter((row) => picked.has(row.apollo_id)), name)
       setPicked(new Set())
       await onImported(data)
-    } catch (cause) { onError(cause.message) } finally { setBusy('') }
+    } catch (cause) { fail(cause) } finally { setBusy('') }
   }
 
   const people = result?.people || []
@@ -58,6 +59,7 @@ export function ApolloSearchPanel({ canOperate, onImported, onError }) {
         <label>Tecnologia do site (opcional)<input value={form.technologies} onChange={set('technologies')} placeholder="shopify, vtex, nuvemshop" /></label>
         <div className="g-wide"><span className="g-label">Funcionários</span><div className="g-chips">{EMPLOYEES.map(([range, label]) => <label key={range} className={`g-chip${form.employees.includes(range) ? ' active' : ''}`}><input type="checkbox" checked={form.employees.includes(range)} onChange={() => toggleRange(range)} /> {label}</label>)}</div></div>
       </div>
+      {problem && <p className="feedback-message error" role="alert">{problem}</p>}
       <div className="row-actions"><button className="button" type="submit" disabled={Boolean(busy) || !canOperate}><Search size={14} /> {busy === 'search' ? 'Buscando…' : 'Buscar'}</button></div>
     </form>
 
