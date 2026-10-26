@@ -5,7 +5,7 @@ async function invoke(name, body) {
   const { data, error } = await db().functions.invoke(name, { body })
   if (error) {
     let message = error.message
-    try { const parsed = await error.context?.json?.(); if (parsed?.message) message = parsed.message } catch { /* corpo não-JSON */ }
+    try { const parsed = await error.context?.json?.(); if (parsed?.message) message = parsed.message; else if (parsed?.code === 'UNKNOWN_ACTION') message = 'Essa função ainda está na versão antiga. Rode no terminal: npx supabase functions deploy ' + name } catch { /* corpo não-JSON */ }
     throw new Error(message || 'Falha ao falar com o servidor.')
   }
   if (!data?.ok) throw Object.assign(new Error(data?.message || 'Operação indisponível.'), { code: data?.code })
