@@ -6,6 +6,8 @@ import { FeedbackMessage } from './FeedbackMessage'
 import { useAuth } from '../contexts/AuthContext'
 import { normalizeProspectRow, parseCsv } from '../lib/prospectCsv'
 import { ApolloSearchPanel } from './ApolloSearchPanel'
+import { ProspectBoard } from './ProspectBoard'
+import { patchForColumn } from '../lib/prospectBoard'
 import { listTeamMembers } from '../services/data/teamRepository'
 import {
   PROSPECT_STATUSES, approveProspectEmails, convertProspect, createProspect, createProspectList, getOutreachSettings, importProspects,
@@ -31,11 +33,11 @@ export function ProspectingPage({ onNavigate }) {
   const [selectedId, setSelectedId] = useState(null), [checked, setChecked] = useState(new Set())
   const [filters, setFilters] = useState({ q: '', status: 'all', list: 'all' })
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(''), [error, setError] = useState(''), [feedback, setFeedback] = useState('')
-  const [importing, setImporting] = useState(null), [creating, setCreating] = useState(null)
+  const [importing, setImporting] = useState(null), [creating, setCreating] = useState(null), [boardNow, setBoardNow] = useState(0)
 
   async function load() {
     setError('')
-    try { const [rows, listRows, config] = await Promise.all([listProspects(), listProspectLists(), getOutreachSettings()]); setProspects(rows); setLists(listRows); setSettings(config) }
+    try { const [rows, listRows, config] = await Promise.all([listProspects(), listProspectLists(), getOutreachSettings()]); setProspects(rows); setLists(listRows); setSettings(config); setBoardNow(Date.now()) }
     catch (cause) { setError(cause.message) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -91,6 +93,13 @@ export function ProspectingPage({ onNavigate }) {
     await run('convert', async () => { await convertProspect(prospect.id, channel, note); await load() }, 'Virou lead no funil Comercial, com tarefa para o responsável.')
   }
 
+  async function moveTo(prospect, column) {
+    if (column === 'replied') return convert(prospect, 'linkedin')
+    const patch = patchForColumn(column, prospect)
+    if (!patch) return
+    await run('move', async () => { replace(await updateProspect(prospect.id, patch)); await logProspectActivity(prospect.id, 'linkedin', `moved_${column}`) }, 'Movido.')
+  }
+
   if (loading) return <div className="dashboard-panel page-skeleton">Carregando prospecção…</div>
   if (!canOperate) return <FeedbackMessage type="error">A prospecção é restrita ao time comercial.</FeedbackMessage>
 
@@ -113,7 +122,7 @@ export function ProspectingPage({ onNavigate }) {
     </section>
 
     <nav className="section-tabs" aria-label="Prospecção">
-      {[['today', 'Fila de hoje'], ['apollo', 'Buscar no Apollo'], ['all', `Todos (${prospects.length})`], ['settings', 'Configuração']].map(([id, label]) => <button key={id} type="button" className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
+      {[['today', 'Fila de hoje'], ['board', 'Quadro'], ['apollo', 'Buscar no Apollo'], ['all', `Todos (${prospects.length})`], ['settings', 'Configuração']].map(([id, label]) => <button key={id} type="button" className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
     </nav>
 
     {tab === 'today' && <div className="g-today">
@@ -197,6 +206,7 @@ export function ProspectingPage({ onNavigate }) {
       {!filtered.length && <p className="empty-state">Nenhum prospect com esses filtros.</p>}
     </section>}
 
+    {tab === 'board' && <ProspectBoard prospects={prospects} now={boardNow} busy={busy} onMove={moveTo} onOpen={setSelectedId} />}
     {tab === 'apollo' && <ApolloSearchPanel canOperate={canOperate} onImported={async (result) => { await load(); setTab('today'); setFeedback(`${result.inserted} prospect${result.inserted === 1 ? '' : 's'} no CRM${result.skipped ? ` (${result.skipped} já estavam no CRM)` : ''}. A IA já está pesquisando.`) }} onError={setError} />}
     {tab === 'settings' && settings !== undefined && <OutreachSettings settings={settings} canWrite={canWrite} onSaved={(row) => { setSettings(row); setFeedback('Configuração salva.') }} onError={setError} />}
 
