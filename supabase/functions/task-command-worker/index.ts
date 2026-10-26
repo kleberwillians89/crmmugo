@@ -4,6 +4,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { HELP_TEXT, REFERENTIAL_ALL_WORDS, parseMultiSelection, parseNamedDelegation, parseSelfTask, selectionActionIntent, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
+import { prospectReplyAction } from '../_shared/prospectReminderCore.js'
 import {advanceConversationState,scopedConversationState,conversationTrace} from '../_shared/conversationKernel.js'
 import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeSecretaryWriteRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
 
@@ -182,6 +183,9 @@ async function saveAssistantSession(admin:any,event:any,values:any){
   event.session=result.data
   return result.data
 }
+async function saveAssistantProspectContext(admin:any,event:any,prospectId:string,stage:string){
+  return saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'PROSPECT_INVITE',context:{candidate_items:[{index:1,type:'prospect',prospect_id:prospectId,stage}]},pending_action:'select_item',pending_entity_type:'prospects',pending_entity_id:prospectId,expires_at:new Date(Date.now()+3*3600*1000).toISOString()})
+}
 async function clearAssistantSession(admin:any,event:any){
   const result=await admin.from('internal_assistant_sessions').update({state:'idle',active_intent:null,context:{},pending_action:null,pending_entity_type:null,pending_entity_id:null,expires_at:new Date().toISOString(),last_message_id:event.message_id||null}).eq('organization_id',event.organization_id).eq('team_member_id',event.team_member_id).eq('phone',event.wa_id)
   if(result.error&&result.error.code!=='42P01')throw result.error
@@ -306,6 +310,45 @@ async function confirmCommercial(admin:any,event:any,pending:any,cancel=false){
 
 async function execute(admin: any, event: any, command: any) {
   const org = event.organization_id
+  // Lembrete de prospecção (convite/mensagem do LinkedIn): "feito" marca, "pular" deixa para depois.
+  if(command.intent==='PROSPECT_DONE'||command.intent==='PROSPECT_SKIP'){
+    const id=clean(command.prospect_id,80)
+    const found=await admin.from('prospects').select('id,contact_name,company_name,linkedin_state').eq('organization_id',org).eq('id',id).maybeSingle()
+    if(found.error)throw found.error
+    if(!found.data)return{status:'completed',reply:'Não achei esse prospect no CRM. Pode marcar pela tela de Prospecção.'}
+    const who=clean(found.data.contact_name||found.data.company_name,80).split(' ')[0]||'esse prospect'
+    await clearAssistantSession(admin,event)
+    if(command.intent==='PROSPECT_SKIP'){
+      await admin.from('prospect_activities').insert({organization_id:org,prospect_id:id,channel:'linkedin',activity_type:'reminder_skipped',content:'Pulado pelo WhatsApp'})
+      return{status:'completed',reply:`Ok, deixei ${who} para outro dia.`}
+    }
+    const next=command.stage==='message'?'messaged':'connection_sent'
+    const now=new Date().toISOString()
+    const updated=await admin.from('prospects').update({linkedin_state:next,last_contact_at:now,status:'contacted'}).eq('id',id).eq('organization_id',org)
+    if(updated.error)throw updated.error
+    await admin.from('prospect_activities').insert({organization_id:org,prospect_id:id,channel:'linkedin',activity_type:next,content:'Marcado pelo WhatsApp'})
+    return{status:'completed',reply:next==='messaged'?`Anotado ✓ mensagem para ${who}. Se responder, me avisa ("${who} respondeu") que eu coloco no funil.`:`Anotado ✓ convite para ${who}. Quando aceitar, me manda "${who} aceitou" que eu já te passo a mensagem.`}
+  }
+  // "Marcelo aceitou": marca a conexão e devolve a mensagem pronta para colar.
+  if(command.intent==='PROSPECT_ACCEPTED'||command.intent==='PROSPECT_REPLIED'){
+    const words=foldText(command.name_hint).split(/\s+/).filter((word:string)=>word.length>=3&&!['aceitou','aceitaram','respondeu','responderam','convite','linkedin','conexao','conectou','ele','ela'].includes(word))
+    const states=command.intent==='PROSPECT_ACCEPTED'?['connection_sent','pending']:['connection_sent','connected','messaged']
+    const rows=await admin.from('prospects').select('id,contact_name,company_name,linkedin_message,linkedin_state').eq('organization_id',org).in('linkedin_state',states).limit(300)
+    if(rows.error)throw rows.error
+    const matches=(rows.data||[]).filter((row:any)=>words.some((word:string)=>foldText(`${row.contact_name||''} ${row.company_name||''}`).split(/\s+/).includes(word)))
+    if(matches.length!==1)return{status:'completed',reply:matches.length?`Achei mais de um: ${matches.slice(0,4).map((row:any)=>`${row.contact_name} (${row.company_name})`).join(', ')}. Me diz o nome e a empresa.`:'Não achei esse nome entre os convites enviados. Me manda nome e empresa (ex.: "Marcelo da Tuff aceitou").'}
+    const row=matches[0],who=clean(row.contact_name||row.company_name,80).split(' ')[0]
+    if(command.intent==='PROSPECT_REPLIED'){
+      await admin.from('prospects').update({status:'replied',replied_at:new Date().toISOString()}).eq('id',row.id).eq('organization_id',org)
+      await admin.from('prospect_activities').insert({organization_id:org,prospect_id:row.id,channel:'linkedin',activity_type:'replied',content:'Avisado pelo WhatsApp'})
+      return{status:'completed',reply:`Boa! Marquei que ${who} respondeu. Abra o prospect no CRM e clique em "Virou conversa" para ir pro funil com tarefa.`}
+    }
+    await admin.from('prospects').update({linkedin_state:'connected'}).eq('id',row.id).eq('organization_id',org)
+    await admin.from('prospect_activities').insert({organization_id:org,prospect_id:row.id,channel:'linkedin',activity_type:'connected',content:'Avisado pelo WhatsApp'})
+    if(!clean(row.linkedin_message))return{status:'completed',reply:`Anotado ✓ ${who} aceitou. A mensagem dele ainda não está pronta no CRM.`}
+    await saveAssistantProspectContext(admin,event,row.id,'message')
+    return{status:'completed',reply:`Anotado ✓ ${who} aceitou. Cole esta mensagem na conversa com ele no LinkedIn:\n\n${clean(row.linkedin_message,1200)}\n\nDepois me responde *feito*.`}
+  }
   if(command.intent==='SEARCH_TASKS'){
     const owner=await findMember(admin,event,command.assignee_name||null)
     if(!owner)return{status:'awaiting_context',reply:'Qual membro da equipe você quer consultar?'}
@@ -1157,6 +1200,16 @@ async function processEvent(admin: any, event: any) {
     else if(/^(feito|pronto|ok feito)[.!]*$/.test(foldedRaw)&&event.session?.active_intent==='CONVERSATION_BROWSE'&&candidateItems[0]?.conversation_id){
       command={intent:'ACK_CONVERSATION',conversation_id:candidateItems[0].conversation_id,name_hint:'',confidence:1}
     }
+    // Prospecção pelo LinkedIn: resposta ao lembrete ("feito"/"pular") e avisos de aceite/resposta.
+    if(event.session?.active_intent==='PROSPECT_INVITE'&&candidateItems[0]?.prospect_id&&prospectReplyAction(foldedRaw)){
+      command={intent:prospectReplyAction(foldedRaw)==='done'?'PROSPECT_DONE':'PROSPECT_SKIP',prospect_id:candidateItems[0].prospect_id,stage:candidateItems[0].stage||'invite',confidence:1}
+    }
+    else if(/\b(aceitou|aceitaram|me aceitou|conectou)\b/.test(foldedRaw)&&!/\b(proposta|reuniao|orcamento|tarefa|contrato|pagamento)\b/.test(foldedRaw)&&cleanedRaw.split(/\s+/).length<=8){
+      command={intent:'PROSPECT_ACCEPTED',name_hint:cleanedRaw,confidence:1}
+    }
+    else if(/\b(respondeu|responderam)\b/.test(foldedRaw)&&/\b(linkedin|prospect|convite)\b/.test(foldedRaw)&&cleanedRaw.split(/\s+/).length<=10){
+      command={intent:'PROSPECT_REPLIED',name_hint:cleanedRaw,confidence:1}
+    }
     if(['LIST_TODAY','LIST_OVERDUE'].includes(command.intent)&&!/\b(equipe|time|todos|todo mundo|geral|de todo mundo|da mugo inteira)\b/.test(foldedRaw)){
       command={intent:'LIST_MINE',confidence:1}
     }
@@ -1168,7 +1221,7 @@ async function processEvent(admin: any, event: any) {
     // reabertura de tarefa, ação sensível o bastante para não arriscar na confiabilidade de um LLM).
     const undoCompletionProbe=safeUndoLastCompletionRescue(event.raw_text,{recentCompletedTasks})
     const deterministicShortcut=['document','image'].includes(event.message_type)
-      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE','ACK_CONVERSATION'].includes(command.intent)
+      || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE','ACK_CONVERSATION','PROSPECT_DONE','PROSPECT_SKIP','PROSPECT_ACCEPTED','PROSPECT_REPLIED'].includes(command.intent)
       // Tarefa única, com título e data entendidos pelo parser: vai direto (o handler sempre pede confirmação
       // antes de gravar). Pedidos com mais de uma ação ("... e coloca pra Julia ...") continuam com a IA.
       || (command.intent==='CREATE_TASK'&&clean(command.title)&&command.due_date&&Number(command.confidence)>=.95&&!(Array.isArray(command.items)&&command.items.length>1)&&!/\b(?:e|tamb[eé]m)\s+(?:cria|crie|coloca|bota|registra|marca|anota|lan[cç]a)\b/iu.test(cleanedRaw))
@@ -1272,7 +1325,7 @@ async function processEvent(admin: any, event: any) {
     const contextualActivity=command.intent==='ACTIVITY_COMPLETE'&&['ACTIVITY_START','ACTIVITY_CAPTURE'].includes(event.session?.active_intent)&&command.contextual
     // Uma saudação solta ("oi") não deve derrubar um fluxo pendente (lista aguardando escolha, tarefa
     // aguardando título...) — só um novo comando de verdade cancela o contexto anterior.
-    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','ACK_CONVERSATION','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
+    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','ACK_CONVERSATION','PROSPECT_DONE','PROSPECT_SKIP','PROSPECT_ACCEPTED','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
     const turnRelation=secretaryPlan?.turn_relation||'new_request'
     event.result={...(event.result||{}),turn_relation:turnRelation}
     if(turnRelation==='cancel_plan')await clearAssistantSession(admin,event)

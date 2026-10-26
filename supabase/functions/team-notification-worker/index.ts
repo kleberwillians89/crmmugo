@@ -4,6 +4,7 @@
 // household/private/reservas/distribuição de sócios.
 // Deploy e scheduler são manuais (mesmo modelo de task-command-worker/commercial-notification-worker).
 // Secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TEAM_NOTIFICATION_WORKER_KEY, META_ACCESS_TOKEN.
+import {reminderMessage} from '../_shared/prospectReminderCore.js'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { normalizeBrazilianPhone } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
@@ -237,6 +238,7 @@ function messageFor(item: any, memberName = '') {
   if (p.kind === 'handoff_reminder') return `Lembrete: ${p.lead_name||'o lead'} aguarda atendimento humano há ${p.minutes} minutos.${contactLines(p)}`
   if (p.kind === 'handoff_escalation') return `Escalonamento: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.${contactLines(p)}`
   if (p.kind === 'handoff_critical') return `Alerta crítico: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.${contactLines(p)}`
+  if (p.kind === 'prospect_invite') return reminderMessage(p)
   if (p.kind === 'qualified_lead_handoff') return [`Novo lead aguardando atendimento:`,p.name||p.company||'Lead',p.need?`Demanda: ${p.need}`:null,p.summary?`Contexto: ${p.summary}`:null,p.next_action?`Próximo passo: ${p.next_action}`:null,'','1. Assumir','2. Ver contexto'].filter(Boolean).join('\n')+contactLines(p)
   return ''
 }
@@ -244,7 +246,7 @@ function messageFor(item: any, memberName = '') {
 async function saveNotificationContext(admin:any,item:any,member:any,conversationId:string,messageId:string|null){
   const candidates=Array.isArray(item.payload?.candidate_items)?item.payload.candidate_items:[]
   const candidateType=candidates[0]?.type||null
-  const result=await admin.from('internal_assistant_sessions').upsert({organization_id:item.organization_id,team_member_id:item.team_member_id,phone:normalizeBrazilianPhone(member.phone),state:candidates.length?'awaiting_selection':'idle',active_intent:candidateType==='task'?'TASK_BROWSE':candidateType==='conversation'?'CONVERSATION_BROWSE':'MAIN_MENU',context:{candidate_items:candidates,source_notification_id:item.id,source_notification_type:item.notification_type},pending_action:candidates.length?'select_item':null,pending_entity_type:candidateType==='task'?'crm_tasks':candidateType==='conversation'?'whatsapp_conversations':null,pending_entity_id:null,last_message_id:messageId,expires_at:new Date(Date.now()+(['morning_digest','midday_digest'].includes(item.notification_type)||item.payload?.kind==='task_assigned'?10*60:30)*60*1000).toISOString()},{onConflict:'organization_id,team_member_id,phone'})
+  const result=await admin.from('internal_assistant_sessions').upsert({organization_id:item.organization_id,team_member_id:item.team_member_id,phone:normalizeBrazilianPhone(member.phone),state:candidates.length?'awaiting_selection':'idle',active_intent:candidateType==='task'?'TASK_BROWSE':candidateType==='conversation'?'CONVERSATION_BROWSE':candidateType==='prospect'?'PROSPECT_INVITE':'MAIN_MENU',context:{candidate_items:candidates,source_notification_id:item.id,source_notification_type:item.notification_type},pending_action:candidates.length?'select_item':null,pending_entity_type:candidateType==='task'?'crm_tasks':candidateType==='conversation'?'whatsapp_conversations':candidateType==='prospect'?'prospects':null,pending_entity_id:null,last_message_id:messageId,expires_at:new Date(Date.now()+(['morning_digest','midday_digest'].includes(item.notification_type)||item.payload?.kind==='task_assigned'?10*60:item.payload?.kind==='prospect_invite'?3*60:30)*60*1000).toISOString()},{onConflict:'organization_id,team_member_id,phone'})
   if(result.error)throw result.error
   await admin.from('whatsapp_conversations').update({last_outbound_at:new Date().toISOString()}).eq('id',conversationId).eq('organization_id',item.organization_id)
 }
