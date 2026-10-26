@@ -26,7 +26,7 @@ export function Sidebar({ activePage, onNavigate, open, collapsed, onClose, onTo
       />
       <aside className={`sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`}>
       <div className="brand-panel">
-        <MugoBrand variant={collapsed ? 'symbol' : 'full'} theme="dark" />
+        <MugoBrand variant={collapsed ? 'symbol' : 'full'} theme="light" />
         <button type="button" className="sidebar-close" onClick={onClose} aria-label="Fechar menu">
           <X size={20} />
         </button>

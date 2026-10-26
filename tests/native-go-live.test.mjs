@@ -87,7 +87,10 @@ test('rotina usa uma fonte com horas e classificação de calendário',()=>{
   assert.equal(taskCategoryScope({category:'Trabalho'}),'work')
   assert.equal(taskCategoryScope({client_id:'x',category:'Trabalho'}),'clients')
   const page=fs.readFileSync('src/components/OperationsHubPage.jsx','utf8')
-  for(const term of ['Horas planejadas','Horas realizadas','Meta semanal','Rotina','Tarefas e compromissos','Filtrar calendário','Concluídos','Registrar horas'])assert.ok(page.includes(term)||term==='Registrar horas'&&page.includes('Quantas horas foram realizadas'),term)
+  for(const term of ['Planejadas','Realizadas','Meta semanal','Filtrar calendário','Concluídos','Quantas horas você trabalhou hoje'])assert.ok(page.includes(term),term)
+  // Tela Hoje (out/2026): lista estilo Notion com rotina marcada pela categoria
+  const today=fs.readFileSync('src/components/TodayView.jsx','utf8')
+  for(const term of ['Atrasad','Próximos 7 dias','Conversas esperando','Secretária Mugô','taskCategoryScope'])assert.ok(today.includes(term),term)
 })
 
 test('fluxo principal não oferece configurações externas',()=>{
