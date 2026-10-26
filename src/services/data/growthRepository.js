@@ -71,6 +71,8 @@ export const logProspectActivity = async (prospectId, channel, activityType, con
 export const getOutreachSettings = async () => unwrap(await db().from('outreach_settings').select('*').maybeSingle())
 export const saveOutreachSettings = async (values) => unwrap(await db().from('outreach_settings').upsert(values, { onConflict: 'organization_id' }).select().single())
 
+export const apolloSearch = (filters) => invoke('prospecting', { action: 'apollo_search', filters })
+export const apolloImport = (people, listName) => invoke('prospecting', { action: 'apollo_import', people, list_name: listName })
 export const researchProspects = (ids) => invoke('prospecting', { action: 'research', prospect_ids: ids })
 export const approveProspectEmails = (ids) => invoke('prospecting', { action: 'approve_email', prospect_ids: ids })
 export const stopProspectSequence = (id) => invoke('prospecting', { action: 'stop_sequence', prospect_ids: [id] })

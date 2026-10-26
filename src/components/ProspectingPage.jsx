@@ -5,6 +5,7 @@ import { PageHeader } from './PageHeader'
 import { FeedbackMessage } from './FeedbackMessage'
 import { useAuth } from '../contexts/AuthContext'
 import { normalizeProspectRow, parseCsv } from '../lib/prospectCsv'
+import { ApolloSearchPanel } from './ApolloSearchPanel'
 import {
   PROSPECT_STATUSES, approveProspectEmails, convertProspect, createProspect, createProspectList, getOutreachSettings, importProspects,
   listProspectActivities, listProspectLists, listProspectQueue, listProspects, logProspectActivity, researchProspects, saveOutreachSettings,
@@ -110,7 +111,7 @@ export function ProspectingPage({ onNavigate }) {
     </section>
 
     <nav className="section-tabs" aria-label="Prospecção">
-      {[['today', 'Fila de hoje'], ['all', `Todos (${prospects.length})`], ['settings', 'Configuração']].map(([id, label]) => <button key={id} type="button" className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
+      {[['today', 'Fila de hoje'], ['apollo', 'Buscar no Apollo'], ['all', `Todos (${prospects.length})`], ['settings', 'Configuração']].map(([id, label]) => <button key={id} type="button" className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}
     </nav>
 
     {tab === 'today' && <div className="g-today">
@@ -187,6 +188,7 @@ export function ProspectingPage({ onNavigate }) {
       {!filtered.length && <p className="empty-state">Nenhum prospect com esses filtros.</p>}
     </section>}
 
+    {tab === 'apollo' && <ApolloSearchPanel canOperate={canOperate} onImported={async (result) => { await load(); setTab('today'); setFeedback(`${result.inserted} prospect${result.inserted === 1 ? '' : 's'} no CRM${result.skipped ? ` (${result.skipped} já estavam no CRM)` : ''}. A IA já está pesquisando.`) }} onError={setError} />}
     {tab === 'settings' && settings !== undefined && <OutreachSettings settings={settings} canWrite={canWrite} onSaved={(row) => { setSettings(row); setFeedback('Configuração salva.') }} onError={setError} />}
 
     {selected && <ProspectDrawer key={selected.id} prospect={selected} busy={busy} onClose={() => setSelectedId(null)} onChange={replace} run={run} onLinkedin={markLinkedin} onConvert={convert} onApprove={(id) => approve([id])} onResearch={(id) => research([id])} reload={load} />}

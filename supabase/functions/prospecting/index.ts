@@ -7,6 +7,7 @@
 //
 // Secrets: ANTHROPIC_API_KEY (ou OPENAI_API_KEY), PROSPECTING_WORKER_KEY,
 //          GMAIL_SERVICE_ACCOUNT_JSON, GMAIL_SENDER
+import {APOLLO_MATCH_URL,APOLLO_SEARCH_URL,MAX_IMPORT,apolloErrorMessage,buildApolloSearchBody,matchToProspect,normalizeSearchPerson,searchRowToProspect} from '../_shared/apolloCore.js'
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
 import {generateStructured,researchWithWebSearch} from '../_shared/aiProvider.js'
 import {PROSPECT_RESEARCH_SCHEMA,REPLY_CLASSIFICATION_SCHEMA,buildReplyClassificationPrompt,classifyReplyHeuristic,replyOutcome,resolveReplyCategory,buildResearchPrompt,extractSiteSignals,isValidEmail,normalizeResearch,personalize,planSequence,renderOutreachHtml} from '../_shared/prospectingCore.js'
@@ -57,7 +58,8 @@ async function researchOne(admin:any,prospect:any){
       admin.from('industry_news').select('title,url,summary_pt,impact_pt,segments').eq('organization_id',org).not('summary_pt','is',null).gte('published_at',new Date(Date.now()-14*86_400_000).toISOString()).order('published_at',{ascending:false}).limit(20),
     ])
     const newsHooks=newsHooksFor(news.error?[]:(news.data||[]),prospect.segment||'',3)
-    const prompt=buildResearchPrompt({prospect,settings:settings.data||{},knowledge:knowledge.data||[],siteSignals,cnpjData,newsHooks})
+    const newsletterUrl=`${(Deno.env.get('NEWSLETTER_SITE_URL')||'https://crm.mugoagencia.com.br/news').replace(/\/$/,'')}?utm_source=linkedin&utm_medium=prospeccao&utm_campaign=${encodeURIComponent(String(prospect.list_id||'avulso').slice(0,8))}`
+    const prompt=buildResearchPrompt({prospect,settings:{...(settings.data||{}),newsletter_url:newsletterUrl},knowledge:knowledge.data||[],siteSignals,cnpjData,newsHooks})
     let raw
     if(Deno.env.get('ANTHROPIC_API_KEY'))raw=(await researchWithWebSearch({system:prompt.system,user:prompt.user,schema:PROSPECT_RESEARCH_SCHEMA,maxSearches:4})).data
     else raw=(await generateStructured({system:prompt.system,user:prompt.user,schema:PROSPECT_RESEARCH_SCHEMA,schemaName:'save_research',maxTokens:2500,timeoutMs:90_000,webSearch:true})).data
@@ -217,6 +219,60 @@ async function runOutreach(admin:any){
   return {replies,sent}
 }
 
+
+// ---------------------------------------------------------------- Apollo
+async function apolloFetch(url:string,payload:any){
+  const key=Deno.env.get('APOLLO_API_KEY')||''
+  if(!key)throw Object.assign(new Error('Falta a chave do Apollo: rode npx supabase secrets set APOLLO_API_KEY=... no terminal.'),{code:'APOLLO_NOT_CONFIGURED'})
+  const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache','x-api-key':key},body:JSON.stringify(payload),signal:AbortSignal.timeout(30_000)})
+  const body=await response.json().catch(()=>({}))
+  if(!response.ok)throw Object.assign(new Error(apolloErrorMessage(response.status,body)),{code:'APOLLO_ERROR'})
+  return body
+}
+
+async function apolloSearch(admin:any,org:string,filters:any){
+  const body=await apolloFetch(APOLLO_SEARCH_URL,buildApolloSearchBody(filters))
+  const people=(body.people||body.contacts||[]).map(normalizeSearchPerson).filter((row:any)=>row.apollo_id&&row.company)
+  const existing=await admin.from('prospects').select('company_name').eq('organization_id',org).limit(5000)
+  const known=new Set((existing.data||[]).map((row:any)=>String(row.company_name||'').trim().toLowerCase()))
+  const total=Number(body.total_entries??body.pagination?.total_entries??0)
+  return {people:people.map((row:any)=>({...row,already:known.has(row.company.toLowerCase())})),total,page:Number(filters.page)||1}
+}
+
+async function apolloImport(admin:any,org:string,rows:any[],listName:string){
+  let listId:string|null=null
+  if(listName){
+    const created=await admin.from('prospect_lists').insert({organization_id:org,name:clean(listName,120),source:'apollo'}).select('id').single()
+    if(created.error)throw created.error
+    listId=created.data.id
+  }
+  const inserted:string[]=[]
+  let skipped=0,revealed=0,matchBlocked=false
+  for(const source of rows.slice(0,MAX_IMPORT)){
+    let row:any=null
+    // Tenta revelar LinkedIn/e-mail (1 crédito). No plano grátis o match é bloqueado: usa os dados da busca.
+    if(!matchBlocked){
+      try{
+        const match=await apolloFetch(APOLLO_MATCH_URL,{id:clean(source.apollo_id,80),reveal_personal_emails:false})
+        row=matchToProspect(match.person||{}, {listId})
+        if(row)revealed+=1
+      }catch(error){
+        if((error as any)?.code==='APOLLO_NOT_CONFIGURED')throw error
+        matchBlocked=true
+      }
+    }
+    if(!row)row=searchRowToProspect(source,{listId})
+    if(!row){skipped+=1;continue}
+    const duplicate=await admin.from('prospects').select('id').eq('organization_id',org).ilike('company_name',String(row.company_name).replace(/[%_\\]/g,(c:string)=>'\\'+c)).limit(1)
+    if(duplicate.data?.length){skipped+=1;continue}
+    const saved=await admin.from('prospects').insert({...row,organization_id:org}).select('id').single()
+    if(saved.error){if(saved.error.code==='23505'){skipped+=1;continue}throw saved.error}
+    inserted.push(saved.data.id)
+  }
+  if(inserted.length)await admin.from('prospects').update({research_status:'queued',research_error:null}).in('id',inserted)
+  return {inserted:inserted.length,skipped,revealed,list_id:listId}
+}
+
 // ---------------------------------------------------------------- servidor
 Deno.serve(async request=>{
   if(request.method==='OPTIONS')return new Response('ok',{headers:cors})
@@ -244,6 +300,14 @@ Deno.serve(async request=>{
   const ids=(Array.isArray(body.prospect_ids)?body.prospect_ids:[body.prospect_id]).map((id:unknown)=>clean(id,60)).filter(Boolean).slice(0,50)
 
   try{
+    if(action==='apollo_search')return json({ok:true,data:await apolloSearch(admin,org,body.filters||{})})
+    if(action==='apollo_import'){
+      const rows=(Array.isArray(body.people)?body.people:[]).filter((row:any)=>row&&typeof row==='object'&&row.apollo_id&&row.company)
+      if(!rows.length)return json({ok:false,code:'INVALID',message:'Selecione ao menos uma pessoa.'},400)
+      const result=await apolloImport(admin,org,rows,clean(body.list_name,120))
+      const done=result.inserted?await processResearchQueue(admin,2,org):0
+      return json({ok:true,data:{...result,researched_now:done}})
+    }
     if(action==='research'){
       if(!ids.length)return json({ok:false,code:'INVALID',message:'Selecione ao menos um prospect.'},400)
       const queued=await admin.from('prospects').update({research_status:'queued',research_error:null}).eq('organization_id',org).in('id',ids).neq('research_status','running')
