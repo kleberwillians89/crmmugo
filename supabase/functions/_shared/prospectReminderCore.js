@@ -64,10 +64,9 @@ export function reminderPayload({ prospect, stage, position = null, total = null
 export function reminderMessage(p = {}) {
   const head = p.stage === 'message' ? `${p.name} aceitou o convite 🎉 Hora da mensagem:` : `Próximo convite do LinkedIn${p.position && p.total ? ` (${p.position} de ${p.total} hoje)` : ''}:`
   const who = `*${p.name}*${p.role ? ` — ${p.role}` : ''}${p.company ? ` · ${p.company}` : ''}`
-  const how = p.stage === 'message'
-    ? 'Abra a conversa com a pessoa no LinkedIn e cole:'
-    : p.profile_is_search ? 'Ache o perfil na busca, clique em Conectar → Adicionar nota e cole:' : 'Abra o perfil, clique em Conectar → Adicionar nota e cole:'
-  return [head, '', who, p.profile_url, '', how, '', p.text, '', 'Depois me responde *feito* (ou *pular*).'].join('\n')
+  if (p.stage === 'message') return [head, '', who, p.profile_url, '', 'Abra a conversa com a pessoa no LinkedIn e cole:', '', p.text, '', 'Depois me responde *feito* (ou *pular*).'].join('\n')
+  const open = p.profile_is_search ? 'Ache o perfil na busca e clique em *Conectar → Enviar sem nota*.' : 'Abra o perfil e clique em *Conectar → Enviar sem nota*.'
+  return [head, '', who, p.profile_url, '', open, 'A abordagem vai na mensagem, quando a pessoa aceitar.', '', p.text ? `(Se ainda tiver nota disponível no mês, pode usar esta: ${p.text})` : '', '', 'Depois me responde *feito* (ou *pular*).'].filter((line, i, all) => line !== '' || all[i - 1] !== '').join('\n')
 }
 
 const DONE = /^(feito|fiz|enviei|enviado|mandei|mandado|pronto|ok|ok feito|convite enviado|foi|conectei)[.!]*$/
