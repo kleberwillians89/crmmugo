@@ -361,7 +361,9 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
     organization_id: connection.organization_id,
     connection_id: connection.id,
     wa_id: waId,
-    display_name: profileName || null,
+    // Pessoa do time aparece sempre com o nome cadastrado na Equipe (o nome do perfil do WhatsApp
+    // pode ser apelido ou de outra pessoa — ex.: Julia aparecia como "Gabi").
+    display_name: internalMember?.name || profileName || null,
     profile_name: profileName || null,
     contact_type: senderType,
     team_member_id: internalMember?.id || null,

@@ -305,7 +305,7 @@ function ImportModal({ state, setState, lists, onDone, onError }) {
 }
 
 function OutreachSettings({ settings, canWrite, onSaved, onError }) {
-  const [form, setForm] = useState(() => ({ icp: '', offer: '', sender_name: '', sender_email: '', daily_email_limit: 30, daily_linkedin_target: 20, send_window_start: '08:30', send_window_end: '18:00', followup_days: '3, 7', email_template_html: DEFAULT_TEMPLATE, signature_html: '', email_enabled: false, ...(settings || {}), ...(settings?.followup_days ? { followup_days: settings.followup_days.join(', ') } : {}) }))
+  const [form, setForm] = useState(() => ({ icp: '', offer: '', sender_name: '', sender_role: '', sender_linkedin_url: '', mugo_instagram_url: '', mugo_linkedin_url: '', mugo_site_url: 'https://mugoagencia.com.br', proof_points: '', sender_email: '', daily_email_limit: 30, daily_linkedin_target: 20, send_window_start: '08:30', send_window_end: '18:00', followup_days: '3, 7', email_template_html: DEFAULT_TEMPLATE, signature_html: '', email_enabled: false, ...(settings || {}), ...(settings?.followup_days ? { followup_days: settings.followup_days.join(', ') } : {}) }))
   const [saving, setSaving] = useState(false)
   const set = (key) => (event) => setForm({ ...form, [key]: event.target.type === 'checkbox' ? event.target.checked : event.target.value })
   const preview = String(form.email_template_html || DEFAULT_TEMPLATE).replaceAll('{{corpo}}', '<p style="margin:0 0 12px">Oi Ana, vi que a Loja X ainda não tem o pixel da Meta no site…</p><p style="margin:0 0 12px">Faz sentido eu te mandar 3 pontos rápidos?</p>').replaceAll('{{assinatura}}', form.signature_html || '').replaceAll('{{nome}}', 'Ana').replaceAll('{{empresa}}', 'Loja X')
@@ -313,11 +313,22 @@ function OutreachSettings({ settings, canWrite, onSaved, onError }) {
     event.preventDefault(); setSaving(true)
     try {
       const days = String(form.followup_days).split(/[,;\s]+/).map(Number).filter((day) => day > 0 && day < 60).slice(0, 3)
-      const values = { icp: form.icp || null, offer: form.offer || null, sender_name: form.sender_name || null, sender_email: form.sender_email || null, daily_email_limit: Number(form.daily_email_limit), daily_linkedin_target: Number(form.daily_linkedin_target), send_window_start: form.send_window_start, send_window_end: form.send_window_end, followup_days: days.length ? days : [3, 7], email_template_html: form.email_template_html || null, signature_html: form.signature_html || null, email_enabled: Boolean(form.email_enabled) }
+      const url = (value) => { const v = String(value || '').trim(); if (!v) return null; return /^https?:\/\//i.test(v) ? v : `https://${v.replace(/^@/, 'instagram.com/')}` }
+      const values = { icp: form.icp || null, offer: form.offer || null, sender_name: form.sender_name || null, sender_role: form.sender_role || null, sender_linkedin_url: url(form.sender_linkedin_url), mugo_instagram_url: url(form.mugo_instagram_url), mugo_linkedin_url: url(form.mugo_linkedin_url), mugo_site_url: url(form.mugo_site_url), proof_points: form.proof_points || null, sender_email: form.sender_email || null, daily_email_limit: Number(form.daily_email_limit), daily_linkedin_target: Number(form.daily_linkedin_target), send_window_start: form.send_window_start, send_window_end: form.send_window_end, followup_days: days.length ? days : [3, 7], email_template_html: form.email_template_html || null, signature_html: form.signature_html || null, email_enabled: Boolean(form.email_enabled) }
       onSaved(await saveOutreachSettings(values))
     } catch (cause) { onError(cause.message) } finally { setSaving(false) }
   }
   return <form className="dashboard-panel g-settings" onSubmit={submit}>
+    <header><Linkedin size={18} /><div><strong>Quem prospecta</strong><small>As mensagens saem na sua voz, na primeira pessoa. Os links da Mugô entram só na mensagem depois que a pessoa aceita o convite — nunca na nota.</small></div></header>
+    <div className="form-grid">
+      <label>Seu nome<input value={form.sender_name || ''} onChange={set('sender_name')} disabled={!canWrite} placeholder="Kleber" /></label>
+      <label>Seu cargo<input value={form.sender_role || ''} onChange={set('sender_role')} disabled={!canWrite} placeholder="sócio e estrategista" /></label>
+      <label>Seu LinkedIn<input value={form.sender_linkedin_url || ''} onChange={set('sender_linkedin_url')} disabled={!canWrite} placeholder="linkedin.com/in/..." /></label>
+      <label>Instagram da Mugô<input value={form.mugo_instagram_url || ''} onChange={set('mugo_instagram_url')} disabled={!canWrite} placeholder="instagram.com/... ou @..." /></label>
+      <label>LinkedIn da Mugô<input value={form.mugo_linkedin_url || ''} onChange={set('mugo_linkedin_url')} disabled={!canWrite} placeholder="linkedin.com/company/..." /></label>
+      <label>Site<input value={form.mugo_site_url || ''} onChange={set('mugo_site_url')} disabled={!canWrite} placeholder="mugoagencia.com.br" /></label>
+      <label className="g-wide">Provas que a IA pode citar (opcional)<textarea rows="2" value={form.proof_points || ''} onChange={set('proof_points')} disabled={!canWrite} placeholder="Ex.: cuidamos de Roove e Ruah Parfums; +40% em vendas pelo Instagram em 3 meses para uma marca de moda. Só o que pode ser dito publicamente." /></label>
+    </div>
     <header><Settings2 size={18} /><div><strong>Como a IA aborda</strong><small>Usado na pesquisa e nas mensagens.</small></div></header>
     <div className="form-grid">
       <label className="g-wide">Cliente ideal (ICP)<textarea rows="3" value={form.icp || ''} onChange={set('icp')} disabled={!canWrite} placeholder="Ex.: e-commerce de moda/beleza em Shopify ou Nuvemshop, faturando 100k–2M/mês, com Instagram ativo e pouco investimento em tráfego." /></label>
@@ -326,7 +337,6 @@ function OutreachSettings({ settings, canWrite, onSaved, onError }) {
     </div>
     <header><Mail size={18} /><div><strong>E-mail de prospecção</strong><small>Sai da caixa do domínio secundário (Google Workspace). Nunca pelo Resend.</small></div></header>
     <div className="form-grid">
-      <label>Nome do remetente<input value={form.sender_name || ''} onChange={set('sender_name')} disabled={!canWrite} placeholder="Kleber | Mugô" /></label>
       <label>E-mail do remetente<input type="email" value={form.sender_email || ''} onChange={set('sender_email')} disabled={!canWrite} placeholder="kleber@seudominio2.com.br" /><small>Precisa ser o mesmo do secret GMAIL_SENDER.</small></label>
       <label>Limite de e-mails/dia<input type="number" min="1" max="200" value={form.daily_email_limit} onChange={set('daily_email_limit')} disabled={!canWrite} /><small>Comece com 10–15 e suba aos poucos.</small></label>
       <label>Follow-ups depois de (dias)<input value={form.followup_days} onChange={set('followup_days')} disabled={!canWrite} placeholder="3, 7" /></label>

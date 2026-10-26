@@ -28,11 +28,28 @@ export const PROSPECT_RESEARCH_SCHEMA = Object.freeze({
   required: ['fit_score', 'fit_reason', 'summary', 'signals', 'hook', 'decision_maker', 'linkedin_note', 'linkedin_message', 'email_subject', 'email_body', 'followups'],
 })
 
+const validUrl = (value) => /^https?:\/\/\S+$/i.test(clean(value, 300)) ? clean(value, 300) : ''
+
+/** Quem escreve: a abordagem sai na primeira pessoa, assinada pela pessoa que prospecta (ex.: Kleber). */
+export function senderLine(settings = {}) {
+  const name = clean(settings.sender_name, 80).split('|')[0].trim()
+  const role = clean(settings.sender_role, 80)
+  const who = name ? `${name}${role ? `, ${role}` : ''} da Mugô` : 'alguém do time da Mugô'
+  return `Você escreve como ${who} — agência criativa e estratégica de São Paulo (tráfego pago, social, sites, e-commerce, branding, automação e IA). Escreva na primeira pessoa do singular ("eu vi", "posso te mandar"), como a própria pessoa escreveria no LinkedIn.`
+}
+
+/** Links da Mugô: nunca na nota de conexão; no máximo um, no fim da mensagem depois do aceite. */
+export function profileLinksRule(settings = {}) {
+  const links = [['Instagram da Mugô', validUrl(settings.mugo_instagram_url)], ['LinkedIn da Mugô', validUrl(settings.mugo_linkedin_url)], ['site da Mugô', validUrl(settings.mugo_site_url)]].filter(([, url]) => url)
+  if (!links.length) return 'Não coloque links em nenhuma mensagem.'
+  return `Links que podem aparecer: ${links.map(([label, url]) => `${label}: ${url}`).join(' · ')}. Nunca coloque link na nota de conexão. Na mensagem depois do aceite, você pode fechar com UM desses links, de forma leve (ex.: "se quiser ver o que a gente faz: <link>"), de preferência o Instagram para marcas de consumo e o LinkedIn para empresas B2B e gestoras. O e-mail continua sem links.`
+}
+
 export function buildResearchPrompt({ prospect, settings = {}, knowledge = [], siteSignals = null, cnpjData = null, newsHooks = [] }) {
   const offers = knowledge.filter((entry) => ['empresa', 'servicos', 'cases'].includes(entry.category))
     .map((entry) => `- ${clean(entry.title, 120)}: ${clean(entry.content, 600)}`).join('\n')
   const system = [
-    'Você é SDR sênior da Mugô, agência brasileira de marketing digital (SEO, social media, tráfego pago, analytics, design, sites e automação).',
+    senderLine(settings),
     'Pesquise a empresa do prospect e escreva uma abordagem 1-a-1, em português do Brasil, que pareça escrita à mão por uma pessoa.',
     'Regras: use só fatos que você verificou (site, busca, dados fornecidos). Nada de elogio genérico, nada de "espero que esteja bem", nada de promessas de resultado.',
     'O gancho deve ser uma observação concreta e útil (ex.: site sem pixel da Meta, loja sem avaliações, Instagram sem link de compra, site lento no celular, não aparece no Google para o termo principal).',
@@ -42,6 +59,8 @@ export function buildResearchPrompt({ prospect, settings = {}, knowledge = [], s
     settings.icp ? `\nCliente ideal (ICP) definido pelo time:\n${clean(settings.icp, 1500)}` : '',
     settings.offer ? `\nO que oferecemos nesta abordagem:\n${clean(settings.offer, 1500)}` : '',
     offers ? `\nServiços e cases autorizados (cite só se fizer sentido):\n${offers}` : '',
+    settings.proof_points ? `\nProvas que podem ser citadas (uma por mensagem, no máximo):\n${clean(settings.proof_points, 800)}` : '',
+    profileLinksRule(settings),
     'Se alguma notícia da semana do setor (lista fornecida) se conectar de verdade com a empresa, você pode usá-la como gancho de atualidade — com naturalidade, sem forçar.',
     '\nAo terminar, chame a ferramenta de saída com o resultado.',
   ].filter(Boolean).join('\n')
