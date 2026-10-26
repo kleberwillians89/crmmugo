@@ -41,8 +41,12 @@ export function senderLine(settings = {}) {
 /** Links da Mugô: nunca na nota de conexão; no máximo um, no fim da mensagem depois do aceite. */
 export function profileLinksRule(settings = {}) {
   const links = [['Instagram da Mugô', validUrl(settings.mugo_instagram_url)], ['LinkedIn da Mugô', validUrl(settings.mugo_linkedin_url)], ['site da Mugô', validUrl(settings.mugo_site_url)]].filter(([, url]) => url)
-  if (!links.length) return 'Não coloque links em nenhuma mensagem.'
-  return `Links que podem aparecer: ${links.map(([label, url]) => `${label}: ${url}`).join(' · ')}. Nunca coloque link na nota de conexão. Na mensagem depois do aceite, você pode fechar com UM desses links, de forma leve (ex.: "se quiser ver o que a gente faz: <link>"), de preferência o Instagram para marcas de consumo e o LinkedIn para empresas B2B e gestoras. O e-mail continua sem links.`
+  const newsletter = validUrl(settings.newsletter_url)
+  if (!links.length && !newsletter) return 'Não coloque links em nenhuma mensagem.'
+  const parts = ['Nunca coloque link na nota de conexão. O e-mail continua sem links. Na mensagem depois do aceite, use no máximo UM link.']
+  if (newsletter) parts.push(`Link preferido na mensagem pós-aceite: o convite para a newsletter da Mugô (${newsletter}) — é um presente, não uma venda. Ex.: "toda terça a gente manda uma seleção curta do que muda em marketing e o melhor de SP; se quiser receber: <link>". Coloque o convite depois da pergunta principal, numa linha separada.`)
+  if (links.length) parts.push(`${newsletter ? 'Se a newsletter não fizer sentido para a pessoa, use um destes' : 'Links que podem aparecer'}: ${links.map(([label, url]) => `${label}: ${url}`).join(' · ')} — de preferência o Instagram para marcas de consumo e o LinkedIn para empresas B2B e gestoras.`)
+  return parts.join(' ')
 }
 
 export function buildResearchPrompt({ prospect, settings = {}, knowledge = [], siteSignals = null, cnpjData = null, newsHooks = [] }) {

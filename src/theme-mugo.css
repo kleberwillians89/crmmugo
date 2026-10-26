@@ -210,3 +210,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .app-shell .feedback-message.success { border-color: #cfe5d8; background: #eef6f1; color: #24684a; }
 .app-shell .feedback-message.error { border-color: #f0cfd3; background: var(--mugo-red-soft); color: #8f1b2a; }
 .app-shell .feedback-message.warning { border-color: #ecd9b8; background: #fbf4e8; color: #85500e; }
+
+/* Busca no Apollo */
+.app-shell .g-table tr.g-muted td { color: var(--text-muted); }
+.app-shell .tag { display: inline-flex; font-size: 11px; font-weight: 600; border-radius: 5px; padding: 2px 7px; background: var(--brand-soft); color: var(--text-secondary); white-space: nowrap; }
+.app-shell .tag.warn { background: #fbf1e2; color: #a8620f; }
