@@ -215,3 +215,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .app-shell .g-table tr.g-muted td { color: var(--text-muted); }
 .app-shell .tag { display: inline-flex; font-size: 11px; font-weight: 600; border-radius: 5px; padding: 2px 7px; background: var(--brand-soft); color: var(--text-secondary); white-space: nowrap; }
 .app-shell .tag.warn { background: #fbf1e2; color: #a8620f; }
+
+/* Quadro da prospecção (Trello) */
+.pb-board { display: grid; grid-template-columns: repeat(6, minmax(220px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 8px; align-items: start; }
+.pb-col { background: var(--surface-muted); border-radius: 10px; padding: 8px; min-height: 420px; border: 1.5px dashed transparent; transition: border-color .15s, background .15s; }
+.pb-col.over { border-color: var(--text-primary); background: #efebe2; }
+.pb-col > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 4px 6px 10px; }
+.pb-col > header strong { font-size: 13px; }
+.pb-col > header span { color: var(--text-muted); font-size: 12px; font-weight: 500; }
+.pb-col > header small { width: 100%; color: var(--text-muted); font-size: 11px; }
+.pb-card { background: #fff; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 11px; margin-bottom: 8px; cursor: grab; box-shadow: 0 1px 1px rgba(25,23,20,.03); }
+.pb-card:hover { border-color: var(--border-strong); box-shadow: 0 4px 12px rgba(25,23,20,.06); }
+.pb-card.dragging { opacity: .45; }
+.pb-card h4 { margin: 6px 0 2px; font-size: 14px; font-weight: 600; }
+.pb-card p { margin: 0; color: var(--text-muted); font-size: 12.5px; line-height: 1.35; }
+.pb-card small { display: block; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
+.pb-card small.late { color: var(--mugo-red); font-weight: 500; }
+.pb-top { display: flex; align-items: center; gap: 6px; }
+.pb-score { font-size: 11px; font-weight: 600; border-radius: 5px; padding: 1px 6px; background: var(--brand-soft); }
+.pb-score.high { background: #e8f3ec; color: #2f7d55; } .pb-score.mid { background: #fbf1e2; color: #a8620f; } .pb-score.low { background: var(--mugo-red-soft); color: var(--mugo-red); }
+.pb-list { margin-left: auto; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+.app-shell .pb-move { margin-top: 8px; min-height: 28px; padding: 2px 8px; font-size: 12px; color: var(--text-secondary); background: var(--surface-muted); border-color: transparent; }
+.pb-empty { margin: 0; padding: 18px 6px; text-align: center; color: var(--text-muted); font-size: 12px; }
+@media (max-width: 720px) { .pb-board { grid-template-columns: repeat(6, 82vw); } }
