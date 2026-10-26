@@ -133,7 +133,7 @@ export function ProspectingPage({ onNavigate }) {
 
       <div className="g-columns">
         <section className="dashboard-panel g-queue">
-          <header><Linkedin size={18} /><div><strong>LinkedIn — convites de hoje</strong><small>{today.linkedin.length} de {settings?.daily_linkedin_target || 20} sugeridos. O envio é pelo seu LinkedIn: Abrir perfil → Conectar → Adicionar nota → colar. Depois marque aqui.</small></div></header>
+          <header><Linkedin size={18} /><div><strong>LinkedIn — convites de hoje</strong><small>{today.linkedin.length} de {settings?.daily_linkedin_target || 20} sugeridos. Pelo seu LinkedIn: Abrir perfil → Conectar → Enviar sem nota (o LinkedIn grátis só libera ~5 notas por mês). A abordagem vai na mensagem, quando aceitar.</small></div></header>
           {today.linkedin.map((prospect) => <article key={prospect.id} className="g-queue-item">
             <button type="button" className="g-link" onClick={() => setSelectedId(prospect.id)}><b>{prospect.contact_name || 'Decisor a confirmar'}</b><small>{prospect.contact_role ? `${prospect.contact_role} · ` : ''}{prospect.company_name}</small></button>
             <span className={`g-score ${scoreClass(prospect.fit_score)}`}>{prospect.fit_score ?? '—'}</span>
