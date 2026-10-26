@@ -27,13 +27,24 @@ async function sha256(text:string){
   return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('')
 }
 
+// Qual organização recebe as inscrições: NEWSLETTER_ORG_ID (se definido) → a newsletter configurada
+// (com remetente e mais recente) → a única organização ativa. Nunca "fecha" só por existir mais de uma linha.
 async function resolveOrg(admin:any){
   const fixed=clean(Deno.env.get('NEWSLETTER_ORG_ID'),64)
-  const query=admin.from('newsletter_settings').select('organization_id,signup_enabled,meta_pixel_id,from_name,from_email,reply_to')
-  const result=fixed?await query.eq('organization_id',fixed).limit(1):await query.limit(2)
-  if(result.error)throw result.error
-  if(!fixed&&(result.data||[]).length!==1)return null
-  return result.data?.[0]||null
+  const fields='organization_id,signup_enabled,meta_pixel_id,from_name,from_email,reply_to,updated_at'
+  if(fixed){
+    const row=await admin.from('newsletter_settings').select(fields).eq('organization_id',fixed).maybeSingle()
+    if(row.error)throw row.error
+    return row.data||{organization_id:fixed,signup_enabled:true}
+  }
+  const rows=await admin.from('newsletter_settings').select(fields).order('updated_at',{ascending:false}).limit(20)
+  if(rows.error)throw rows.error
+  const list=(rows.data||[]) as any[]
+  const best=list.find(r=>r.signup_enabled!==false&&r.from_email)||list.find(r=>r.signup_enabled!==false)||list[0]
+  if(best)return best
+  const orgs=await admin.from('organizations').select('id').limit(2)
+  if(!orgs.error&&(orgs.data||[]).length===1)return {organization_id:orgs.data[0].id,signup_enabled:true}
+  return null
 }
 
 function fromAddress(settings:any){
@@ -97,7 +108,7 @@ async function signup(admin:any,request:Request,body:any){
   }
   const value=(checked as any).value
   const settings=await resolveOrg(admin)
-  if(!settings||settings.signup_enabled===false)return json({ok:false,message:'Inscrições fechadas no momento.'},503)
+  if(!settings||settings.signup_enabled===false){console.log(JSON.stringify({event:'newsletter_signup_closed',has_settings:Boolean(settings)}));return json({ok:false,message:'Inscrições fechadas no momento.'},503)}
   const org=settings.organization_id
 
   const ip=clean(request.headers.get('x-forwarded-for'),200).split(',')[0].trim()
