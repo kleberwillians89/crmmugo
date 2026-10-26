@@ -111,9 +111,9 @@ const RED = '#b22234', CREAM = '#fffdf8', INK = '#111111'
 
 function shell({ preheader, body, footer, logoUrl }) {
   const logo = logoUrl
-    ? `<img src="${escapeHtml(logoUrl)}" width="120" alt="Mugô" style="display:block;width:120px;height:auto;border:0">`
+    ? `<img src="${escapeHtml(logoUrl)}" width="120" height="56" alt="MUGÔ" style="display:block;width:120px;height:56px;border:0;outline:none;font-family:Arial,Helvetica,sans-serif;font-size:26px;font-weight:700;letter-spacing:-0.03em;color:${RED}">`
     : `<div style="font-size:26px;font-weight:700;letter-spacing:-0.03em;color:${RED}">MUGÔ</div>`
-  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="x-apple-disable-message-reformatting"><title>Mugô</title></head>
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="x-apple-disable-message-reformatting"><meta name="format-detection" content="telephone=no, date=no, address=no, email=no"><title>Mugô</title><style>a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important}</style></head>
 <body style="margin:0;padding:0;background-color:#f0f1f5">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${escapeHtml(preheader)}&#8199;&#65279;&#847;&#8199;&#65279;&#847;</div>
 <table width="100%" border="0" cellpadding="0" cellspacing="0" role="presentation" bgcolor="#f0f1f5" style="background-color:#f0f1f5"><tr><td align="center" style="padding:24px 12px">
