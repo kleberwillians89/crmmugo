@@ -66,7 +66,7 @@ export function TodayView({ tasks, today, teamMembers = [], summary = {}, onComp
 
   const effectiveScope = me ? scope : 'team'
   const groups = buildTodayGroups(tasks, { today, memberId: me?.id, scope: effectiveScope })
-  const teamGroups = buildTodayGroups(tasks, { today, scope: 'team' })
+  const teamGroups = buildTodayGroups(tasks, { today, memberId: me?.id, scope: 'team' })
   const mineCount = me ? buildTodayGroups(tasks, { today, memberId: me.id, scope: 'mine' }) : null
   const rowProps = { today, members: teamMembers, canOperate, onComplete, onEdit, onArchive }
   const hello = now ? `${greeting(hourInSaoPaulo(now))}${firstName(profile?.name) ? `, ${firstName(profile.name)}` : ''}` : (firstName(profile?.name) ? `Olá, ${firstName(profile.name)}` : 'Olá')

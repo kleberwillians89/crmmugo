@@ -25,9 +25,15 @@ export function memberForProfile(teamMembers = [], profile = null) {
 }
 
 /** Atrasadas / Hoje / Próximos 7 dias, só tarefas abertas. scope 'mine' filtra pelo responsável. */
+const PERSONAL = new Set(['Laura', 'Família', 'Júlia + Kleber', 'Treino', 'Estudo', 'Casa', 'Alimentação', 'Tempo livre'])
+export const isPersonalTask = (task) => PERSONAL.has(task?.category)
+
 export function buildTodayGroups(tasks = [], { today, memberId = null, scope = 'mine', days = 7 } = {}) {
   const limit = addIsoDays(today, days)
-  const visible = tasks.filter(OPEN).filter((task) => scope !== 'mine' || !memberId || task.assigned_to === memberId)
+  // Na visão Equipe, compromissos pessoais (treino, família…) só aparecem para o próprio dono.
+  const visible = tasks.filter(OPEN)
+    .filter((task) => scope !== 'mine' || !memberId || task.assigned_to === memberId)
+    .filter((task) => scope === 'mine' || !isPersonalTask(task) || (memberId && task.assigned_to === memberId))
   const byTime = (a, b) => String(a.due_date || '').localeCompare(String(b.due_date || '')) || String(a.due_time || '99').localeCompare(String(b.due_time || '99')) || String(a.title).localeCompare(String(b.title))
   return {
     overdue: visible.filter((task) => task.due_date && task.due_date < today).sort(byTime),
