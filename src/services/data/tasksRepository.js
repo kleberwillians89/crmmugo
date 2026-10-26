@@ -39,3 +39,18 @@ export async function getOperationalSummary(){
 export async function getOperationalSettings(){const fallback={weekly_target_hours:35,time_zone:'America/Sao_Paulo',operational_start_date:'2026-09-24',financial_start_date:'2026-10-01'};if(!isSupabaseProvider())return fallback;const [operational,organization]=await Promise.all([db().from('operational_settings').select('weekly_target_hours,time_zone').maybeSingle(),db().from('organization_settings').select('operational_start_date,financial_start_date').maybeSingle()]);if(operational.error&&unavailable(operational.error))return fallback;if(organization.error&&unavailable(organization.error))return{...fallback,...unwrap(operational)};return{...fallback,...(unwrap(operational)||{}),...(unwrap(organization)||{})}}
 
 export async function recordOperationalEvent(values){const record=unwrap(await db().from('operational_events').insert({...values,organization_id:await organizationId(),source:values.source||'crm',occurred_at:values.occurred_at||new Date().toISOString()}).select().single());invalidateCrmData({resources:['dashboard','intelligence','tasks']});return record}
+
+// Tela Hoje: conversas que esperam alguém do time (atendimento humano ou IA pausada).
+export async function listWaitingConversations(limit=5){
+  if(!isSupabaseProvider())return[]
+  const response=await db().from('whatsapp_conversations').select('id,status,attendance_mode,automation_paused,unread_count,last_inbound_at,last_message_at,handoff_reason,whatsapp_contacts(display_name,profile_name,wa_id)').neq('status','closed').or('automation_paused.eq.true,attendance_mode.eq.human').order('last_inbound_at',{ascending:false,nullsFirst:false}).limit(limit)
+  if(response.error)return[]
+  return response.data||[]
+}
+// Diário da Secretária (função secretary_feed). Sem a função no banco, devolve null e a tela esconde o bloco.
+export async function getSecretaryFeed(limit=12){
+  if(!isSupabaseProvider())return null
+  const response=await db().rpc('secretary_feed',{p_limit:limit})
+  if(response.error)return null
+  return response.data||[]
+}

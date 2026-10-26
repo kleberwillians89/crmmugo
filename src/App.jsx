@@ -5,6 +5,7 @@ import "./operations-hub.css";
 import "./commercial.css";
 import "./today-commercial.css";
 import "./growth.css";
+import "./theme-mugo.css";
 import {
   listProposals as getProposals,
   createProposal,
