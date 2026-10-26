@@ -36,7 +36,7 @@ test('"conclui todas as minhas tarefas" lista e pede confirmação; "sim" conclu
   assert.match(worker, /command=\{intent:'BULK_COMPLETE_MINE',confidence:1\}/)
   assert.match(worker, /pending_action:'confirm_bulk_complete'/)
   assert.match(worker, /CONFIRM_FINANCIAL'&&event\.session\?\.pending_action==='confirm_bulk_complete'[\s\S]*SESSION_SELECTION_MULTI/)
-  assert.match(worker, /'SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE'(?:,'ACK_CONVERSATION')?\]\.includes\(command\.intent\)/)
+  assert.match(worker, /'SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE'(?:,'ACK_CONVERSATION')?(?:,'PROSPECT_[A-Z_]+')*\]\.includes\(command\.intent\)/)
   assert.equal(selectionActionIntent('Pode marcar todas minhas tarefas como finalizadas'), 'COMPLETE_TASK')
 })
 
@@ -70,7 +70,7 @@ test('"Júlia me enviar layout até segunda 17h" vira tarefa da Julia; campos nu
 
 test('equipe: sessão não é apagada antes da seleção, aviso para quem recebe a tarefa e próximas na lista', () => {
   const worker = fs.readFileSync('supabase/functions/task-command-worker/index.ts', 'utf8')
-  assert.match(worker, /'SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE',(?:'ACK_CONVERSATION',)?'GREETING'/)
+  assert.match(worker, /'SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE',(?:'ACK_CONVERSATION',)?(?:'PROSPECT_[A-Z_]+',)*'GREETING'/)
   assert.match(worker, /kind: 'task_assigned'/)
   assert.match(worker, /\*Próximos dias\*/)
   assert.match(worker, /feito\|feita\|pronto/)
