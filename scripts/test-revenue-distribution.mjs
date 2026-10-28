@@ -34,7 +34,8 @@ const form=readFileSync(new URL('../src/components/InstallmentFormModal.jsx',imp
 assert.match(form,/Natureza/)
 assert.match(form,/required=\{form\.installment_type==='monthly'\}/)
 assert.match(form,/onSubmit=\{submit\}/)
-assert.match(form,/Projeto pontual/)
+assert.doesNotMatch(form,/<option value="project">/)
+assert.match(form,/<option value="extra">/)
 assert.match(css,/@media\s*\(\s*max-width:\s*720px\s*\).*installment-list-row/s)
 
 console.log('Revenue distribution passed: categorized monthly/setup/project/other totals, 10% reserve, period separation, form validation, responsiveness and immutable installments.')
