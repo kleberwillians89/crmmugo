@@ -63,8 +63,8 @@ assert.doesNotMatch(sendTemplate, /WHATSAPP_TEMPLATE_TEST_PHONE|WHATSAPP_TEMPLAT
 assert.match(sendTemplate, /\.eq\('organization_id',profile\.organization_id\)\.eq\('waba_id',wabaId\)[\s\S]*?\.eq\('status','APPROVED'\)\.eq\('is_active',true\)/)
 assert.match(sendTemplate, /from\('whatsapp_contacts'\)[\s\S]*?\.eq\('organization_id',profile\.organization_id\)[\s\S]*?\.eq\('connection_id',tenantConnectionId\)\.eq\('wa_id',recipient\)/)
 assert.match(sendTemplate, /from\('clients'\)[\s\S]*?\.eq\('id',genericTemplateClientId\)\.eq\('organization_id',profile\.organization_id\)/)
-assert.match(sendTemplate, /TEMPLATE_RECIPIENT_NOT_REGISTERED/)
-assert.match(sendTemplate, /PHONE_MISMATCH/)
+// Template aprovado pode ir para qualquer número: destinatário fora do cadastro não bloqueia o envio.
+assert.doesNotMatch(sendTemplate, /fail\('TEMPLATE_RECIPIENT_NOT_REGISTERED'|fail\('PHONE_MISMATCH'/)
 assert.match(sendTemplate, /TEMPLATE_NOT_APPROVED/)
 assert.match(sendTemplate, /organizationClients[\s\S]*?\.eq\('organization_id',profile\.organization_id\)[\s\S]*?billing_contact_phone/)
 assert.equal((sendTemplate.match(/await sendMetaMessage\(/g)||[]).length,1)

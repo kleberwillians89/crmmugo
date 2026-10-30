@@ -904,13 +904,14 @@ const handleRequest = async (request: Request, requestId: string) => {
         if(linkedClient.error||!linkedClient.data)return fail('CLIENT_NOT_FOUND','O contato selecionado não pertence à organização.',404)
         const phones=[linkedClient.data.phone,linkedClient.data.billing_contact_phone].map(brazilianPhone).filter(Boolean)
         const linkedContact=registeredContact.data?.client_id===genericTemplateClientId
-        if(!phones.includes(recipient)&&!linkedContact)return fail('PHONE_MISMATCH','O telefone não pertence ao cliente ou contato selecionado.',403)
+        // Número fora do cadastro do cliente não bloqueia o envio; só não vincula ao cliente.
+        if(!phones.includes(recipient)&&!linkedContact)genericTemplateClientId=''
       }else if(!registeredContact.data){
         const organizationClients=await admin.from('clients').select('id,phone,billing_contact_phone').eq('organization_id',profile.organization_id).limit(2000)
         if(organizationClients.error)return fail('WHATSAPP_HISTORY_UNAVAILABLE','Não foi possível validar o destinatário no CRM.',503)
         const matchedClient=(organizationClients.data||[]).find((item:any)=>[item.phone,item.billing_contact_phone].map(brazilianPhone).includes(recipient))
-        if(!matchedClient)return fail('TEMPLATE_RECIPIENT_NOT_REGISTERED','O destinatário não está cadastrado nos contatos ou clientes desta organização.',403)
-        genericTemplateClientId=matchedClient.id
+        // Template aprovado pode ir para qualquer número; o vínculo com cliente é opcional.
+        genericTemplateClientId=matchedClient?.id||''
       }
       // ===== Transporte direto Meta Cloud API — o MugoZap não participa do envio =====
       // `contract_mode` era negociação com o MugoZap; para a Meta enviamos sempre os
