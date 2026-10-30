@@ -6,6 +6,7 @@ import { PageSkeleton } from './PageSkeleton'
 import { normalizeBrazilianPhone } from '../lib/whatsapp'
 import { assignConversation, closeConversation, createCrmWhatsAppContact, getAttendanceMeta, getConversationIdentifier, getTemplateTestAccess, hasValidConversationIdentifier, health, listConversations, listCrmWhatsAppContacts, listMessages, listWhatsAppUsers, markConversationRead, pauseAutomation, resumeAutomation, sendManualMessage, sendTemplateMessage, startTemplateConversation } from '../services/data/whatsappRepository'
 import { updateClientPhone } from '../services/data/clientsRepository'
+import { createAsaasCharge } from '../services/data/financeRepository'
 import { WhatsAppPhoneModal } from './WhatsAppPhoneModal'
 import { StartWhatsAppConversationModal } from './StartWhatsAppConversationModal'
 import { listCollectionAlerts, markCollectionPaid, updateCollectionStage } from '../services/data/whatsappCollectionsRepository'
@@ -255,6 +256,10 @@ export function WhatsAppPage({ section = 'inbox', page = 'inbox', clients = [], 
     if(!collectionTarget||starting)return
     setStarting(true);setError('')
     try{
+      // Gera (ou reaproveita) a cobrança no Asaas antes do disparo: o link entra na resposta de
+      // "Consultar cobrança". Se o Asaas falhar (ex.: cliente sem CNPJ), o alerta sai mesmo assim.
+      let asaasWarning=''
+      try{await createAsaasCharge(collectionTarget.installment.id)}catch(cause){asaasWarning=cause?.message||'Sem link do Asaas.'}
       const result=await startTemplateConversation({client_id:collectionTarget.client.id,installment_id:collectionTarget.installment.id,phone:collectionTarget.phone,template_name:'mugo_alerta_pagamento_pendente',language:'pt_BR'})
       const recipient=collectionTarget.client.contact_name||collectionTarget.client.company_name||'o cliente'
       const startedConversation=result?.conversation
@@ -266,7 +271,7 @@ export function WhatsAppPage({ section = 'inbox', page = 'inbox', clients = [], 
       setActionFeedback(
         result?.already_sent
           ? `Envio anterior para ${recipient} reconciliado sem reenvio.`
-          : `Alerta enviado com sucesso para ${recipient}.`
+          : `Alerta enviado com sucesso para ${recipient}.${asaasWarning?` (Sem link do Asaas: ${asaasWarning})`:''}`
       )
 
       // A resposta do backend já contém a conversa persistida.
