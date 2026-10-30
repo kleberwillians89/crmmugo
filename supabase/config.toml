@@ -398,6 +398,10 @@ verify_jwt = false
 [functions.dados-ops-api]
 verify_jwt = false
 
+# Eventos do Mugô Dados (cliente aprovou/pediu ajuste/editou) -> tarefa + aviso ao time. Autentica por X-Dados-Ops-Key.
+[functions.dados-ops-events]
+verify_jwt = false
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 

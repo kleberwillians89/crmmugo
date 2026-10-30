@@ -20,6 +20,7 @@ import { findInternalMemberByPhone } from '../_shared/internalCommandCore.js'
 import { classifyConversationKind, extractLeadAttribution } from '../_shared/commercialAgentCore.js'
 import { SECOND_CTA_TEXT, WAITING_CTA_TEXT, buildTriageCtas, interactiveCtaBody, isWaitingNudge } from '../_shared/attendanceCore.js'
 import { trackCtas } from '../_shared/ctaTracking.js'
+import { isDadosInviteReply } from '../_shared/dadosBridgeCore.js'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: jsonHeaders })
@@ -335,6 +336,35 @@ const handlePaymentClaim = async (admin: any, connection: any, conversation: any
   await admin.from('whatsapp_conversations').update({ last_message_at: now, last_outbound_at: now, last_outbound_source: 'finance' }).eq('id', conversation.id)
 }
 
+// O Dados roda no Render gratuito e pode estar "dormindo" (até ~1 min para acordar): tenta 2 vezes com folga.
+// Se mesmo assim não responder, o pedido do cliente não se perde: o responsável comercial recebe o aviso.
+const forwardDadosReply = async (admin: any, org: string, reply: Record<string, string>) => {
+  const url = text(Deno.env.get('DADOS_HOOK_URL'), 500), key = Deno.env.get('DADOS_OPS_API_KEY') || ''
+  let lastStatus = 'not_configured'
+  if (url.startsWith('https://') && key) {
+    for (const timeout of [70_000, 45_000]) {
+      try {
+        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dados-Ops-Key': key },
+          body: JSON.stringify({ type: 'invite_reply', reply }), signal: AbortSignal.timeout(timeout) })
+        lastStatus = String(response.status)
+        if (response.ok) {
+          console.log(JSON.stringify({ event: 'dados_reply_forwarded', organization_id: org, conversation_id: reply.conversation_id, status_http: response.status }))
+          return
+        }
+        if (response.status < 500) break
+      } catch (_error) { lastStatus = 'network' }
+    }
+  }
+  console.log(JSON.stringify({ event: 'dados_reply_forward_failed', organization_id: org, conversation_id: reply.conversation_id, status: lastStatus }))
+  const settings = await admin.from('commercial_settings').select('commercial_owner_id').eq('organization_id', org).maybeSingle()
+  const ownerId = settings.data?.commercial_owner_id
+  if (ownerId) {
+    await admin.from('team_notification_outbox').insert({ organization_id: org, team_member_id: ownerId, notification_type: 'operational_alert',
+      idempotency_key: `dados-reply-failed:${reply.provider_message_id}`,
+      payload: { kind: 'dados_reply_failed', answer: reply.answer, lead_phone: reply.wa_id, conversation_id: reply.conversation_id } })
+  }
+}
+
 const processInbound = async (admin: any, connection: any, value: any, message: any, payloadHash: string) => {
   const providerMessageId = text(message?.id, 240)
   const waId = digits(message?.from)
@@ -457,6 +487,26 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
     }
     await completeWebhookEvent(admin,ledger.id)
     return true
+  }
+
+  // Clique em "Sim, quero ver" / "Agora não" de um convite enviado pelo Mugô Dados: a resposta é do Dados
+  // (ele manda o resumo com os números), nunca do robô comercial. Repassa em segundo plano e encerra aqui.
+  if ((content.type === 'button' || content.type === 'interactive') && text(message?.context?.id, 240)) {
+    const original = await admin.from('whatsapp_messages').select('template_name')
+      .eq('organization_id', connection.organization_id).eq('provider_message_id', text(message.context.id, 240)).maybeSingle()
+    if (original.error) throw original.error
+    if (isDadosInviteReply(content, original.data?.template_name)) {
+      const forward = forwardDadosReply(admin, connection.organization_id, {
+        provider_message_id: providerMessageId, context_message_id: text(message.context.id, 240), wa_id: waId,
+        conversation_id: conversationResult.data.id, answer: content.body || '', payload: content.media?.payload || content.media?.reply_id || '',
+        template_name: original.data.template_name,
+      })
+      const runtime = (globalThis as any).EdgeRuntime
+      if (typeof runtime?.waitUntil === 'function') runtime.waitUntil(forward)
+      else await forward
+      await completeWebhookEvent(admin, ledger.id)
+      return true
+    }
   }
 
   // Prioridade absoluta do humano: se a conversa já está com uma pessoa (ou a automação foi pausada),

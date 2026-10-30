@@ -43,7 +43,7 @@
     "test:financial-hub": "node --test tests/financial-hub-2026.test.mjs",
     "test:proposal-documents": "node --test tests/native-go-live.test.mjs",
     "test:cutover": "node --test tests/operational-financial-cutover.test.mjs",
-    "test:dados-ops": "node --test tests/dados-ops-api.test.mjs tests/data-platform-api.test.mjs"
+    "test:dados-ops": "node --test tests/dados-ops-api.test.mjs tests/data-platform-api.test.mjs tests/dados-eventos.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.3",

@@ -239,6 +239,7 @@ function messageFor(item: any, memberName = '') {
   if (p.kind === 'handoff_escalation') return `Escalonamento: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.${contactLines(p)}`
   if (p.kind === 'handoff_critical') return `Alerta crítico: ${p.lead_name||'o lead'} continua sem resposta humana após ${p.minutes} minutos.${contactLines(p)}`
   if (p.kind === 'prospect_invite') return reminderMessage(p)
+  if (p.kind === 'dados_reply_failed') return `Um cliente respondeu "${clean(p.answer, 60)}" ao convite do Mugô Dados, mas o Dados não respondeu a tempo. Mande o resumo pelo Dados (Aprovação → Mensagens).${contactLines(p)}`
   if (p.kind === 'qualified_lead_handoff') return [`Novo lead aguardando atendimento:`,p.name||p.company||'Lead',p.need?`Demanda: ${p.need}`:null,p.summary?`Contexto: ${p.summary}`:null,p.next_action?`Próximo passo: ${p.next_action}`:null,'','1. Assumir','2. Ver contexto'].filter(Boolean).join('\n')+contactLines(p)
   return ''
 }
