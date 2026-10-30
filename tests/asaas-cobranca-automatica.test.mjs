@@ -165,3 +165,10 @@ test('migration Asaas: baixa automática só pelo service_role, idempotente e co
   assert.match(sql, /default 2 check/)
   assert.match(sql, /default 1 check/)
 })
+
+test('CNPJ dos contratos importados: só preenche vazio e só quando há um único número válido', () => {
+  const sql = read('supabase/migrations/202610300005_cnpj_dos_contratos.sql')
+  assert.match(sql, /extracted_data->'extractedData'->'client'->'document_number'->>'value'/)
+  assert.match(sql, /having count\(distinct numero\) = 1/)
+  assert.match(sql, /nullif\(regexp_replace\(coalesce\(c\.document_number, ''\), '\\D', '', 'g'\), ''\) is null/)
+})

@@ -1,5 +1,5 @@
 -- Liga a régua de cobrança automática (9h/12h/18h no vencimento, 9h nos dias seguintes).
--- Rode no SQL Editor DEPOIS das migrations 202610300001..04 e do deploy das functions
+-- Rode no SQL Editor DEPOIS das migrations 202610300001..05 e do deploy das functions
 -- collection-cadence-worker, asaas-billing e asaas-webhook.
 -- Usa a mesma chave do robô de cobrança antigo (collection_worker_key), que já está no Vault.
 
