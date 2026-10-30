@@ -23,11 +23,11 @@ export const contentTask = (event, clientName) => {
   const who = clip(event.actor_name, 80) || 'O cliente'
   const when = /^\d{4}-\d{2}-\d{2}/.test(String(event.scheduled_at || '')) ? String(event.scheduled_at).slice(0, 10) : null
   const lines = [
-    `${who} ${action.verb} "${title}" no Mugô Dados.`,
+    `${who} ${action.verb} "${title}" no Mugoverso.`,
     event.comment ? `Comentário: ${clip(event.comment, 600)}` : null,
     event.changes?.length ? `O que mudou: ${event.changes.map((c) => clip(c, 60)).join(', ')}` : null,
     when ? `Data do post: ${when.slice(8, 10)}/${when.slice(5, 7)}` : null,
-    event.link ? `Abrir no Dados: ${clip(event.link, 300)}` : null,
+    event.link ? `Abrir no Mugoverso: ${clip(event.link, 300)}` : null,
   ].filter(Boolean)
   return {
     title: `${action.prefix} · ${clip(clientName, 60) || 'cliente'} · ${title}`.slice(0, 200),

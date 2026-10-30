@@ -59,7 +59,7 @@ Deno.serve(async (request: Request) => {
       const outbox = await admin.from('team_notification_outbox').insert({
         organization_id: org, team_member_id: ownerId, notification_type: 'operational_alert',
         idempotency_key: `task-assigned:${saved.data.id}`,
-        payload: { kind: 'task_assigned', task_id: saved.data.id, title: saved.data.title, due_date: saved.data.due_date, requester_name: 'Mugô Dados',
+        payload: { kind: 'task_assigned', task_id: saved.data.id, title: saved.data.title, due_date: saved.data.due_date, requester_name: 'Mugoverso',
           candidate_items: [{ index: 1, type: 'task', task_id: saved.data.id, label: saved.data.title }] },
       })
       if (outbox.error && outbox.error.code !== '23505') throw outbox.error
