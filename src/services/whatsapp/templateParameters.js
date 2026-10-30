@@ -142,7 +142,9 @@ export function buildTemplateComponents(fields, values = {}) {
     if (!value) continue
     const key = field.component === 'button' ? `button:${field.index}` : field.component
     if (!groups.has(key)) groups.set(key, { type: field.component, ...(field.component === 'button' ? { sub_type: field.subType, index: field.index } : {}), parameters: [] })
-    const parameter = field.kind === 'coupon_code' ? { type: 'coupon_code', coupon_code: value } : ['image','video','document'].includes(field.kind) ? { type: field.kind, [field.kind]: { link: value } } : { type: 'text', text: value }
+    // Variável nomeada ({{nome}}) no cabeçalho/corpo: a Meta exige o parameter_name; {{1}} segue posicional.
+    const namedVariable = field.component !== 'button' && /^[a-z_][a-z0-9_]*$/.test(clean(field.variable)) ? clean(field.variable) : ''
+    const parameter = field.kind === 'coupon_code' ? { type: 'coupon_code', coupon_code: value } : ['image','video','document'].includes(field.kind) ? { type: field.kind, [field.kind]: { link: value } } : { type: 'text', ...(namedVariable ? { parameter_name: namedVariable } : {}), text: value }
     groups.get(key).parameters.push(parameter)
   }
   return [...groups.values()].filter(component => component.parameters.length)

@@ -61,7 +61,8 @@ for (const [name, block] of [['start_template_conversation', startBlock], ['send
 assert.match(edge, /const buildTemplateMetaPayload = \(recipient: string, templateName: string, language: string, components: any\[\]\) => \(\{[\s\S]*?messaging_product: 'whatsapp'[\s\S]*?recipient_type: 'individual'[\s\S]*?type: 'template'[\s\S]*?language: \{ code: language \}/)
 // Helper puro: componentes normalizados para lowercase (body / button copy_code / text / coupon_code).
 assert.match(edge, /const metaTemplateComponents = \(components: any\) =>/)
-assert.match(edge, /if \(parameterType === 'text'\) return \{ type: 'text', text: text\(parameter\?\.text, 2000\) \}/)
+// Texto: posicional igual a antes; com parameter_name válido (template de variáveis nomeadas), o nome vai junto.
+assert.match(edge, /\{ type: 'text', parameter_name: name, text: text\(parameter\?\.text, 2000\) \} : \{ type: 'text', text: text\(parameter\?\.text, 2000\) \}/)
 assert.match(edge, /if \(parameterType === 'coupon_code'\) return \{ type: 'coupon_code', coupon_code:/)
 assert.match(edge, /return \{ type: 'button', sub_type: metaStatus\(component\?\.sub_type\)\.toLowerCase\(\), index: String\(/)
 

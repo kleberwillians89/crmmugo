@@ -10,4 +10,5 @@ npx supabase functions deploy dados-ops-api --no-verify-jwt     # leitura: taref
 npx supabase functions deploy dados-ops-events --no-verify-jwt  # escrita: tarefa + aviso ao time
 npx supabase functions deploy whatsapp-webhook                  # clique Sim/Não do convite volta para o Dados
 npx supabase functions deploy team-notification-worker          # texto do aviso de falha
+npx supabase functions deploy mugozap-api                       # templates com variáveis nomeadas ({{nome}})
 echo "✓ ponte com o Mugô Dados publicada"
