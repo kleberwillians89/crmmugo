@@ -14,8 +14,9 @@ const auditTemplates=(stage,operation,detail={})=>console.info('[whatsapp_audit]
 export function WhatsAppTemplatesPanel({onStatusesChanged,clients=[],contacts=[],onSendTemplate}){
   const [templates,setTemplates]=useState(getConfiguredTemplates),[showTechnical,setShowTechnical]=useState(false),[loading,setLoading]=useState(false),[feedback,setFeedback]=useState(''),[selected,setSelected]=useState(null),[sendingTemplate,setSendingTemplate]=useState(null),[lastSync,setLastSync]=useState(null)
   const credential=useMemo(()=>getMetaCredentialStatus(),[])
-  const templateSendEnabled=import.meta.env.VITE_WHATSAPP_TEMPLATE_SEND_ENABLED==='true'
-  const templateTestEnabled=import.meta.env.VITE_WHATSAPP_TEMPLATE_TEST_ENABLED==='true'
+  // Templates aprovados na Meta podem ir para qualquer número; o modo homologação foi encerrado.
+  const templateSendEnabled=true
+  const templateTestEnabled=false
   const demoMode=import.meta.env.VITE_WHATSAPP_DEMO_MODE==='true'
   async function refresh(force=false){if(loading)return;if(demoMode){setFeedback('Modo demonstração: sincronização automática e manual estão desativadas.');return}setLoading(true);try{auditTemplates('frontend_sent','sync_templates',{payload:{},force});const result=await refreshTemplateStatuses({force});auditTemplates('frontend_received','sync_templates',{body_received:result,row_count:result.templates.length});setTemplates(result.templates);setLastSync(result.lastSync);const syncError=result.templates.find(item=>item.error);setFeedback(syncError?syncError.error:`${result.updated} modelos sincronizados com a Meta.`);callIfFunction(onStatusesChanged,result.templates)}finally{setLoading(false)}}
   useEffect(()=>{let active=true;(async()=>{try{auditTemplates('frontend_sent','list_templates',{payload:{}});const local=await loadStoredTemplateStatuses();auditTemplates('frontend_received','list_templates',{body_received:local,row_count:local.templates.length});if(active){setTemplates(local.templates);setLastSync(local.lastSync);callIfFunction(onStatusesChanged,local.templates)}}catch{/* mantém o catálogo anterior; sincronização com a Meta é somente manual */}})();return()=>{active=false}},[])

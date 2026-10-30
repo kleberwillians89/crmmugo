@@ -98,8 +98,9 @@ export function WhatsAppPage({ section = 'inbox', page = 'inbox', clients = [], 
   const realtimeConnectedRef=useRef(false)
   const [connection,setConnection]=useState('initializing')
   const [realtimeState,setRealtimeState]=useState('connecting')
-  const templateSendEnabled=import.meta.env.VITE_WHATSAPP_TEMPLATE_SEND_ENABLED==='true'
-  const templateTestEnabled=import.meta.env.VITE_WHATSAPP_TEMPLATE_TEST_ENABLED==='true'
+  // Templates aprovados na Meta podem ir para qualquer número; o modo homologação foi encerrado.
+  const templateSendEnabled=true
+  const templateTestEnabled=false
   const demoMode=import.meta.env.VITE_WHATSAPP_DEMO_MODE==='true'
   const canCompose=(canWrite||visualMock)&&!demoMode
 
