@@ -23,18 +23,36 @@ export function WhatsAppReviewModal({ data, onClose, onConfirm }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [opening, setOpening] = useState(false)
+  const [paymentUrl, setPaymentUrl] = useState(data.paymentUrl || '')
+  const [linking, setLinking] = useState(false)
   const dialog = useRef(null)
   const canEditAmount = data.amount != null && typeof data.buildMessage === 'function'
   const amount = canEditAmount ? parseMoneyInput(amountText) : null
   const amountChanged = canEditAmount && amount != null && Math.abs(amount - Number(data.amount)) >= 0.005
   const contactName = options[selected]?.name || data.contactName || data.client
   // Enquanto o texto não foi mexido à mão, ele acompanha o contato e o valor escolhidos.
-  const generatedMessage = canEditAmount && amount != null ? data.buildMessage({ name: contactName, amount, value: money(amount) }) : data.message
+  const baseMessage = canEditAmount && amount != null ? data.buildMessage({ name: contactName, amount, value: money(amount) }) : data.message
+  const linkText = paymentUrl ? `\n\nPara pagar (Pix, boleto ou cartão): ${paymentUrl}\nApós o vencimento, multa e juros já são calculados no link.` : ''
+  const generatedMessage = baseMessage + linkText
   const message = manualMessage ?? generatedMessage
   const messageEdited = manualMessage !== null
 
   useEffect(() => { const previous = document.activeElement; dialog.current?.focus(); const key = (event) => { if (event.key === 'Escape') callIfFunction(onClose) }; document.addEventListener('keydown', key); return () => { document.removeEventListener('keydown', key); previous?.focus() } }, [onClose])
 
+  // Gera a cobrança no Asaas com o valor mostrado (o valor também é salvo na parcela) e põe o link na mensagem.
+  async function createLink() {
+    setError(''); setNotice('')
+    if (canEditAmount && amount == null) { setError('Informe um valor válido para a cobrança.'); return }
+    setLinking(true)
+    try {
+      const charge = await data.onCreatePaymentLink({ amount: canEditAmount ? amount : null })
+      setPaymentUrl(charge.payment_url || '')
+      if (manualMessage !== null && charge.payment_url && !manualMessage.includes(charge.payment_url)) setManualMessage(`${manualMessage}\n\nPara pagar (Pix, boleto ou cartão): ${charge.payment_url}`)
+      setNotice(`Cobrança criada no Asaas (multa ${charge.fine_percent}% e juros ${charge.interest_percent}% ao mês após o vencimento).`)
+    } catch (failure) {
+      setError(failure?.message || 'Não foi possível gerar a cobrança no Asaas.')
+    } finally { setLinking(false) }
+  }
   function pick(index) { setSelected(index); setPhone(options[index].phone) }
   function refreshMessage() { setManualMessage(null) }
   async function copy() { await navigator.clipboard.writeText(message); setNotice('Mensagem copiada.') }
@@ -96,6 +114,10 @@ export function WhatsAppReviewModal({ data, onClose, onConfirm }) {
       <label>Telefone que será utilizado<input value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
       {options.length <= 1 && <small className="phone-source">Origem: {options[0]?.source || data.phoneSource || 'telefone principal'}</small>}
 
+      {typeof data.onCreatePaymentLink === 'function' && <div className="billing-asaas-row">
+        <button type="button" className="button secondary small" disabled={linking} onClick={createLink}>{linking ? 'Gerando no Asaas…' : paymentUrl ? 'Atualizar link do Asaas' : 'Gerar link de pagamento (Asaas)'}</button>
+        <small>{paymentUrl ? <>Link: <a href={paymentUrl} target="_blank" rel="noreferrer">{paymentUrl}</a></> : 'Pix, boleto ou cartão. Depois do vencimento o Asaas cobra multa e juros. O valor acima é salvo na parcela.'}</small>
+      </div>}
       <label>Mensagem editável<textarea rows="14" value={message} onChange={(event) => setManualMessage(event.target.value)} /></label>
       {canEditAmount && messageEdited && <button type="button" className="button secondary small" onClick={refreshMessage}>Refazer a mensagem com o valor e o contato escolhidos</button>}
       <footer>

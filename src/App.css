@@ -9018,3 +9018,11 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+.whatsapp-modal .billing-asaas-row {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+.whatsapp-modal .billing-asaas-row a {
+  word-break: break-all;
+}

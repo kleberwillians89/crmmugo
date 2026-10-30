@@ -97,6 +97,10 @@ export const debtAmount = (item) => (item?.currency === 'BRL' ? item?.amount : i
 // Nunca soma moedas diferentes; nunca mostra parcela futura ou já quitada como dívida (o chamador só
 // passa itens já elegíveis). `items` vazio + `alreadyPaid` distingue "nada vencido" de "essa cobrança
 // específica já foi paga" (pagamento pode ter ocorrido entre o envio do alerta e o clique do cliente).
+// Link do Asaas (Pix, boleto ou cartão). Depois do vencimento, multa e juros já aparecem no próprio link.
+const paymentLinkLine = (item) => item?.payment_url
+  ? `\n\nPara pagar (Pix, boleto ou cartão): ${item.payment_url}\nApós o vencimento, multa e juros já são calculados no link.`
+  : ''
 export const formatFinanceCheckAmountReply = (items, alreadyPaid = false) => {
   if (!items.length) {
     return alreadyPaid
@@ -105,9 +109,9 @@ export const formatFinanceCheckAmountReply = (items, alreadyPaid = false) => {
   }
   if (items.length === 1) {
     const item = items[0]
-    return `Olá! O valor em aberto desta cobrança é ${formatMoneyPt(debtAmount(item), item.currency)}.\nVencimento: ${formatDatePt(item.due_date)}.`
+    return `Olá! O valor em aberto desta cobrança é ${formatMoneyPt(debtAmount(item), item.currency)}.\nVencimento: ${formatDatePt(item.due_date)}.${paymentLinkLine(item)}`
   }
-  const lines = items.map((item) => `• ${formatCompetencePt(item.reference_month)} — ${formatMoneyPt(debtAmount(item), item.currency)}`)
+  const lines = items.map((item) => `• ${formatCompetencePt(item.reference_month)} — ${formatMoneyPt(debtAmount(item), item.currency)}${item.payment_url ? `\n  Pagar: ${item.payment_url}` : ''}`)
   const currencies = [...new Set(items.map((item) => item.currency || 'BRL'))]
   if (currencies.length === 1) {
     const total = items.reduce((sum, item) => sum + Number(debtAmount(item) || 0), 0)

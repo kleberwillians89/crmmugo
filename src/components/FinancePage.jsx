@@ -2,7 +2,7 @@ import {useEffect,useMemo,useState} from 'react'
 import {Plus,X} from 'lucide-react'
 import {PageHeader} from './PageHeader'
 import {FeedbackMessage} from './FeedbackMessage'
-import {confirmInstallmentReceipt,createInstallment,ensureRecurringInstallments,listInstallments,recordBillingPrepared,updateOpenInstallmentAmount} from '../services/data/financeRepository'
+import {confirmInstallmentReceipt,createAsaasCharge,createInstallment,ensureRecurringInstallments,listInstallments,recordBillingPrepared,updateOpenInstallmentAmount} from '../services/data/financeRepository'
 import {billingPhoneOptions,listClientContacts} from '../services/data/clientContactsRepository'
 import {listContracts} from '../services/data/contractsRepository'
 import {getOrganizationSettings} from '../services/data/settingsRepository'
@@ -42,7 +42,7 @@ export function FinancePage(){
     const primary=phoneOptions.find((option)=>option.isPrimary)||phoneOptions[0]
     const balance=installmentBalance(item),isSetup=item.installment_type==='setup',overdue=effectiveInstallmentStatus(item)==='overdue'
     const buildMessage=({name,value})=>isSetup?buildSetupBillingMessage({name,setupTotal:money(item.amount),setupReceived:money(item.received_amount),setupPending:value,dueDate:item.due_date,pixKey:settings.pix_key,bankName:settings.bank_name}):buildMonthlyBillingMessage({name,reference:item.reference_month,value,dueDate:item.due_date,pixKey:settings.pix_key,bankName:settings.bank_name,overdue})
-    setWhatsapp({client:client.company_name,phone:primary.phone,phoneSource:primary.source,phoneOptions,contactName:primary.name,type:typeLabel[item.installment_type]||'Receita',contract:item.contracts?.contract_number,reference:item.reference_month,dueDate:item.due_date,pixKey:settings.pix_key,bankName:settings.bank_name,amount:balance,buildMessage,message:buildMessage({name:primary.name,value:money(balance)}),installmentId:Number(item.received_amount||0)===0&&['draft','pending','overdue'].includes(item.status)?item.id:null,clientId:item.client_id,contractId:item.contract_id})
+    setWhatsapp({client:client.company_name,phone:primary.phone,phoneSource:primary.source,phoneOptions,contactName:primary.name,type:typeLabel[item.installment_type]||'Receita',contract:item.contracts?.contract_number,reference:item.reference_month,dueDate:item.due_date,pixKey:settings.pix_key,bankName:settings.bank_name,amount:balance,buildMessage,message:buildMessage({name:primary.name,value:money(balance)}),installmentId:Number(item.received_amount||0)===0&&['draft','pending','overdue'].includes(item.status)?item.id:null,paymentUrl:item.payment_url||'',onCreatePaymentLink:Number(item.received_amount||0)===0&&['draft','pending','overdue'].includes(item.status)?async({amount})=>{const charge=await createAsaasCharge(item.id,amount);await load();return charge}:undefined,clientId:item.client_id,contractId:item.contract_id})
   }
   async function confirmBilling({phone,contactName,amount,saveAmount}){
     if(saveAmount&&whatsapp.installmentId){await updateOpenInstallmentAmount(whatsapp.installmentId,amount,`Ajustado na cobrança pelo WhatsApp (${contactName}).`);await load()}

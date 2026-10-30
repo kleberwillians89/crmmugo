@@ -15,6 +15,7 @@ import {
 import { createSignedUrl } from "../services/data/documentsRepository";
 import { getOrganizationSettings } from "../services/data/settingsRepository";
 import {
+  createAsaasCharge,
   ensureRecurringInstallments,
   recordBillingPrepared,
   setContractRecurring,
@@ -295,6 +296,15 @@ function ClientCenter({ id, onBack }) {
         message: buildMessage({ name: primary.name, value: money(balance) }),
         // Só parcela sem recebimento pode ter o valor salvo (regra do banco).
         installmentId: Number(installment.received_amount || 0) === 0 ? installment.id : null,
+        paymentUrl: installment.payment_url || "",
+        onCreatePaymentLink:
+          Number(installment.received_amount || 0) === 0
+            ? async ({ amount }) => {
+                const charge = await createAsaasCharge(installment.id, amount);
+                await reloadClient();
+                return charge;
+              }
+            : undefined,
         contractId: installment.contract_id,
         billingType: "installment",
       });

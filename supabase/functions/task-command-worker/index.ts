@@ -5,6 +5,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { HELP_TEXT, REFERENTIAL_ALL_WORDS, parseMultiSelection, parseNamedDelegation, parseSelfTask, selectionActionIntent, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
 import { collectionConfirmation, collectionPhoneOptions, collectionPhoneQuestion, parseCollectionAmount } from '../_shared/collectionCore.js'
+import { asaasConfigFromEnv, ensureAsaasCharge } from '../_shared/asaasCore.js'
 import { prospectReplyAction } from '../_shared/prospectReminderCore.js'
 import {advanceConversationState,scopedConversationState,conversationTrace} from '../_shared/conversationKernel.js'
 import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeSecretaryWriteRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
@@ -411,11 +412,16 @@ async function execute(admin: any, event: any, command: any) {
     const installment=await admin.from('invoice_installments').select(COLLECTION_INSTALLMENT_FIELDS).eq('organization_id',org).eq('id',event.session.pending_entity_id).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).maybeSingle()
     if(installment.error)throw installment.error
     if(!installment.data){await clearAssistantSession(admin,event);return 'Essa parcela não está mais em aberto (foi paga, cancelada ou recebeu valor). Nenhuma cobrança foi enviada.'}
+    // Garante a cobrança no Asaas (link com multa/juros após o vencimento) antes do disparo. Se o Asaas
+    // falhar (ex.: cliente sem CPF/CNPJ), a cobrança sai mesmo assim e o motivo volta na resposta.
+    let asaasNote=''
+    try{const charge=await ensureAsaasCharge({admin,org,installmentId:installment.data.id,config:asaasConfigFromEnv((name:string)=>Deno.env.get(name)||'')});asaasNote=charge.payment_url?`\nLink Asaas: ${charge.payment_url}`:''}
+    catch(error){asaasNote=`\n(Sem link do Asaas: ${clean((error as any)?.message,200)})`}
     const sent=await sendCollectionViaMugozap(event,installment.data,event.session.context?.collection_phone||null)
     await recordEvent(admin,event,'collection_sent','Cobrança enviada pelo WhatsApp',installment.data.clients?.trade_name||installment.data.clients?.company_name||'Cliente',{installment_id:installment.data.id,provider_message_id:sent?.provider_message_id||sent?.message_id||null})
     await clearAssistantSession(admin,event)
     event.entity_type='invoice_installments';event.entity_id=installment.data.id
-    return `Enviado ✓\n${installment.data.clients?.trade_name||installment.data.clients?.company_name||'Cliente'} — ${brl(Number(installment.data.amount))}${event.session.context?.collection_contact?` para ${event.session.context.collection_contact}`:''}.`
+    return `Enviado ✓\n${installment.data.clients?.trade_name||installment.data.clients?.company_name||'Cliente'} — ${brl(Number(installment.data.amount))}${event.session.context?.collection_contact?` para ${event.session.context.collection_contact}`:''}.${asaasNote}`
   }
   // Cancelamento tem prioridade sobre qualquer contexto pendente na sessão (expense/activity/task
   // aguardando dados) — sem isso o usuário ficava preso a um fluxo incompleto sem saída explícita.
