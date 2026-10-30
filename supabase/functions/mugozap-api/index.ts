@@ -353,7 +353,7 @@ const routes: Record<string, { method: string, path: (payload: any) => string, b
   list_templates: { method: 'GET', path: () => '/meta/templates/local' },
   sync_templates: { method: 'GET', path: () => '/meta/templates', write: true },
   get_template_status: { method: 'GET', path: p => {
-    const allowed=['mugo_alerta_pagamento_pendente','mugo_pagamento_confirmado','mugo_solicitar_comprovante','mugo_aviso_renovacao_contrato','mugo_agendamento_confirmado','mugo_boas_vindas_diagnostico_v1','hello_world']
+    const allowed=['mugo_alerta_pagamento_pendente','mugo_cobranca_link_v1','mugo_pagamento_confirmado','mugo_solicitar_comprovante','mugo_aviso_renovacao_contrato','mugo_agendamento_confirmado','mugo_boas_vindas_diagnostico_v1','hello_world']
     const name=text(p.template_name,100)
     if(!allowed.includes(name))throw new Error('TEMPLATE_NOT_ALLOWED')
     return `/api/templates/${encodeURIComponent(name)}?language=pt_BR`

@@ -165,3 +165,11 @@ test('migration Asaas: baixa automática só pelo service_role, idempotente e co
   assert.match(sql, /default 2 check/)
   assert.match(sql, /default 1 check/)
 })
+
+test('template com link: usado só quando aprovado e com link do Asaas; senão cai no alerta atual', () => {
+  const worker = read('supabase/functions/collection-cadence-worker/index.ts')
+  assert.match(worker, /const LINK_TEMPLATE='mugo_cobranca_link_v1'/)
+  assert.match(worker, /const useLink=Boolean\(linkTemplateOk&&paymentUrl\)/)
+  assert.match(worker, /\[name,brl\(row\.amount\),dateBr\(row\.due_date\),String\(paymentUrl\)\]/)
+  assert.match(worker, /if\(templates\.error\|\|!approved\(template\)\)/)
+})

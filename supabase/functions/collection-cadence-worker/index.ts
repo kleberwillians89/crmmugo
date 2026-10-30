@@ -12,23 +12,33 @@ import {asaasConfigFromEnv,ensureAsaasCharge} from '../_shared/asaasCore.js'
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}})
 const clean=(value:unknown,max=500)=>String(value??'').trim().slice(0,max)
 const TEMPLATE='mugo_alerta_pagamento_pendente',LANGUAGE='pt_BR'
+// Template com valor, vencimento e link do Asaas. Usado quando estiver aprovado (e sincronizado) e a
+// parcela tiver link; senão sai o template de alerta (só o nome; valor e link vêm em "Consultar cobrança").
+const LINK_TEMPLATE='mugo_cobranca_link_v1'
+const brl=(value:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(value)||0)
+const dateBr=(value:string)=>{const [y,m,d]=String(value||'').slice(0,10).split('-');return d&&m&&y?`${d}/${m}/${y}`:String(value||'')}
+const approved=(row:any)=>Boolean(row)&&String(row.status).toUpperCase()==='APPROVED'&&row.is_active!==false
 const INSTALLMENT_FIELDS='id,organization_id,client_id,contract_id,due_date,amount,status,received_amount,paid_at,payment_url,clients(company_name,trade_name,contact_name,phone,billing_contact_name,billing_contact_phone)'
 
-async function sendTemplate(admin:any,org:string,row:any,target:any,slotKey:string,connection:any){
+async function sendTemplate(admin:any,org:string,row:any,target:any,slotKey:string,connection:any,paymentUrl:string|null,linkTemplateOk:boolean){
   const phone=target.phone.replace(/\D/g,''),now=new Date().toISOString(),key=`collection-cadence:${row.id}:${slotKey}`
   const name=clean(target.name,120).split(/\s+/)[0]||'Cliente'
+  const useLink=Boolean(linkTemplateOk&&paymentUrl)
+  const templateName=useLink?LINK_TEMPLATE:TEMPLATE
   const existingContact=await admin.from('whatsapp_contacts').select('display_name').eq('connection_id',connection.id).eq('wa_id',phone).maybeSingle()
   const contact=await admin.from('whatsapp_contacts').upsert({organization_id:org,connection_id:connection.id,wa_id:phone,client_id:row.client_id,...(existingContact.data?.display_name?{}:{display_name:row.clients?.trade_name||row.clients?.company_name}),last_seen_at:now},{onConflict:'connection_id,wa_id'}).select('id').single()
   if(contact.error)throw contact.error
   const conversation=await admin.from('whatsapp_conversations').upsert({organization_id:org,connection_id:connection.id,contact_id:contact.data.id,wa_id:phone,status:'open',queue:'finance_collection',initiated_by:'business',last_outbound_source:'collection'},{onConflict:'connection_id,wa_id'}).select('id').single()
   if(conversation.error)throw conversation.error
-  const components=[{type:'body',parameters:[{type:'text',text:name}]}]
-  const message=await admin.from('whatsapp_messages').insert({organization_id:org,connection_id:connection.id,conversation_id:conversation.data.id,idempotency_key:key,direction:'out',message_type:'template',status:'queued',template_name:TEMPLATE,template_language:LANGUAGE,template_components:components,text_content:`Template ${TEMPLATE}`}).select('id').single()
+  const components=[{type:'body',parameters:useLink
+    ?[name,brl(row.amount),dateBr(row.due_date),String(paymentUrl)].map((text)=>({type:'text',text}))
+    :[{type:'text',text:name}]}]
+  const message=await admin.from('whatsapp_messages').insert({organization_id:org,connection_id:connection.id,conversation_id:conversation.data.id,idempotency_key:key,direction:'out',message_type:'template',status:'queued',template_name:templateName,template_language:LANGUAGE,template_components:components,text_content:`Template ${templateName}`}).select('id').single()
   if(message.error)throw message.error
   const token=Deno.env.get('META_ACCESS_TOKEN')||''
   if(!token)throw Object.assign(new Error('META_ACCESS_TOKEN ausente.'),{code:'META_CONFIGURATION_MISSING'})
   let response:Response
-  try{response=await fetch(`https://graph.facebook.com/${Deno.env.get('GRAPH_API_VERSION')||'v23.0'}/${connection.phone_number_id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:phone,type:'template',template:{name:TEMPLATE,language:{code:LANGUAGE},components}}),signal:AbortSignal.timeout(20_000)})}
+  try{response=await fetch(`https://graph.facebook.com/${Deno.env.get('GRAPH_API_VERSION')||'v23.0'}/${connection.phone_number_id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:phone,type:'template',template:{name:templateName,language:{code:LANGUAGE},components}}),signal:AbortSignal.timeout(20_000)})}
   catch{
     // Resultado desconhecido: nunca reenvia sozinho (o horário fica marcado como falho, sem retry).
     await admin.from('whatsapp_messages').update({status:'failed',failed_at:now,error_code:'SEND_OUTCOME_UNKNOWN',error_message:'Resultado da Meta desconhecido.'}).eq('id',message.data.id)
@@ -46,7 +56,7 @@ async function sendTemplate(admin:any,org:string,row:any,target:any,slotKey:stri
   return providerId
 }
 
-async function processInstallment(admin:any,org:string,row:any,slot:any,connection:any,asaas:any){
+async function processInstallment(admin:any,org:string,row:any,slot:any,connection:any,asaas:any,linkTemplateOk:boolean){
   const reserved=await admin.from('collection_dispatch_log').insert({organization_id:org,installment_id:row.id,client_id:row.client_id,slot_key:slot.slotKey,status:'sending'}).select('id').single()
   if(reserved.error){if(reserved.error.code==='23505')return 'already';throw reserved.error}
   const logId=reserved.data.id
@@ -61,7 +71,7 @@ async function processInstallment(admin:any,org:string,row:any,slot:any,connecti
       try{paymentUrl=(await ensureAsaasCharge({admin,org,installmentId:row.id,config:asaas})).payment_url||paymentUrl}
       catch(error){asaasError=clean((error as any)?.message,300)}
     }
-    const providerId=await sendTemplate(admin,org,row,target,slot.slotKey,connection)
+    const providerId=await sendTemplate(admin,org,row,target,slot.slotKey,connection,paymentUrl,linkTemplateOk)
     await finish({status:'sent',provider_message_id:providerId,phone:target.phone,contact_name:target.name,payment_url:paymentUrl,sent_at:new Date().toISOString(),error_code:asaasError?'ASAAS_WARNING':null,error_message:asaasError})
     return 'sent'
   }catch(error){
@@ -94,12 +104,14 @@ Deno.serve(async request=>{
     if(claims.error)throw claims.error
     const connection=await admin.from('whatsapp_connections').select('id,phone_number_id,waba_id').eq('organization_id',org.organization_id).in('status',['active','degraded']).order('updated_at',{ascending:false}).limit(1).maybeSingle()
     if(connection.error||!connection.data){console.log(JSON.stringify({event:'collection_cadence_no_connection',organization_id:org.organization_id}));continue}
-    const template=await admin.from('whatsapp_message_templates').select('status,is_active').eq('organization_id',org.organization_id).eq('waba_id',connection.data.waba_id).eq('name',TEMPLATE).eq('language',LANGUAGE).maybeSingle()
-    if(template.error||!template.data||String(template.data.status).toUpperCase()!=='APPROVED'||template.data.is_active===false){console.log(JSON.stringify({event:'collection_cadence_template_unavailable',organization_id:org.organization_id}));continue}
+    const templates=await admin.from('whatsapp_message_templates').select('name,status,is_active').eq('organization_id',org.organization_id).eq('waba_id',connection.data.waba_id).in('name',[TEMPLATE,LINK_TEMPLATE]).eq('language',LANGUAGE)
+    const template=templates.error?null:(templates.data||[]).find((item:any)=>item.name===TEMPLATE)
+    const linkTemplateOk=approved((templates.data||[]).find((item:any)=>item.name===LINK_TEMPLATE))
+    if(templates.error||!approved(template)){console.log(JSON.stringify({event:'collection_cadence_template_unavailable',organization_id:org.organization_id}));continue}
     for(const {row,slot} of rows){
       if(paymentClaimBlocks(claims.data,row))continue
       result.eligible+=1
-      try{const outcome=await processInstallment(admin,org.organization_id,row,slot,connection.data,asaas);if(outcome==='sent')result.sent+=1}
+      try{const outcome=await processInstallment(admin,org.organization_id,row,slot,connection.data,asaas,linkTemplateOk);if(outcome==='sent')result.sent+=1}
       catch(error){result.failed+=1;console.log(JSON.stringify({event:'collection_cadence_failed',installment_id:row.id,slot:slot.slotKey,error:clean((error as any)?.message)}))}
     }
   }
