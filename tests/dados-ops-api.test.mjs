@@ -57,3 +57,17 @@ test('telefone sai mascarado e logs nunca carregam texto, nome ou telefone', () 
 test('a ponte de números (data-platform-api) continua sem ler conversa', () => {
   assert.doesNotMatch(dataPlatform, /whatsapp_messages|conversation_summaries|internal_notes/)
 })
+
+test('visão do cliente: só etiqueta "cliente" e sem nada interno da Mugô', () => {
+  assert.match(api, /const CLIENT_TAG = 'cliente'/)
+  assert.match(api, /\.filter\(\(row: any\) => !forClient \|\| hasClientTag\(row\.tags\)\)/)
+  const clientBranch = api.slice(api.indexOf('if (forClient) {'), api.indexOf('const memberIds'))
+  assert.match(clientBranch, /id: row\.id, title: row\.title, status: row\.status, due_date: row\.due_date, updated_at: row\.updated_at/)
+  assert.doesNotMatch(clientBranch, /notes|assign|tags|category|team_members/)
+})
+
+test('telefone só volta inteiro quando o próprio Dados mandou (e com variante do 9º dígito)', () => {
+  assert.match(api, /matched_phone: requested\.get\(digits\(contact\.wa_id\)\) \|\| null/)
+  assert.match(api, /if \(d\.startsWith\('55'\) && d\.length === 13 && d\[4\] === '9'\) out\.add/)
+  assert.match(api, /split\(','\)\.slice\(0, 30\)/)
+})
