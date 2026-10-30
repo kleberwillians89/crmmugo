@@ -394,6 +394,10 @@ verify_jwt = false
 [functions.commercial-integration-worker]
 verify_jwt = false
 
+# Ponte operacional para o Mugô Dados (tarefas e atendimento): autentica por X-Dados-Ops-Key.
+[functions.dados-ops-api]
+verify_jwt = false
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
