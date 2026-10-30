@@ -17,6 +17,19 @@ const text = (value: unknown, max = 300) => String(value ?? '').trim().slice(0, 
 const clampLimit = (value: unknown, fallback = 50, max = 200) => Math.min(Math.max(Number(value) || fallback, 1), max)
 const isUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 const FINANCE_CATEGORY = /^financ/i
+// Tarefa que o CLIENTE pode ver no Dados: só com a etiqueta "cliente" no CRM. Sem etiqueta, fica só com a Mugô.
+const CLIENT_TAG = 'cliente'
+const hasClientTag = (tags: unknown) => Array.isArray(tags) && tags.some((tag) => String(tag).trim().toLowerCase() === CLIENT_TAG)
+const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '')
+// Celular BR pode chegar com ou sem o 9º dígito (o wa_id do WhatsApp costuma vir sem). Gera as duas formas.
+const phoneVariants = (value: unknown) => {
+  const d = digits(value)
+  if (d.length < 8 || d.length > 15) return []
+  const out = new Set([d])
+  if (d.startsWith('55') && d.length === 13 && d[4] === '9') out.add(d.slice(0, 4) + d.slice(5))
+  if (d.startsWith('55') && d.length === 12) out.add(d.slice(0, 4) + '9' + d.slice(4))
+  return [...out]
+}
 const TASK_STATUS = new Set(['pending', 'in_progress', 'completed', 'cancelled'])
 
 const maskPhone = (value: unknown) => {
@@ -26,6 +39,7 @@ const maskPhone = (value: unknown) => {
 
 async function handleTasks(admin: any, org: string, clientId: string, url: URL, limit: number) {
   const status = text(url.searchParams.get('status'), 20)
+  const forClient = url.searchParams.get('audience') === 'client'
   let query = admin.from('crm_tasks')
     .select('id,title,status,priority,due_date,due_time,starts_at,category,task_type,tags,notes,assigned_to,updated_at')
     .eq('organization_id', org).eq('client_id', clientId)
@@ -36,6 +50,14 @@ async function handleTasks(admin: any, org: string, clientId: string, url: URL, 
   const tasks = await query
   if (tasks.error) throw tasks.error
   const visible = (tasks.data || []).filter((row: any) => !FINANCE_CATEGORY.test(String(row.category || '')))
+    .filter((row: any) => !forClient || hasClientTag(row.tags))
+  if (forClient) {
+    // Visão do cliente: nada interno da Mugô — sem observações, sem equipe, sem etiquetas.
+    return json({
+      ok: true,
+      data: { tasks: visible.map((row: any) => ({ id: row.id, title: row.title, status: row.status, due_date: row.due_date, updated_at: row.updated_at })) },
+    })
+  }
   const memberIds = [...new Set(visible.map((row: any) => row.assigned_to).filter(Boolean))]
   const members = memberIds.length
     ? await admin.from('team_members').select('id,name,color').eq('organization_id', org).in('id', memberIds)
@@ -56,7 +78,13 @@ async function handleTasks(admin: any, org: string, clientId: string, url: URL, 
   })
 }
 
-async function handleConversations(admin: any, org: string, clientId: string, limit: number) {
+async function handleConversations(admin: any, org: string, clientId: string, url: URL, limit: number) {
+  // O Dados pode mandar os telefones dos contatos que ELE já tem cadastrados para o cliente; só esses
+  // voltam com o número (que o Dados já conhece) para casar conversa e contato. Os demais seguem mascarados.
+  const requested = new Map<string, string>()
+  for (const raw of text(url.searchParams.get('wa_ids'), 2000).split(',').slice(0, 30)) {
+    for (const variant of phoneVariants(raw)) requested.set(variant, digits(raw))
+  }
   // Conversa pertence ao cliente quando o CONTATO está vinculado a ele no CRM (whatsapp_contacts.client_id).
   const contacts = await admin.from('whatsapp_contacts').select('id,display_name,profile_name,wa_id')
     .eq('organization_id', org).eq('client_id', clientId).limit(500)
@@ -86,7 +114,10 @@ async function handleConversations(admin: any, org: string, clientId: string, li
         return {
           id: row.id, status: row.status, attendance_mode: row.attendance_mode, unread_count: row.unread_count,
           last_message_at: row.last_message_at, service_window_expires_at: row.service_window_expires_at,
-          contact: { name: text(contact.display_name || contact.profile_name, 120) || null, phone_masked: maskPhone(contact.wa_id) },
+          contact: {
+            name: text(contact.display_name || contact.profile_name, 120) || null, phone_masked: maskPhone(contact.wa_id),
+            matched_phone: requested.get(digits(contact.wa_id)) || null,
+          },
           last_message: message ? {
             direction: message.direction, at: message.created_at,
             text: text(message.text_content, 160) || (message.template_name ? `Modelo: ${message.template_name}` : `[${message.message_type}]`),
@@ -152,7 +183,7 @@ Deno.serve(async (request: Request) => {
   try {
     let response: Response
     if (endpoint === 'tasks') response = await handleTasks(admin, organizationId, clientId, url, limit)
-    else if (endpoint === 'conversations') response = await handleConversations(admin, organizationId, clientId, limit)
+    else if (endpoint === 'conversations') response = await handleConversations(admin, organizationId, clientId, url, limit)
     else if (endpoint === 'messages') response = await handleMessages(admin, organizationId, clientId, url, limit)
     else return json({ ok: false, code: 'NOT_FOUND' }, 404)
     console.log(JSON.stringify({ event: 'dados_ops_request', organization_id: organizationId, client_id: clientId, endpoint, status_http: response.status, duration_ms: Date.now() - startedAt }))
