@@ -176,7 +176,7 @@ const handleFinanceCheckAmount = async (admin: any, connection: any, conversatio
   let items: any[] = []
   if (clientId) {
     const due = await admin.from('invoice_installments')
-      .select('id,reference_month,due_date,amount,original_amount,currency')
+      .select('id,reference_month,due_date,amount,original_amount,currency,payment_url')
       .eq('organization_id', org).eq('client_id', clientId)
       .in('status', ['pending', 'overdue']).eq('received_amount', 0).is('paid_at', null)
       .lte('due_date', today).order('due_date', { ascending: true })

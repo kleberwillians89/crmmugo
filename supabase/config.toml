@@ -444,3 +444,11 @@ verify_jwt = false
 
 [functions.newsletter-signup]
 verify_jwt = false
+
+# Webhook do Asaas: autentica pelo header asaas-access-token (ASAAS_WEBHOOK_TOKEN).
+[functions.asaas-webhook]
+verify_jwt = false
+
+# Régua de cobrança (cron): autentica por X-Collection-Worker-Key.
+[functions.collection-cadence-worker]
+verify_jwt = false

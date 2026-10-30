@@ -14,7 +14,13 @@ import {
 } from "../services/data/clientsRepository";
 import { createSignedUrl } from "../services/data/documentsRepository";
 import { getOrganizationSettings } from "../services/data/settingsRepository";
-import { recordBillingPrepared } from "../services/data/financeRepository";
+import {
+  createAsaasCharge,
+  ensureRecurringInstallments,
+  recordBillingPrepared,
+  setContractRecurring,
+  updateOpenInstallmentAmount,
+} from "../services/data/financeRepository";
 import { dataProvider } from "../lib/supabase/client";
 import { useAuth } from "../contexts/AuthContext";
 import { userError } from "../lib/userError";
@@ -22,9 +28,10 @@ import { calculateFinancialSummary } from "../lib/financialMetrics";
 import {
   buildMonthlyBillingMessage,
   buildSetupBillingMessage,
-  isValidBrazilianPhone,
 } from "../lib/whatsapp";
 import { WhatsAppReviewModal } from "./WhatsAppReviewModal";
+import { ClientContactsPanel } from "./ClientContactsPanel";
+import { billingPhoneOptions, listClientContacts } from "../services/data/clientContactsRepository";
 import { normalizeService } from "../lib/normalizeService";
 import { Plus, Search, X } from "lucide-react";
 import { compareClients } from "../lib/clientDeduplication";
@@ -110,9 +117,20 @@ function ClientCenter({ id, onBack }) {
     [whatsapp, setWhatsapp] = useState(null),
     [candidates, setCandidates] = useState([]),
     [mergeHistory, setMergeHistory] = useState([]),
+    [contacts, setContacts] = useState([]),
+    [billingError, setBillingError] = useState(""),
     [error, setError] = useState("");
+  async function reloadClient() {
+    const [row, people] = await Promise.all([getClient(id), listClientContacts(id).catch(() => [])]);
+    setClient(row);
+    setContacts(people);
+  }
   useEffect(() => {
-    getClient(id)
+    listClientContacts(id).then(setContacts).catch(() => {});
+    // Gera a parcela do mês para contratos marcados como recorrentes antes de mostrar o financeiro.
+    ensureRecurringInstallments()
+      .catch(() => 0)
+      .then(() => getClient(id))
       .then(async (row) => {
         setClient(row);
         const all = await listClientsForReview();
@@ -194,94 +212,125 @@ function ClientCenter({ id, onBack }) {
       setError(userError(cause, "O status da proposta não pôde ser alterado."));
     }
   }
-  function contact() {
-    const financialPhone = isValidBrazilianPhone(client.billing_contact_phone);
-    return {
-      phone: financialPhone ? client.billing_contact_phone : client.phone,
-      name:
-        client.billing_contact_name ||
-        client.contact_name ||
-        client.company_name,
-      source: financialPhone ? "contato financeiro" : "telefone principal",
-    };
-  }
+  // Cobrança: escolhe o número (quando há mais de um) e permite editar o valor antes de abrir o WhatsApp.
   function prepareBilling() {
-    const target = contact();
-    if (!isValidBrazilianPhone(target.phone)) {
-      setError("O cliente não possui telefone financeiro ou principal válido.");
+    setBillingError("");
+    const phoneOptions = billingPhoneOptions(client, contacts);
+    if (!phoneOptions.length) {
+      setBillingError("Cadastre um WhatsApp válido em Contatos e WhatsApp para enviar a cobrança.");
       return;
     }
+    const primary = phoneOptions.find((item) => item.isPrimary) || phoneOptions[0];
+    const base = {
+      client: client.company_name,
+      phone: primary.phone,
+      phoneSource: primary.source,
+      phoneOptions,
+      contactName: primary.name,
+      pixKey: settings.pix_key,
+      bankName: settings.bank_name,
+      clientId: client.id,
+    };
     const setup = contracts.find(
       (contract) =>
         Number(contract.setup_value || 0) >
         Number(contract.setup_received_amount || 0),
     );
+    const openInstallments = installments.filter(
+      (item) =>
+        ["overdue", "pending", "partial"].includes(item.status) &&
+        Number(item.amount || 0) > Number(item.received_amount || 0),
+    );
     const installment =
-      installments.find((item) => item.status === "overdue") ||
-      installments.find((item) => item.status === "pending");
+      openInstallments.find((item) => item.status === "overdue") ||
+      [...openInstallments].sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)))[0];
     if (setup) {
       const pending = Math.max(
         Number(setup.setup_value || 0) -
           Number(setup.setup_received_amount || 0),
         0,
       );
-      setWhatsapp({
-        client: client.company_name,
-        phone: target.phone,
-        phoneSource: target.source,
-        type: "Setup",
-        contract: setup.contract_number,
-        value: money(setup.setup_value),
-        received: money(setup.setup_received_amount),
-        balance: money(pending),
-        dueDate: setup.start_date,
-        pixKey: settings.pix_key,
-        bankName: settings.bank_name,
-        message: buildSetupBillingMessage({
-          name: target.name,
+      const buildMessage = ({ name, value }) =>
+        buildSetupBillingMessage({
+          name,
           setupTotal: money(setup.setup_value),
           setupReceived: money(setup.setup_received_amount),
-          setupPending: money(pending),
+          setupPending: value,
           dueDate: setup.start_date,
           pixKey: settings.pix_key,
           bankName: settings.bank_name,
-        }),
-        clientId: client.id,
+        });
+      setWhatsapp({
+        ...base,
+        type: "Setup",
+        contract: setup.contract_number,
+        received: money(setup.setup_received_amount),
+        dueDate: setup.start_date,
+        amount: pending,
+        buildMessage,
+        message: buildMessage({ name: primary.name, value: money(pending) }),
         contractId: setup.id,
         billingType: "setup",
       });
     } else if (installment) {
-      setWhatsapp({
-        client: client.company_name,
-        phone: target.phone,
-        phoneSource: target.source,
-        type:
-          installment.status === "overdue"
-            ? "Mensalidade vencida"
-            : "Mensalidade",
-        contract: contracts.find(
-          (contract) => contract.id === installment.contract_id,
-        )?.contract_number,
-        reference: installment.reference_month,
-        value: money(installment.amount),
-        dueDate: installment.due_date,
-        pixKey: settings.pix_key,
-        bankName: settings.bank_name,
-        message: buildMonthlyBillingMessage({
-          name: target.name,
+      const balance = Math.max(Number(installment.amount || 0) - Number(installment.received_amount || 0), 0);
+      const overdue = installment.status === "overdue" || (installment.due_date && installment.due_date < new Date().toISOString().slice(0, 10));
+      const buildMessage = ({ name, value }) =>
+        buildMonthlyBillingMessage({
+          name,
           reference: installment.reference_month,
-          value: money(installment.amount),
+          value,
           dueDate: installment.due_date,
           pixKey: settings.pix_key,
           bankName: settings.bank_name,
-          overdue: installment.status === "overdue",
-        }),
-        clientId: client.id,
+          overdue,
+        });
+      setWhatsapp({
+        ...base,
+        type: overdue ? "Mensalidade vencida" : "Mensalidade",
+        contract: contracts.find((contract) => contract.id === installment.contract_id)?.contract_number,
+        reference: installment.reference_month,
+        dueDate: installment.due_date,
+        amount: balance,
+        buildMessage,
+        message: buildMessage({ name: primary.name, value: money(balance) }),
+        // Só parcela sem recebimento pode ter o valor salvo (regra do banco).
+        installmentId: Number(installment.received_amount || 0) === 0 ? installment.id : null,
+        paymentUrl: installment.payment_url || "",
+        onCreatePaymentLink:
+          Number(installment.received_amount || 0) === 0
+            ? async ({ amount }) => {
+                const charge = await createAsaasCharge(installment.id, amount);
+                await reloadClient();
+                return charge;
+              }
+            : undefined,
         contractId: installment.contract_id,
         billingType: "installment",
       });
     } else
-      setError("Não há setup ou mensalidade pendente para preparar cobrança.");
+      setBillingError("Não há setup ou mensalidade em aberto para cobrar. Confira as parcelas em Financeiro.");
+  }
+  async function confirmBilling({ phone, contactName, amount, saveAmount }) {
+    if (saveAmount && whatsapp.installmentId) {
+      await updateOpenInstallmentAmount(whatsapp.installmentId, amount, `Ajustado na cobrança pelo WhatsApp (${contactName}).`);
+      await reloadClient();
+    }
+    await recordBillingPrepared({
+      clientId: whatsapp.clientId,
+      contractId: whatsapp.contractId,
+      description: `Cobrança preparada para ${contactName ? `${contactName} · ` : ""}${phone}.`,
+      newValue: { type: whatsapp.billingType, value: money(amount ?? whatsapp.amount), phone },
+    });
+  }
+  async function toggleRecurring(contract, checked) {
+    setBillingError("");
+    try {
+      await setContractRecurring(contract.id, checked);
+      await reloadClient();
+    } catch (cause) {
+      setBillingError(userError(cause, "Não foi possível marcar o contrato como recorrente."));
+    }
   }
   return (
     <div>
@@ -359,6 +408,12 @@ function ClientCenter({ id, onBack }) {
           </div>
         </dl>
       </section>
+      <ClientContactsPanel
+        clientId={client.id}
+        contacts={contacts}
+        canWrite={canWrite}
+        onChanged={reloadClient}
+      />
       <section className="dashboard-panel client-section">
         <header className="client-financial-header">
           <div>
@@ -375,6 +430,7 @@ function ClientCenter({ id, onBack }) {
             </button>
           )}
         </header>
+        {billingError && <FeedbackMessage type="error">{billingError}</FeedbackMessage>}
         <div className="client-financial-grid">
           {[
             [
@@ -486,6 +542,7 @@ function ClientCenter({ id, onBack }) {
           "Setup contratado",
           "Setup recebido",
           "Mensal",
+          "Recorrente",
         ]}
         rows={contracts.map((contract) => [
           contract.contract_number || "Não informado",
@@ -500,6 +557,16 @@ function ClientCenter({ id, onBack }) {
           contract.monthly_value == null
             ? "Não informado"
             : money(contract.monthly_value),
+          canWrite && contract.status === "active" ? (
+            <label className="checkbox-row" key={`recurring-${contract.id}`}>
+              <input
+                type="checkbox"
+                checked={Boolean(contract.is_recurring)}
+                onChange={(event) => toggleRecurring(contract, event.target.checked)}
+              />
+              {contract.is_recurring ? "Sim" : "Não"}
+            </label>
+          ) : contract.is_recurring ? "Sim" : "Não",
         ])}
       />
       <CenterTable
@@ -582,18 +649,7 @@ function ClientCenter({ id, onBack }) {
         <WhatsAppReviewModal
           data={whatsapp}
           onClose={() => setWhatsapp(null)}
-          onConfirm={({ phone }) =>
-            recordBillingPrepared({
-              clientId: whatsapp.clientId,
-              contractId: whatsapp.contractId,
-              description: `Cobrança preparada para ${phone}.`,
-              newValue: {
-                type: whatsapp.billingType,
-                value: whatsapp.value,
-                phone,
-              },
-            })
-          }
+          onConfirm={confirmBilling}
         />
       )}
     </div>

@@ -8978,3 +8978,51 @@ textarea {
     justify-self: start;
   }
 }
+
+/* Cobrança: escolha do número e valor editável; contatos do cliente */
+.whatsapp-modal fieldset.billing-amount-field,
+.whatsapp-modal fieldset.billing-phone-options {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  border-radius: 10px;
+  display: grid;
+  gap: 8px;
+}
+.whatsapp-modal fieldset legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.checkbox-row input {
+  width: auto;
+  margin: 0;
+}
+.client-contact-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-top: 14px;
+}
+.client-contact-form .table-actions {
+  grid-column: 1 / -1;
+}
+@media (max-width: 760px) {
+  .client-contact-form {
+    grid-template-columns: 1fr;
+  }
+}
+.whatsapp-modal .billing-asaas-row {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+.whatsapp-modal .billing-asaas-row a {
+  word-break: break-all;
+}
