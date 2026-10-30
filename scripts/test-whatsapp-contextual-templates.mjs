@@ -42,6 +42,10 @@ stableValues={...stableValues,[appointmentFields[2].key]:'19:45'}
 assert.equal(stableValues[appointmentFields[2].key],'19:45')
 const ordered=buildTemplateComponents(appointmentFields,{body_1:'Kleber Willians',body_2:'10',body_3:'20:30'})
 assert.deepEqual(ordered[0].parameters.map(item=>item.text),['Kleber Willians','10','20:30'])
+assert.ok(ordered[0].parameters.every(item=>!('parameter_name' in item)),'Variáveis {{1}} seguem posicionais')
+const namedTemplate={name:'mugo_agenda_semana',components:[{type:'BODY',text:'Olá, {{nome}}! Agenda da {{marca}}.'}]}
+const named=buildTemplateComponents(describeTemplateFields(namedTemplate),{body_nome:'Ana',body_marca:'Roove'})
+assert.deepEqual(named[0].parameters,[{type:'text',parameter_name:'nome',text:'Ana'},{type:'text',parameter_name:'marca',text:'Roove'}])
 assert.equal(renderTemplatePreview(appointment,appointmentFields,{body_1:'Kleber Willians',body_2:'10',body_3:'20:30'}).body,'Olá, Kleber Willians. Seu atendimento com a equipe da Mugô está confirmado para 10, às 20:30.')
 
 const page=fs.readFileSync(new URL('../src/components/WhatsAppPage.jsx',import.meta.url),'utf8')
