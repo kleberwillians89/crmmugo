@@ -750,9 +750,14 @@ const handleRequest = async (request: Request, requestId: string) => {
       if (duplicateResult.data?.status === 'failed') await client.from('whatsapp_collection_alerts').delete().eq('id',duplicateResult.data.id)
       const normalizedPhone = brazilianPhone(payload.phone)
       const storedPhones = [clientRow.phone,clientRow.billing_contact_phone].map(brazilianPhone).filter(Boolean)
+      // Qualquer contato ativo cadastrado do cliente (Clientes > Contatos e WhatsApp) também é destino válido.
+      const contactRows = await client.from('client_contacts').select('name,phone').eq('organization_id',profile.organization_id).eq('client_id',clientRow.id).eq('active',true)
+      if (!contactRows.error) storedPhones.push(...(contactRows.data||[]).map((row:any)=>brazilianPhone(row.phone)).filter(Boolean))
       if (!normalizedPhone) return fail('INVALID_PHONE', 'Informe um número de WhatsApp válido com DDD.', 422)
       if (!storedPhones.includes(normalizedPhone)) return fail('PHONE_MISMATCH', 'O telefone não pertence ao cliente informado.', 403)
-      const safeName = text(clientRow.contact_name || clientRow.trade_name || clientRow.company_name, 120).split(/\s+/)[0] || 'Cliente'
+      // Cumprimenta quem vai receber: o contato dono do número escolhido, senão o contato principal.
+      const chosenContact:any = contactRows.error ? null : (contactRows.data||[]).find((row:any)=>brazilianPhone(row.phone)===normalizedPhone)
+      const safeName = text(chosenContact?.name || clientRow.contact_name || clientRow.trade_name || clientRow.company_name, 120).split(/\s+/)[0] || 'Cliente'
       const config:any=metaConfig(true)
       if(config.error)return config.error
       config.requestId=requestId

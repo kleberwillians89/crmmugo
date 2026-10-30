@@ -1,6 +1,11 @@
 const digits=(value)=>String(value??'').replace(/\D/g,'')
-export function normalizeBrazilianPhone(value){let phone=digits(value);if(phone.startsWith('00'))phone=phone.slice(2);if(!phone.startsWith('55')&&(phone.length===10||phone.length===11))phone=`55${phone}`;return phone}
-export function isValidBrazilianPhone(value){return /^55[1-9]{2}9?\d{8}$/.test(normalizeBrazilianPhone(value))}
+const explicitInternational=(value)=>/^\s*(\+|00)/.test(String(value??''))
+// Número com "+" (ou 00) é tratado como internacional e mantido como está (ex.: +34 632 88 10 89).
+// Sem DDI, 10/11 dígitos são número brasileiro e ganham 55.
+export function normalizeBrazilianPhone(value){let phone=digits(value);if(phone.startsWith('00'))phone=phone.slice(2);if(!explicitInternational(value)&&!phone.startsWith('55')&&(phone.length===10||phone.length===11))phone=`55${phone}`;return phone}
+export function isValidBrazilianPhone(value){const phone=normalizeBrazilianPhone(value);if(phone.startsWith('55'))return /^55[1-9]{2}9?\d{8}$/.test(phone);return explicitInternational(value)&&/^[1-9]\d{7,14}$/.test(phone)}
+export const isValidWhatsAppPhone=isValidBrazilianPhone
+export function formatWhatsAppPhone(value){const phone=normalizeBrazilianPhone(value);if(!phone)return '';if(/^55\d{11}$/.test(phone))return `+55 ${phone.slice(2,4)} ${phone.slice(4,9)}-${phone.slice(9)}`;if(/^55\d{10}$/.test(phone))return `+55 ${phone.slice(2,4)} ${phone.slice(4,8)}-${phone.slice(8)}`;return `+${phone}`}
 export function buildWhatsAppLink(phone,message){if(!isValidBrazilianPhone(phone))return '';return `https://wa.me/${normalizeBrazilianPhone(phone)}?text=${encodeURIComponent(message)}`}
 const hello=(name)=>`Olá, ${name||'tudo bem'}!`
 export const buildClientMessage=({name})=>`${hello(name)}\n\nTudo bem?\n\nEstou entrando em contato pela Agência Mugô.\n\nFico à disposição.`

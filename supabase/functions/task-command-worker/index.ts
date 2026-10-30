@@ -4,6 +4,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { HELP_TEXT, REFERENTIAL_ALL_WORDS, parseMultiSelection, parseNamedDelegation, parseSelfTask, selectionActionIntent, REFERENTIAL_ORDINAL_MAP, foldReferential, foldText, hasExplicitWriteSignal, isTaskCreationCommandOnly, parseInternalCommand, parseTaskSchedule, resolveRelativeDate, splitInlineNumberedList, taskShortId, taskTitleFromText } from '../_shared/internalCommandCore.js'
 import { getMemberTaskReadModel } from '../_shared/internalAssistantReadModel.js'
+import { collectionConfirmation, collectionPhoneOptions, collectionPhoneQuestion, parseCollectionAmount } from '../_shared/collectionCore.js'
 import { prospectReplyAction } from '../_shared/prospectReminderCore.js'
 import {advanceConversationState,scopedConversationState,conversationTrace} from '../_shared/conversationKernel.js'
 import { buildPendingSecretaryPlan, formatSecretaryExecutionReply, planInternalSecretaryMessage, retainSecretaryPlan, runSecretaryActions, safeSecretaryReadRescue, safeSecretaryWriteRescue, safeUndoLastCompletionRescue, secretaryActionToCommand, secretaryCommandInputRequest, validateSecretaryPlan } from '../_shared/internalSecretaryAgent.js'
@@ -36,7 +37,7 @@ const CLARIFY_TEXT = 'Não entendi esse comando. Pode me dizer de outro jeito o 
 const ALLOWED_INTENTS = new Set(['CREATE_TASK','LIST_TODAY','LIST_MINE','LIST_TEAM','LIST_OVERDUE','DAY_SUMMARY','WEEK_SUMMARY','PLAN_MY_DAY','COMPLETE_TASK','START_TASK','CANCEL_TASK','UPDATE_TASK_STATUS','MOVE_TASK','SET_PRIORITY','ASSIGN_TASK','LIST_WAITING_ATTENDANCE','ASSIGN_CONVERSATION','TAKE_CONVERSATION','PAUSE_AUTOMATION','RESUME_AUTOMATION','LIST_PENDING_CHARGES','ACTIVITY_START','ACTIVITY_COMPLETE','ACTIVITY_DATE_RESOLUTION','RECORD_DECISION','RECORD_OBSERVATION','RECORD_TIME','RECORD_PROPOSAL','UPDATE_PROPOSAL','ATTACH_PROPOSAL_FILE','FINANCIAL_EXPENSE_REQUEST','FINANCIAL_RECEIPT_REQUEST','FREELANCE_INCOME_REQUEST','CONFIRM_FINANCIAL','CANCEL_FINANCIAL','COLLECTION_ACTIVITY','COLLECTION_SEND','FOLLOW_UP','CLIENT_UPDATE','DOCUMENT','QUERY_OVERDUE_RECEIVABLES','QUERY_RECEIVED_TOTAL','QUERY_EXPENSES','QUERY_PENDING_CONFIRMATIONS','QUERY_WEEKLY_HOURS','HELP'])
 // Comandos que expõem ou movimentam financeiro empresarial/comercial sensível: exigem admin ou manager.
 // Tarefas, atividades, horas, observações e solicitação de despesa continuam liberadas ao operador.
-const FINANCIAL_ADMIN_INTENTS = new Set(['FINANCIAL_RECEIPT_REQUEST','FREELANCE_INCOME_REQUEST','COLLECTION_SEND','LIST_PENDING_CHARGES','RECORD_PROPOSAL','UPDATE_PROPOSAL','QUERY_OVERDUE_RECEIVABLES','QUERY_RECEIVED_TOTAL','QUERY_EXPENSES'])
+const FINANCIAL_ADMIN_INTENTS = new Set(['FINANCIAL_RECEIPT_REQUEST','FREELANCE_INCOME_REQUEST','COLLECTION_SEND','COLLECTION_AMOUNT_EDIT','LIST_PENDING_CHARGES','RECORD_PROPOSAL','UPDATE_PROPOSAL','QUERY_OVERDUE_RECEIVABLES','QUERY_RECEIVED_TOTAL','QUERY_EXPENSES'])
 
 // Contexto estruturado (intenção pendente, itens numerados já apresentados, últimas trocas) — a IA
 // resolve continuação/referência/ambiguidade a partir disso, nunca inventando IDs ou registros.
@@ -191,15 +192,37 @@ async function clearAssistantSession(admin:any,event:any){
   if(result.error&&result.error.code!=='42P01')throw result.error
   event.session=null
 }
-async function sendCollectionViaMugozap(event:any,installment:any){
+async function sendCollectionViaMugozap(event:any,installment:any,chosenPhone?:string|null){
   const url=Deno.env.get('SUPABASE_URL'),serviceKey=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),workerKey=Deno.env.get('TASK_COMMAND_WORKER_KEY')
   if(!url||!serviceKey||!workerKey)throw Object.assign(new Error('Motor de cobrança não configurado.'),{code:'COLLECTION_ENGINE_MISSING'})
-  const phone=clean(installment.clients?.billing_contact_phone||installment.clients?.phone,40)
+  const phone=clean(chosenPhone||installment.clients?.billing_contact_phone||installment.clients?.phone,40)
   if(!phone)throw Object.assign(new Error('Cliente sem telefone financeiro válido.'),{code:'COLLECTION_PHONE_MISSING'})
   const response=await fetch(`${url}/functions/v1/mugozap-api`,{method:'POST',headers:{Authorization:`Bearer ${serviceKey}`,'Content-Type':'application/json','X-Task-Command-Worker-Key':workerKey},body:JSON.stringify({operation:'start_template_conversation',payload:{team_member_id:event.team_member_id,client_id:installment.client_id,installment_id:installment.id,phone,template_name:'mugo_alerta_pagamento_pendente',language:'pt_BR',idempotency_key:`internal-collection-${event.id}`}}),signal:AbortSignal.timeout(30_000)})
   const body=await response.json().catch(()=>({}))
   if(!response.ok||!body?.ok)throw Object.assign(new Error(body?.error?.message||body?.message||'Não foi possível enviar a cobrança.'),{code:body?.error?.code||body?.code||'COLLECTION_SEND_FAILED'})
   return body.data
+}
+
+const COLLECTION_INSTALLMENT_FIELDS='id,client_id,contract_id,reference_month,due_date,amount,received_amount,status,paid_at,clients(company_name,trade_name,contact_name,phone,billing_contact_name,billing_contact_phone)'
+async function collectionContacts(admin:any,org:string,clientId:string){
+  const result=await admin.from('client_contacts').select('name,phone,is_primary,active').eq('organization_id',org).eq('client_id',clientId).eq('active',true)
+  if(result.error){if(['42P01','PGRST205'].includes(result.error.code))return [];throw result.error}
+  return result.data||[]
+}
+// Depois de escolhida a parcela: pergunta o número (se houver mais de um) ou já pede a confirmação.
+async function nextCollectionStep(admin:any,event:any,installment:any){
+  const clientName=installment.clients?.trade_name||installment.clients?.company_name||'Cliente'
+  const options=collectionPhoneOptions(installment.clients||{},await collectionContacts(admin,event.organization_id,installment.client_id))
+  if(!options.length){await clearAssistantSession(admin,event);return `${clientName} não tem WhatsApp válido cadastrado. Cadastre em Clientes > Contatos e WhatsApp. Nenhuma cobrança foi enviada.`}
+  if(options.length>1){
+    await saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'COLLECTION_SEND',context:{candidate_items:options.map((item:any,index:number)=>({index:index+1,type:'collection_phone',label:item.name,phone:item.phone}))},pending_action:'select_collection_phone',pending_entity_type:'invoice_installments',pending_entity_id:installment.id})
+    return collectionPhoneQuestion(clientName,options)
+  }
+  return askCollectionConfirmation(admin,event,installment,options[0])
+}
+async function askCollectionConfirmation(admin:any,event:any,installment:any,target:any){
+  await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'COLLECTION_SEND',context:{collection_phone:target.phone,collection_contact:target.name},pending_action:'send_collection_template',pending_entity_type:'invoice_installments',pending_entity_id:installment.id})
+  return{status:'confirmation_required',reply:collectionConfirmation({clientName:installment.clients?.trade_name||installment.clients?.company_name||'cliente',amountLabel:brl(Number(installment.amount)),contactName:target.name,phone:target.phone})}
 }
 
 const formatMoney=(value:number,currency='BRL')=>new Intl.NumberFormat('pt-BR',{style:'currency',currency}).format(value)
@@ -384,13 +407,15 @@ async function execute(admin: any, event: any, command: any) {
   if(['CONFIRM_FINANCIAL','CANCEL_FINANCIAL'].includes(command.intent)&&event.session?.active_intent==='COLLECTION_SEND'){
     if(command.intent==='CANCEL_FINANCIAL'){await clearAssistantSession(admin,event);return 'Cobrança cancelada. Nenhuma mensagem foi enviada.'}
     if(!(await isAdminActor(admin,event)))return 'O envio de cobrança exige perfil admin ou manager.'
-    const installment=await admin.from('invoice_installments').select('id,client_id,contract_id,reference_month,due_date,amount,received_amount,status,paid_at,clients(company_name,trade_name,phone,billing_contact_phone)').eq('organization_id',org).eq('id',event.session.pending_entity_id).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).single()
+    if(event.session.pending_action!=='send_collection_template'||!event.session.pending_entity_id)return event.session.pending_action==='select_collection_phone'?'Antes, me diz para qual número da lista eu envio (responda 1, 2…).':'Antes, escolha a parcela da lista (responda 1, 2…).'
+    const installment=await admin.from('invoice_installments').select(COLLECTION_INSTALLMENT_FIELDS).eq('organization_id',org).eq('id',event.session.pending_entity_id).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).maybeSingle()
     if(installment.error)throw installment.error
-    const sent=await sendCollectionViaMugozap(event,installment.data)
+    if(!installment.data){await clearAssistantSession(admin,event);return 'Essa parcela não está mais em aberto (foi paga, cancelada ou recebeu valor). Nenhuma cobrança foi enviada.'}
+    const sent=await sendCollectionViaMugozap(event,installment.data,event.session.context?.collection_phone||null)
     await recordEvent(admin,event,'collection_sent','Cobrança enviada pelo WhatsApp',installment.data.clients?.trade_name||installment.data.clients?.company_name||'Cliente',{installment_id:installment.data.id,provider_message_id:sent?.provider_message_id||sent?.message_id||null})
     await clearAssistantSession(admin,event)
     event.entity_type='invoice_installments';event.entity_id=installment.data.id
-    return `Enviado ✓\n${installment.data.clients?.trade_name||installment.data.clients?.company_name||'Cliente'} — ${brl(Number(installment.data.amount))}.`
+    return `Enviado ✓\n${installment.data.clients?.trade_name||installment.data.clients?.company_name||'Cliente'} — ${brl(Number(installment.data.amount))}${event.session.context?.collection_contact?` para ${event.session.context.collection_contact}`:''}.`
   }
   // Cancelamento tem prioridade sobre qualquer contexto pendente na sessão (expense/activity/task
   // aguardando dados) — sem isso o usuário ficava preso a um fluxo incompleto sem saída explícita.
@@ -515,29 +540,56 @@ async function execute(admin: any, event: any, command: any) {
     event.entity_type='client_update';event.entity_id=client.item.id
     return `Anotado ✓\n${client.item.trade_name||client.item.company_name} — ${clean(command.summary,180)}\nQuer que eu crie uma tarefa para isso?`
   }
+  // Valor novo enquanto a cobrança aguarda o "sim": atualiza a parcela (é o valor que o cliente vê ao
+  // tocar em "Consultar cobrança") e pede a confirmação de novo, para o mesmo número.
+  if(command.intent==='COLLECTION_AMOUNT_EDIT'&&event.session?.active_intent==='COLLECTION_SEND'&&event.session?.pending_action==='send_collection_template'){
+    const amount=Math.round(Number(command.amount)*100)/100
+    if(!(amount>0))return 'Não entendi o valor. Mande só o número, ex.: 2300.'
+    const current=await admin.from('invoice_installments').select(COLLECTION_INSTALLMENT_FIELDS).eq('organization_id',org).eq('id',event.session.pending_entity_id).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).maybeSingle()
+    if(current.error)throw current.error
+    if(!current.data){await clearAssistantSession(admin,event);return 'Essa parcela não está mais em aberto. Nenhuma cobrança foi enviada.'}
+    const previous=Number(current.data.amount)
+    if(previous!==amount){
+      const updated=await admin.from('invoice_installments').update({amount,original_amount:amount,currency:'BRL',exchange_rate:1}).eq('organization_id',org).eq('id',current.data.id).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).select(COLLECTION_INSTALLMENT_FIELDS).single()
+      if(updated.error)throw updated.error
+      current.data.amount=updated.data.amount
+      await admin.from('commercial_events').insert({organization_id:org,client_id:current.data.client_id,contract_id:current.data.contract_id,installment_id:current.data.id,event_type:'installment_amount_changed',title:'Valor da parcela alterado',description:'Ajustado na cobrança pelo WhatsApp interno.',old_value:{amount:previous},new_value:{amount},created_by:null})
+      await recordEvent(admin,event,'installment_amount_changed','Valor da parcela alterado pelo WhatsApp',`${brl(previous)} → ${brl(amount)}`,{installment_id:current.data.id,old_amount:previous,new_amount:amount})
+    }
+    const target={name:event.session.context?.collection_contact||current.data.clients?.billing_contact_name||current.data.clients?.contact_name||'contato',phone:event.session.context?.collection_phone||current.data.clients?.billing_contact_phone||current.data.clients?.phone}
+    const asked:any=await askCollectionConfirmation(admin,event,current.data,target)
+    return{...asked,reply:`Valor atualizado: ${brl(previous)} → ${brl(Number(current.data.amount))}.\n\n${asked.reply}`}
+  }
+  if(command.intent==='SESSION_SELECTION'&&event.session?.active_intent==='COLLECTION_SEND'&&event.session?.pending_action==='select_collection_phone'){
+    const items=(event.session.context?.candidate_items||[]).filter((item:any)=>item.type==='collection_phone')
+    const picked=items.find((item:any)=>item.index===Number(command.selection))
+    if(!picked)return `Escolha um número entre 1 e ${items.length}.`
+    const row=await admin.from('invoice_installments').select(COLLECTION_INSTALLMENT_FIELDS).eq('organization_id',org).eq('id',event.session.pending_entity_id).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).maybeSingle()
+    if(row.error)throw row.error
+    if(!row.data){await clearAssistantSession(admin,event);return 'Essa parcela não está mais em aberto. Nenhuma cobrança foi enviada.'}
+    return askCollectionConfirmation(admin,event,row.data,{name:picked.label,phone:picked.phone})
+  }
   if(command.intent==='COLLECTION_SEND'){
     if(!clean(command.subject_query))return 'Qual cliente você deseja cobrar?'
     const client=await findClient(admin,org,command.subject_query)
     if(client.kind==='ambiguous')return ambiguity(clean(command.subject_query),client.items)
     if(client.kind!=='one')return `Não encontrei o cliente “${clean(command.subject_query)}”. Nenhuma cobrança foi enviada.`
-    const rows=await admin.from('invoice_installments').select('id,client_id,contract_id,reference_month,due_date,amount,received_amount,status,paid_at,clients(company_name,trade_name,phone,billing_contact_phone)').eq('organization_id',org).eq('client_id',client.item.id).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).order('due_date')
+    const rows=await admin.from('invoice_installments').select(COLLECTION_INSTALLMENT_FIELDS).eq('organization_id',org).eq('client_id',client.item.id).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).order('due_date')
     if(rows.error)throw rows.error
     if(!rows.data?.length)return `${client.item.trade_name||client.item.company_name} não possui parcela elegível para cobrança.`
     if(rows.data.length>1){
       await saveAssistantSession(admin,event,{state:'awaiting_selection',active_intent:'COLLECTION_SEND',context:{installment_ids:rows.data.map((row:any)=>row.id)},pending_action:'select_collection_installment',pending_entity_type:'invoice_installments',pending_entity_id:null})
       return `Encontrei ${rows.data.length} parcelas:\n\n${rows.data.map((row:any,index:number)=>`${index+1}. ${brl(Number(row.amount))} — ${row.status==='overdue'?'vencida':`vence ${row.due_date}`}`).join('\n')}\n\nQual você quer cobrar?`
     }
-    const installment=rows.data[0]
-    await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'COLLECTION_SEND',context:{},pending_action:'send_collection_template',pending_entity_type:'invoice_installments',pending_entity_id:installment.id})
-    return{status:'confirmation_required',reply:`Enviar cobrança de ${installment.clients?.trade_name||installment.clients?.company_name||clean(command.subject_query)} de ${brl(Number(installment.amount))}?`}
+    return nextCollectionStep(admin,event,rows.data[0])
   }
   if(command.intent==='SESSION_SELECTION'&&event.session?.active_intent==='COLLECTION_SEND'){
     const ids=event.session.context?.installment_ids||[],index=Number(command.selection)-1
     if(!Number.isInteger(index)||index<0||index>=ids.length)return `Escolha um número entre 1 e ${ids.length}.`
-    const row=await admin.from('invoice_installments').select('id,amount,clients(company_name,trade_name)').eq('organization_id',org).eq('id',ids[index]).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).single()
+    const row=await admin.from('invoice_installments').select(COLLECTION_INSTALLMENT_FIELDS).eq('organization_id',org).eq('id',ids[index]).in('status',['pending','overdue']).eq('received_amount',0).is('paid_at',null).maybeSingle()
     if(row.error)throw row.error
-    await saveAssistantSession(admin,event,{state:'awaiting_confirmation',active_intent:'COLLECTION_SEND',context:{},pending_action:'send_collection_template',pending_entity_type:'invoice_installments',pending_entity_id:row.data.id})
-    return{status:'confirmation_required',reply:`Enviar cobrança de ${row.data.clients?.trade_name||row.data.clients?.company_name||'cliente'} de ${brl(Number(row.data.amount))}?`}
+    if(!row.data)return 'Essa parcela não está mais em aberto. Escolha outra da lista.'
+    return nextCollectionStep(admin,event,row.data)
   }
   if(command.intent==='BULK_COMPLETE_MINE'){
     const model=await getMemberTaskReadModel(admin,org,event.team_member_id,today())
@@ -1061,6 +1113,11 @@ async function processEvent(admin: any, event: any) {
       else if(menu?.intent==='LIST_WAITING_ATTENDANCE')command={intent:'LIST_WAITING_ATTENDANCE',confidence:1}
       else if(menu?.intent==='FINANCIAL_MENU')command={intent:'HELP',confidence:1}
     }
+    // Cobrança aguardando "sim": uma mensagem que é só um valor ("2300", "R$ 2.300,00") edita o valor.
+    if(event.session?.active_intent==='COLLECTION_SEND'&&event.session?.pending_action==='send_collection_template'&&!['CONFIRM_FINANCIAL','CANCEL_FINANCIAL'].includes(command.intent)){
+      const editedAmount=parseCollectionAmount(cleanedRaw)
+      if(editedAmount)command={intent:'COLLECTION_AMOUNT_EDIT',amount:editedAmount,confidence:1}
+    }
     const selectedTask=event.session?.context?.selected_task
     if(selectedTask&&['ACTIVITY_START','ACTIVITY_COMPLETE'].includes(command.intent)&&(!clean(command.summary)||['ela','ele','isso','essa','esse'].includes(foldText(command.summary)))){
       command={intent:command.intent==='ACTIVITY_START'?'START_TASK':'COMPLETE_TASK',task_query:selectedTask.label,confidence:1}
@@ -1213,7 +1270,7 @@ async function processEvent(admin: any, event: any) {
     if(['LIST_TODAY','LIST_OVERDUE'].includes(command.intent)&&!/\b(equipe|time|todos|todo mundo|geral|de todo mundo|da mugo inteira)\b/.test(foldedRaw)){
       command={intent:'LIST_MINE',confidence:1}
     }
-    const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','send_collection_template','offer_plan_day'])
+    const protectedPendingActions=new Set(['confirm_task_date','resolve_task_date','resolve_task_schedule','confirm_activity_date','select_task','select_collection_installment','select_collection_phone','send_collection_template','offer_plan_day'])
     const standaloneGreeting=command.intent==='GREETING'&&cleanedRaw.split(/\s+/).length<=4
     const secretaryKey=Deno.env.get('OPENAI_API_KEY')||'',secretaryModel=Deno.env.get('TASK_COMMAND_MODEL')||Deno.env.get('OPENAI_MODEL')||''
     const operationalReadProbe=safeSecretaryReadRescue(event.raw_text,{localDate:today()})
@@ -1222,6 +1279,7 @@ async function processEvent(admin: any, event: any) {
     const undoCompletionProbe=safeUndoLastCompletionRescue(event.raw_text,{recentCompletedTasks})
     const deterministicShortcut=['document','image'].includes(event.message_type)
       || ['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','LIST_MINE','ACK_CONVERSATION','PROSPECT_DONE','PROSPECT_SKIP','PROSPECT_ACCEPTED','PROSPECT_REPLIED'].includes(command.intent)
+      || command.intent==='COLLECTION_AMOUNT_EDIT'
       // Tarefa única, com título e data entendidos pelo parser: vai direto (o handler sempre pede confirmação
       // antes de gravar). Pedidos com mais de uma ação ("... e coloca pra Julia ...") continuam com a IA.
       || (command.intent==='CREATE_TASK'&&clean(command.title)&&command.due_date&&Number(command.confidence)>=.95&&!(Array.isArray(command.items)&&command.items.length>1)&&!/\b(?:e|tamb[eé]m)\s+(?:cria|crie|coloca|bota|registra|marca|anota|lan[cç]a)\b/iu.test(cleanedRaw))
@@ -1325,7 +1383,7 @@ async function processEvent(admin: any, event: any) {
     const contextualActivity=command.intent==='ACTIVITY_COMPLETE'&&['ACTIVITY_START','ACTIVITY_CAPTURE'].includes(event.session?.active_intent)&&command.contextual
     // Uma saudação solta ("oi") não deve derrubar um fluxo pendente (lista aguardando escolha, tarefa
     // aguardando título...) — só um novo comando de verdade cancela o contexto anterior.
-    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','ACK_CONVERSATION','PROSPECT_DONE','PROSPECT_SKIP','PROSPECT_ACCEPTED','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
+    if(event.session&&!secretaryOwnsTurn&&!contextualActivity&& !['CONFIRM_FINANCIAL','CANCEL_FINANCIAL','UNKNOWN','SESSION_SELECTION','SESSION_SELECTION_MULTI','BULK_COMPLETE_MINE','ACK_CONVERSATION','PROSPECT_DONE','PROSPECT_SKIP','PROSPECT_ACCEPTED','GREETING','TASK_CONTEXT_LIST','ACTIVITY_DATE_RESOLUTION','CREATE_TASK_DATE_UNRESOLVED'].includes(command.intent) && command.intent!=='COLLECTION_AMOUNT_EDIT' && command.intent!==event.session.active_intent)await clearAssistantSession(admin,event)
     const turnRelation=secretaryPlan?.turn_relation||'new_request'
     event.result={...(event.result||{}),turn_relation:turnRelation}
     if(turnRelation==='cancel_plan')await clearAssistantSession(admin,event)
