@@ -64,7 +64,9 @@ const auditOperation = (stage: string, operation: string, detail: Record<string,
 const templateVariables = (component: any) => {
   const content = text(component?.text, 8000)
   const positional = [...content.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map(match => Number(match[1]))
-  return positional.length ? Math.max(...positional) : 0
+  if (positional.length) return Math.max(...positional)
+  // Templates com variáveis NOMEADAS ({{nome}}, {{marca}}): conta os nomes distintos.
+  return new Set([...content.matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/g)].map(match => match[1])).size
 }
 const nonEmptyTemplateParameter = (parameter: any) => {
   const parameterType=metaStatus(parameter?.type)
@@ -260,7 +262,11 @@ const metaTemplateComponents = (components: any) => (Array.isArray(components) ?
   const componentType = metaStatus(component?.type).toLowerCase()
   const parameters = (Array.isArray(component?.parameters) ? component.parameters : []).map((parameter: any) => {
     const parameterType = metaStatus(parameter?.type).toLowerCase()
-    if (parameterType === 'text') return { type: 'text', text: text(parameter?.text, 2000) }
+    if (parameterType === 'text') {
+      // Template com variáveis nomeadas: a Meta exige o nome de cada parâmetro (parameter_name).
+      const name = text(parameter?.parameter_name, 60)
+      return /^[a-z0-9_]{1,60}$/.test(name) ? { type: 'text', parameter_name: name, text: text(parameter?.text, 2000) } : { type: 'text', text: text(parameter?.text, 2000) }
+    }
     if (parameterType === 'coupon_code') return { type: 'coupon_code', coupon_code: text(parameter?.coupon_code, 120) }
     if (['image', 'video', 'document'].includes(parameterType)) return { type: parameterType, [parameterType]: { link: text(parameter?.[parameterType]?.link, 2000) } }
     return null
