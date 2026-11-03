@@ -13,6 +13,7 @@ export const CONTENT_ACTIONS = {
   aprovado: { prefix: 'CONTEÚDO — Publicar', verb: 'aprovou', priority: 'medium' },
   ajuste_solicitado: { prefix: 'CONTEÚDO — Ajustar', verb: 'pediu ajuste em', priority: 'high' },
   editado_pelo_cliente: { prefix: 'CONTEÚDO — Conferir edição', verb: 'editou', priority: 'high' },
+  comentario: { prefix: 'CONTEÚDO — Responder comentário', verb: 'comentou em', priority: 'medium' },
 }
 
 // Evento de conteúdo vindo do Dados -> tarefa no CRM. Nunca confia em ids do chamador além do item.
