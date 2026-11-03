@@ -39,3 +39,12 @@ export const contentTask = (event, clientName) => {
     tags: ['conteudo', 'mugo-dados'],
   }
 }
+
+// Mensagens enviadas pelo Mugô Dados (convites/avisos "dados-…" e Central de Automações "auto-…"):
+// o status da Meta (enviado → entregue → lido / falhou) volta para a tela de lá.
+export const isDadosOutbound = (idempotencyKey) => /^(dados|auto)-/.test(String(idempotencyKey || ''))
+
+export const dadosStatusEvent = (providerMessageId, status, error) => ({
+  type: 'message_status',
+  status: { provider_message_id: clip(providerMessageId, 240), status: clip(status, 20), ...(error ? { error: clip(error, 300) } : {}) },
+})

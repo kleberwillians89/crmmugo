@@ -20,7 +20,7 @@ import { findInternalMemberByPhone } from '../_shared/internalCommandCore.js'
 import { classifyConversationKind, extractLeadAttribution } from '../_shared/commercialAgentCore.js'
 import { SECOND_CTA_TEXT, WAITING_CTA_TEXT, buildTriageCtas, interactiveCtaBody, isWaitingNudge } from '../_shared/attendanceCore.js'
 import { trackCtas } from '../_shared/ctaTracking.js'
-import { isDadosInviteReply } from '../_shared/dadosBridgeCore.js'
+import { dadosStatusEvent, isDadosInviteReply, isDadosOutbound } from '../_shared/dadosBridgeCore.js'
 
 const jsonHeaders = { 'Content-Type': 'application/json' }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: jsonHeaders })
@@ -120,16 +120,17 @@ const dispatchCommercialAiWorker = async () => {
     return false
   }
 }
-const forwardDadosStatus = async (providerMessageId: string, status: string, error: string | null) => {
+// Status de mensagem enviada pelo Dados: uma tentativa curta e em segundo plano (o webhook da Meta não espera).
+// Falhar aqui nunca derruba o webhook; o Dados continua mostrando o último status que recebeu.
+const forwardDadosStatus = (providerMessageId: string, status: string, error: string | null) => {
   const url = text(Deno.env.get('DADOS_HOOK_URL'), 500), key = Deno.env.get('DADOS_OPS_API_KEY') || ''
   if (!url.startsWith('https://') || !key) return
-  try {
-    await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dados-Ops-Key': key },
-      body: JSON.stringify({ type: 'message_status', status: { provider_message_id: providerMessageId, status, error } }),
-      signal: AbortSignal.timeout(10_000) })
-  } catch (_error) {
-    console.log(JSON.stringify({ event: 'dados_status_forward_failed', status }))
-  }
+  const task = fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dados-Ops-Key': key },
+    body: JSON.stringify(dadosStatusEvent(providerMessageId, status, error)), signal: AbortSignal.timeout(60_000) })
+    .then((response) => console.log(JSON.stringify({ event: 'dados_status_forwarded', status, status_http: response.status })))
+    .catch(() => console.log(JSON.stringify({ event: 'dados_status_forward_failed', status })))
+  const runtime = (globalThis as any).EdgeRuntime
+  if (runtime?.waitUntil) runtime.waitUntil(task)
 }
 
 const processStatus = async (admin: any, connection: any, status: any, payloadHash: string) => {
@@ -168,10 +169,7 @@ const processStatus = async (admin: any, connection: any, status: any, payloadHa
     const updated = await admin.from('whatsapp_messages').update(patch).eq('id', current.data.id)
     if (updated.error) throw updated.error
     await completeWebhookEvent(admin, ledger.id)
-    // Mensagens enviadas pelo Mugô Dados (chaves "dados-"/"auto-"): repassa o status para a tela de lá mostrar
-    // enviado → entregue → lido. Falha aqui nunca derruba o webhook.
-    const key = String(current.data.idempotency_key || '')
-    if (key.startsWith('dados-') || key.startsWith('auto-')) await forwardDadosStatus(providerMessageId, nextStatus, patch.error_message as string | null)
+    if (isDadosOutbound(current.data.idempotency_key)) forwardDadosStatus(providerMessageId, nextStatus, patch.error_message as string | null)
     return true
   } catch (error) {
     await failWebhookEvent(admin, ledger.id, error)
