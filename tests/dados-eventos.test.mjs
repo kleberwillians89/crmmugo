@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
-import { contentTask, isDadosInviteReply } from '../supabase/functions/_shared/dadosBridgeCore.js'
+import { contentTask, dadosStatusEvent, isDadosInviteReply, isDadosOutbound } from '../supabase/functions/_shared/dadosBridgeCore.js'
 
 const events = fs.readFileSync(new URL('../supabase/functions/dados-ops-events/index.ts', import.meta.url), 'utf8')
 const webhook = fs.readFileSync(new URL('../supabase/functions/whatsapp-webhook/index.ts', import.meta.url), 'utf8')
@@ -53,4 +53,17 @@ test('dados-ops-events: chave própria, tenant pelo external_integrations, idemp
   assert.match(config, /\[functions\.dados-ops-events\]\nverify_jwt = false/)
   const logs = [...events.matchAll(/console\.log\(JSON\.stringify\(\{([^}]*)\}\)\)/g)].map((m) => m[1])
   for (const line of logs) assert.doesNotMatch(line, /title|comment|notes|phone|name/)
+})
+
+test('status da Meta volta ao Dados só para mensagens enviadas por ele', () => {
+  assert.equal(isDadosOutbound('dados-abc123'), true)
+  assert.equal(isDadosOutbound('auto-abc123'), true)
+  assert.equal(isDadosOutbound('collection-alert-1'), false)
+  assert.equal(isDadosOutbound(null), false)
+  assert.deepEqual(dadosStatusEvent('wamid.X', 'read', null), { type: 'message_status', status: { provider_message_id: 'wamid.X', status: 'read' } })
+  assert.equal(dadosStatusEvent('wamid.X', 'failed', 'número inválido').status.error, 'número inválido')
+  const hook = webhook.indexOf('isDadosOutbound(current.data.idempotency_key)')
+  assert.ok(hook > webhook.indexOf('const processStatus'))
+  assert.ok(hook > webhook.indexOf("if (updated.error) throw updated.error"))
+  assert.match(webhook, /select\('id,status,idempotency_key'\)/)
 })
