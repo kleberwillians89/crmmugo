@@ -8,8 +8,9 @@ import { extractLeadAttribution } from './commercialAgentCore.js'
 const clean = (value, max = 240) => String(value ?? '').trim().slice(0, max)
 const digitsOnly = (value) => String(value ?? '').replace(/\D/g, '')
 
-// "ref:loja-qr", "ref loja-qr", "ref#loja-qr" — só letras minúsculas, números, _ e -.
-const ENTRY_CODE = /(?:^|[\s(\[])ref[:#\s-]+([a-z0-9][a-z0-9_-]{1,39})(?=$|[\s)\].,!?])/i
+// Só "ref:codigo" (com dois-pontos), para não confundir com referência de produto ("tênis ref 4432").
+// O código começa por letra: "ref:loja-qr", "ref: bio_insta".
+const ENTRY_CODE = /(?:^|[\s(\[])ref:\s?([a-z][a-z0-9_-]{1,39})(?=$|[\s)\].,!?])/i
 
 export function extractEntryCode(text) {
   const match = ENTRY_CODE.exec(String(text ?? ''))
@@ -40,15 +41,18 @@ export function extractOriginTouch(message, bodyText = '') {
 // Chave de telefone para casar conversa e pedido SEM trocar o número entre os sistemas.
 // Celular BR com ou sem o 9º dígito vira a mesma chave (55 + DDD + 8 últimos dígitos).
 // O MUGOVERSO calcula a mesma chave do telefone do pedido (services/whatsapp_insights.py: phone_key).
-export function phoneKeySource(value) {
-  let d = digitsOnly(value)
-  if ((d.length === 10 || d.length === 11) && !d.startsWith('55')) d = `55${d}`
+// `international`: o valor já vem com código do país (o wa_id do WhatsApp sempre vem). Sem isso, 10/11
+// dígitos sem "+" são número nacional (DDD + número, inclusive DDD 55) e ganham o 55.
+export function phoneKeySource(value, { international = false } = {}) {
+  const raw = String(value ?? '').trim()
+  let d = digitsOnly(raw)
+  if (!international && !raw.startsWith('+') && (d.length === 10 || d.length === 11)) d = `55${d}`
   if (d.startsWith('55') && (d.length === 12 || d.length === 13)) return `55${d.slice(2, 4)}${d.slice(-8)}`
   return d.length >= 8 && d.length <= 15 ? d : ''
 }
 
-export async function phoneKey(value) {
-  const source = phoneKeySource(value)
+export async function phoneKey(value, options = {}) {
+  const source = phoneKeySource(value, options)
   if (!source) return null
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`mugo-wa:${source}`))
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 32)

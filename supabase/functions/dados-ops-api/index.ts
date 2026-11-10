@@ -171,10 +171,10 @@ async function brandConnectionIds(admin: any, org: string, clientId: string): Pr
 
 async function touchesByContact(admin: any, org: string, contactIds: string[], { first = false } = {}) {
   const out = new Map<string, any>()
-  for (const ids of chunk(contactIds, 150)) {
+  for (const ids of chunk(contactIds, 100)) {
     const rows = await admin.from('whatsapp_contact_touches')
       .select('contact_id,source,ad_id,headline,entry_code,occurred_at')
-      .eq('organization_id', org).in('contact_id', ids).order('occurred_at', { ascending: first }).limit(2000)
+      .eq('organization_id', org).in('contact_id', ids).order('occurred_at', { ascending: first }).limit(5000)
     if (rows.error) throw rows.error
     for (const row of rows.data || []) if (!out.has(row.contact_id)) out.set(row.contact_id, row)
   }
@@ -224,7 +224,7 @@ async function handleBrandConversations(admin: any, org: string, clientId: strin
       last_message_at: row.last_message_at, service_window_expires_at: row.service_window_expires_at,
       contact: {
         name: text(contact.display_name || contact.profile_name, 120) || null, phone_masked: maskPhone(contact.wa_id),
-        phone_key: await phoneKey(contact.wa_id), first_seen_at: contact.first_seen_at || null,
+        phone_key: await phoneKey(contact.wa_id, { international: true }), first_seen_at: contact.first_seen_at || null,
       },
       origin: originOf(contact, touches.get(row.contact_id)),
       last_message: message ? {
@@ -253,7 +253,7 @@ async function handleBrandLeads(admin: any, org: string, clientId: string, url: 
     const page = await admin.from('whatsapp_contacts').select('id,wa_id,source,campaign,first_seen_at')
       .eq('organization_id', org).in('connection_id', connectionIds).eq('contact_type', 'customer')
       .gte('first_seen_at', startInclusive.toISOString()).lt('first_seen_at', endExclusive.toISOString())
-      .order('first_seen_at', { ascending: true }).range(offset, offset + PAGE - 1)
+      .order('first_seen_at', { ascending: true }).order('id', { ascending: true }).range(offset, offset + PAGE - 1)
     if (page.error) throw page.error
     contacts.push(...(page.data || []))
     if ((page.data || []).length < PAGE) break
@@ -262,7 +262,7 @@ async function handleBrandLeads(admin: any, org: string, clientId: string, url: 
   const touches = await touchesByContact(admin, org, contacts.map((row) => row.id), { first: true })
   const leads = []
   for (const contact of contacts) {
-    const key = await phoneKey(contact.wa_id)
+    const key = await phoneKey(contact.wa_id, { international: true })
     if (!key) continue
     leads.push({ phone_key: key, first_seen_at: contact.first_seen_at, origin: originOf(contact, touches.get(contact.id)) })
   }

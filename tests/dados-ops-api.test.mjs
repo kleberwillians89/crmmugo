@@ -41,7 +41,7 @@ test('número da marca: conexões só do cliente resolvido e telefone nunca sai 
   const brand = api.slice(api.indexOf('async function handleBrandConversations'), api.indexOf('Deno.serve('))
   assert.match(brand, /\.in\('connection_id', connectionIds\)/)
   assert.match(brand, /phone_masked: maskPhone\(contact\.wa_id\)/)
-  assert.match(brand, /phone_key: await phoneKey\(contact\.wa_id\)/)
+  assert.match(brand, /phone_key: await phoneKey\(contact\.wa_id, \{ international: true \}\)/)
   assert.doesNotMatch(brand, /wa_id: contact|phone: contact|ctwa_clid/)
   assert.match(brand, /if \(contact\.contact_type === 'internal'\) continue/)
 })

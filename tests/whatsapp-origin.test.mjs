@@ -28,6 +28,8 @@ test('post orgânico manda source_id, mas não é anúncio: ad_id fica nulo', ()
 test('código de entrada de link/QR no texto pré-preenchido', () => {
   assert.equal(extractEntryCode('Oi! Vim pela loja (ref:loja-qr)'), 'loja-qr')
   assert.equal(extractEntryCode('Olá ref: Bio_Insta'), 'bio_insta')
+  assert.equal(extractEntryCode('Tem o tênis ref 4432 no 38?'), null)
+  assert.equal(extractEntryCode('ref:4432'), null)
   assert.equal(extractEntryCode('preferência de cor'), null)
   assert.equal(extractEntryCode('referencia do produto'), null)
   const touch = extractOriginTouch({}, 'Oi! (ref:site-botao)')
@@ -46,6 +48,9 @@ test('chave de telefone: celular BR com e sem 9º dígito vira a mesma chave', a
   assert.equal(await phoneKey('5511993161161'), await phoneKey('+55 (11) 9316-1161'))
   assert.equal((await phoneKey('5511993161161')).length, 32)
   assert.equal(await phoneKey('12'), null)
+  // DDD 55 sem código do país (pedido) casa com o wa_id internacional.
+  assert.equal(await phoneKey('(55) 99123-4567'), await phoneKey('5555991234567', { international: true }))
+  assert.equal(await phoneKey('5511993161161', { international: true }), await phoneKey('5511993161161'))
   // Mesmo valor que o MUGOVERSO calcula (server/tests/test_whatsapp_insights.py).
   assert.equal(await phoneKey('5511993161161'), '8da0ce4f7795d49d1331629bcee13398')
 })
