@@ -33,7 +33,23 @@ test('toda query de tarefa/contato filtra organização E cliente', () => {
 test('mensagens: conversa de outro cliente da mesma organização responde 404', () => {
   const handler = api.slice(api.indexOf('async function handleMessages'), api.indexOf('Deno.serve('))
   assert.match(handler, /\.eq\('organization_id', org\)\.eq\('client_id', clientId\)\.eq\('id', conversation\.data\.contact_id\)/)
-  assert.match(handler, /if \(!contact\.data\) return json\(\{ ok: false, code: 'CONVERSATION_NOT_FOUND' \}, 404\)/)
+  assert.match(handler, /if \(!contact\.data && !brandIds\.includes\(conversation\.data\.connection_id\)\) return json\(\{ ok: false, code: 'CONVERSATION_NOT_FOUND' \}, 404\)/)
+})
+
+test('número da marca: conexões só do cliente resolvido e telefone nunca sai inteiro', () => {
+  assert.match(api, /from\('whatsapp_connections'\)\.select\('id'\)\.eq\('organization_id', org\)\.eq\('client_id', clientId\)/)
+  const brand = api.slice(api.indexOf('async function handleBrandConversations'), api.indexOf('Deno.serve('))
+  assert.match(brand, /\.in\('connection_id', connectionIds\)/)
+  assert.match(brand, /phone_masked: maskPhone\(contact\.wa_id\)/)
+  assert.match(brand, /phone_key: await phoneKey\(contact\.wa_id\)/)
+  assert.doesNotMatch(brand, /wa_id: contact|phone: contact|ctwa_clid/)
+  assert.match(brand, /if \(contact\.contact_type === 'internal'\) continue/)
+})
+
+test('leads da marca: período obrigatório e lista com teto', () => {
+  const leads = api.slice(api.indexOf('async function handleBrandLeads'), api.indexOf('Deno.serve('))
+  assert.match(leads, /return json\(\{ ok: false, code: 'PERIOD_INVALID' \}, 400\)/)
+  assert.match(leads, /const PAGE = 1000, MAX = 5000/)
 })
 
 test('financeiro fica fora das tarefas', () => {

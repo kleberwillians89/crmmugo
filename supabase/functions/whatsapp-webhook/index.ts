@@ -18,6 +18,7 @@ import {
 } from '../_shared/whatsappWebhookCore.js'
 import { findInternalMemberByPhone } from '../_shared/internalCommandCore.js'
 import { classifyConversationKind, extractLeadAttribution } from '../_shared/commercialAgentCore.js'
+import { extractOriginTouch } from '../_shared/whatsappOrigin.js'
 import { SECOND_CTA_TEXT, WAITING_CTA_TEXT, buildTriageCtas, interactiveCtaBody, isWaitingNudge } from '../_shared/attendanceCore.js'
 import { trackCtas } from '../_shared/ctaTracking.js'
 import { dadosStatusEvent, isDadosInviteReply, isDadosOutbound } from '../_shared/dadosBridgeCore.js'
@@ -455,6 +456,22 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
     provider_timestamp: occurredAt,
   }).select('id').single()
   if (saved.error && saved.error.code !== '23505') throw saved.error
+  // Origem desta mensagem (anúncio com ID e ctwa_clid, ou código de link/QR). Um toque por mensagem;
+  // reenvio do webhook não duplica (unique connection_id + provider_message_id). Falha aqui nunca
+  // derruba o atendimento: só perde o toque, e o contato mantém a origem de antes.
+  const touch = senderType === 'customer' ? extractOriginTouch(message, content.body || '') : null
+  if (touch) {
+    const touchResult = await admin.from('whatsapp_contact_touches').upsert({
+      organization_id: connection.organization_id,
+      connection_id: connection.id,
+      contact_id: contactResult.data.id,
+      conversation_id: conversationResult.data.id,
+      provider_message_id: providerMessageId,
+      ...touch,
+      occurred_at: occurredAt,
+    }, { onConflict: 'connection_id,provider_message_id', ignoreDuplicates: true })
+    if (touchResult.error) console.log(JSON.stringify({ event: 'whatsapp_touch_failed', connection_id: connection.id, error_code: String(touchResult.error.code || 'unknown').slice(0, 40) }))
+  }
   if (!saved.error) {
     const unread = await admin.rpc('increment_whatsapp_unread', { p_conversation_id: conversationResult.data.id })
     if (unread.error) throw unread.error
