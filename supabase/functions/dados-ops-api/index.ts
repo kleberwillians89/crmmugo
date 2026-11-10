@@ -11,6 +11,7 @@
 // - Financeiro fica fora: nenhuma tarefa ligada a parcela, nem categoria financeira.
 // - Logs nunca carregam texto de mensagem, telefone ou nome — só ids, endpoint, status e duração.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { phoneKey } from '../_shared/whatsappOrigin.js'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const text = (value: unknown, max = 300) => String(value ?? '').trim().slice(0, max)
@@ -131,13 +132,15 @@ async function handleConversations(admin: any, org: string, clientId: string, ur
 async function handleMessages(admin: any, org: string, clientId: string, url: URL, limit: number) {
   const conversationId = text(url.searchParams.get('conversation_id'), 40)
   if (!isUuid(conversationId)) return json({ ok: false, code: 'CONVERSATION_ID_REQUIRED' }, 400)
-  const conversation = await admin.from('whatsapp_conversations').select('id,contact_id').eq('organization_id', org).eq('id', conversationId).maybeSingle()
+  const conversation = await admin.from('whatsapp_conversations').select('id,contact_id,connection_id').eq('organization_id', org).eq('id', conversationId).maybeSingle()
   if (conversation.error) throw conversation.error
   if (!conversation.data) return json({ ok: false, code: 'CONVERSATION_NOT_FOUND' }, 404)
-  // A conversa só é entregue se o contato dela for DESTE cliente — nunca de outro cliente da organização.
+  // A conversa só é entregue se for DESTE cliente — nunca de outro cliente da organização: ou o contato
+  // é do cliente (conversa da Mugô com a marca), ou a conversa está no número da própria marca.
   const contact = await admin.from('whatsapp_contacts').select('id').eq('organization_id', org).eq('client_id', clientId).eq('id', conversation.data.contact_id).maybeSingle()
   if (contact.error) throw contact.error
-  if (!contact.data) return json({ ok: false, code: 'CONVERSATION_NOT_FOUND' }, 404)
+  const brandIds = contact.data ? [] : await brandConnectionIds(admin, org, clientId)
+  if (!contact.data && !brandIds.includes(conversation.data.connection_id)) return json({ ok: false, code: 'CONVERSATION_NOT_FOUND' }, 404)
   const messages = await admin.from('whatsapp_messages')
     .select('id,direction,message_type,status,text_content,template_name,created_at,sent_at,delivered_at,read_at,failed_at,error_code')
     .eq('organization_id', org).eq('conversation_id', conversationId).order('created_at', { ascending: false }).limit(limit)
@@ -152,6 +155,118 @@ async function handleMessages(admin: any, org: string, clientId: string, url: UR
       })),
     },
   })
+}
+
+// ---- Número da própria marca (whatsapp_connections.client_id = cliente) ----------------------------
+// Caixa de entrada e origem das conversas dos clientes DA MARCA. O telefone nunca sai: só mascarado e
+// uma chave (hash) para o MUGOVERSO casar a conversa com o pedido da loja.
+const DAY = /^\d{4}-\d{2}-\d{2}$/
+const chunk = <T,>(items: T[], size: number) => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size))
+
+async function brandConnectionIds(admin: any, org: string, clientId: string): Promise<string[]> {
+  const rows = await admin.from('whatsapp_connections').select('id').eq('organization_id', org).eq('client_id', clientId).limit(10)
+  if (rows.error) throw rows.error
+  return (rows.data || []).map((row: any) => row.id)
+}
+
+async function touchesByContact(admin: any, org: string, contactIds: string[], { first = false } = {}) {
+  const out = new Map<string, any>()
+  for (const ids of chunk(contactIds, 100)) {
+    const rows = await admin.from('whatsapp_contact_touches')
+      .select('contact_id,source,ad_id,headline,entry_code,occurred_at')
+      .eq('organization_id', org).in('contact_id', ids).order('occurred_at', { ascending: first }).limit(5000)
+    if (rows.error) throw rows.error
+    for (const row of rows.data || []) if (!out.has(row.contact_id)) out.set(row.contact_id, row)
+  }
+  return out
+}
+
+const originOf = (contact: any, touch: any) => ({
+  source: touch?.source || contact?.source || null,
+  ad_id: touch?.ad_id || null,
+  ad_headline: text(touch?.headline || contact?.campaign, 160) || null,
+  entry_code: touch?.entry_code || null,
+  at: touch?.occurred_at || null,
+})
+
+async function handleBrandConversations(admin: any, org: string, clientId: string, url: URL, limit: number) {
+  const connectionIds = await brandConnectionIds(admin, org, clientId)
+  if (!connectionIds.length) return json({ ok: true, data: { connected: false, conversations: [] } })
+  const conversations = await admin.from('whatsapp_conversations')
+    .select('id,contact_id,status,attendance_mode,unread_count,last_message_at,service_window_expires_at')
+    .eq('organization_id', org).in('connection_id', connectionIds)
+    .order('last_message_at', { ascending: false, nullsFirst: false }).limit(limit)
+  if (conversations.error) throw conversations.error
+  const rows = conversations.data || []
+  const contactIds = [...new Set(rows.map((row: any) => row.contact_id))]
+  const contacts = contactIds.length
+    ? await admin.from('whatsapp_contacts').select('id,display_name,profile_name,wa_id,source,campaign,first_seen_at,contact_type')
+      .eq('organization_id', org).in('connection_id', connectionIds).in('id', contactIds)
+    : { data: [], error: null }
+  if (contacts.error) throw contacts.error
+  const byContact = new Map((contacts.data || []).map((row: any) => [row.id, row]))
+  const touches = await touchesByContact(admin, org, contactIds as string[])
+  const ids = rows.map((row: any) => row.id)
+  const last = ids.length
+    ? await admin.from('whatsapp_messages').select('conversation_id,direction,message_type,text_content,template_name,created_at')
+      .eq('organization_id', org).in('conversation_id', ids).order('created_at', { ascending: false }).limit(Math.min(ids.length * 5, 1000))
+    : { data: [], error: null }
+  if (last.error) throw last.error
+  const preview = new Map<string, any>()
+  for (const row of last.data || []) if (!preview.has(row.conversation_id)) preview.set(row.conversation_id, row)
+  const out = []
+  for (const row of rows) {
+    const contact: any = byContact.get(row.contact_id) || {}
+    if (contact.contact_type === 'internal') continue
+    const message = preview.get(row.id)
+    out.push({
+      id: row.id, status: row.status, attendance_mode: row.attendance_mode, unread_count: row.unread_count,
+      last_message_at: row.last_message_at, service_window_expires_at: row.service_window_expires_at,
+      contact: {
+        name: text(contact.display_name || contact.profile_name, 120) || null, phone_masked: maskPhone(contact.wa_id),
+        phone_key: await phoneKey(contact.wa_id, { international: true }), first_seen_at: contact.first_seen_at || null,
+      },
+      origin: originOf(contact, touches.get(row.contact_id)),
+      last_message: message ? {
+        direction: message.direction, at: message.created_at,
+        text: text(message.text_content, 160) || (message.template_name ? `Modelo: ${message.template_name}` : `[${message.message_type}]`),
+      } : null,
+    })
+  }
+  return json({ ok: true, data: { connected: true, conversations: out } })
+}
+
+async function handleBrandLeads(admin: any, org: string, clientId: string, url: URL) {
+  const start = text(url.searchParams.get('period_start'), 10)
+  const end = text(url.searchParams.get('period_end'), 10)
+  if (!DAY.test(start) || !DAY.test(end) || end < start) return json({ ok: false, code: 'PERIOD_INVALID' }, 400)
+  const connectionIds = await brandConnectionIds(admin, org, clientId)
+  if (!connectionIds.length) return json({ ok: true, data: { connected: false, leads: [], truncated: false } })
+  const endExclusive = new Date(`${end}T00:00:00Z`)
+  endExclusive.setUTCDate(endExclusive.getUTCDate() + 2) // folga de fuso (BRT); o MUGOVERSO recorta o período exato
+  const startInclusive = new Date(`${start}T00:00:00Z`)
+  startInclusive.setUTCDate(startInclusive.getUTCDate() - 1)
+  const contacts: any[] = []
+  const PAGE = 1000, MAX = 5000
+  let truncated = false
+  for (let offset = 0; offset < MAX; offset += PAGE) {
+    const page = await admin.from('whatsapp_contacts').select('id,wa_id,source,campaign,first_seen_at')
+      .eq('organization_id', org).in('connection_id', connectionIds).eq('contact_type', 'customer')
+      .gte('first_seen_at', startInclusive.toISOString()).lt('first_seen_at', endExclusive.toISOString())
+      .order('first_seen_at', { ascending: true }).order('id', { ascending: true }).range(offset, offset + PAGE - 1)
+    if (page.error) throw page.error
+    contacts.push(...(page.data || []))
+    if ((page.data || []).length < PAGE) break
+    if (offset + PAGE >= MAX) truncated = true
+  }
+  const touches = await touchesByContact(admin, org, contacts.map((row) => row.id), { first: true })
+  const leads = []
+  for (const contact of contacts) {
+    const key = await phoneKey(contact.wa_id, { international: true })
+    if (!key) continue
+    leads.push({ phone_key: key, first_seen_at: contact.first_seen_at, origin: originOf(contact, touches.get(contact.id)) })
+  }
+  return json({ ok: true, data: { connected: true, leads, truncated } })
 }
 
 Deno.serve(async (request: Request) => {
@@ -185,6 +300,8 @@ Deno.serve(async (request: Request) => {
     if (endpoint === 'tasks') response = await handleTasks(admin, organizationId, clientId, url, limit)
     else if (endpoint === 'conversations') response = await handleConversations(admin, organizationId, clientId, url, limit)
     else if (endpoint === 'messages') response = await handleMessages(admin, organizationId, clientId, url, limit)
+    else if (endpoint === 'brand-conversations') response = await handleBrandConversations(admin, organizationId, clientId, url, limit)
+    else if (endpoint === 'brand-leads') response = await handleBrandLeads(admin, organizationId, clientId, url)
     else return json({ ok: false, code: 'NOT_FOUND' }, 404)
     console.log(JSON.stringify({ event: 'dados_ops_request', organization_id: organizationId, client_id: clientId, endpoint, status_http: response.status, duration_ms: Date.now() - startedAt }))
     return response
