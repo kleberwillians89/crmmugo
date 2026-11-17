@@ -1,4 +1,5 @@
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
+import {resolveMetaTransportForConnection} from '../_shared/metaAppConnection.js'
 import {normalizePhoneForWhatsApp} from '../_shared/internalCommandCore.js'
 import {getOperationalWindow} from '../_shared/operationalCalendar.js'
 
@@ -48,7 +49,7 @@ async function processInstallment(admin:any,row:any){
   const token=Deno.env.get('META_ACCESS_TOKEN')||''
   if(!token)throw new Error('META_ACCESS_TOKEN ausente.')
   let response:Response
-  try{response=await fetch(`https://graph.facebook.com/${Deno.env.get('GRAPH_API_VERSION')||'v23.0'}/${connection.data.phone_number_id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:phone,type:'template',template:{name:TEMPLATE,language:{code:LANGUAGE},components}}),signal:AbortSignal.timeout(20_000)})}
+  try{response=await fetch(`https://graph.facebook.com/${transport.version}/${transport.phoneNumberId}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:phone,type:'template',template:{name:TEMPLATE,language:{code:LANGUAGE},components}}),signal:AbortSignal.timeout(20_000)})}
   catch{await admin.from('whatsapp_collection_alerts').update({action:'template_send_unconfirmed',error_code:'SEND_OUTCOME_UNKNOWN',error_message:'Envio reservado; resultado da Meta desconhecido.'}).eq('id',alert.id);throw new Error('Resultado do envio desconhecido; não reenviar automaticamente.')}
   const body=await response.json().catch(()=>({})),providerId=clean(body?.messages?.[0]?.id,240)
   if(!response.ok||!providerId){await Promise.all([admin.from('whatsapp_messages').update({status:'failed',failed_at:now,error_code:String(response.status),error_message:clean(body?.error?.message)}).eq('id',message.id),admin.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',next_attempt_at:new Date(Date.now()+5*60_000).toISOString(),error_code:String(response.status),error_message:clean(body?.error?.message)}).eq('id',alert.id)]);return false}
