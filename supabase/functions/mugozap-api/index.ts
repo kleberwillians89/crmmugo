@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { resolveConnectionAccessToken } from '../_shared/metaAppConnection.js'
 
 const corsHeaders = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type, x-workspace-id','Access-Control-Allow-Methods':'POST, OPTIONS','Content-Type':'application/json'}
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: corsHeaders })
@@ -133,12 +134,11 @@ const persistOutboundMessage = async ({
 }: any) => {
   if (!serviceKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY_MISSING')
   const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } })
-  const phoneNumberId = text(Deno.env.get('PHONE_NUMBER_ID'), 80)
   let connectionQuery = admin.from('whatsapp_connections')
     .select('id,organization_id').eq('organization_id', organizationId).in('status', ['active','degraded'])
   if (connectionId) connectionQuery = connectionQuery.eq('id', connectionId)
-  if (phoneNumberId) connectionQuery = connectionQuery.eq('phone_number_id', phoneNumberId)
-  const connectionResult = await connectionQuery.order('updated_at', { ascending: false }).limit(1).maybeSingle()
+  const connectionRows = await connectionQuery.order('updated_at', { ascending: false }).limit(2)
+  const connectionResult = { error: connectionRows.error, data: connectionRows.data?.length === 1 ? connectionRows.data[0] : null }
   if (connectionResult.error || !connectionResult.data) throw connectionResult.error || new Error('WHATSAPP_CONNECTION_NOT_FOUND')
   const connection = connectionResult.data
   let displayName = ''
@@ -184,18 +184,27 @@ const metaFailure = (status: number, body: any, requestId = '') => {
   if (status === 404 || error.code === 100) return fail('META_RESOURCE_INVALID', 'A conta ou o número do WhatsApp configurado não foi encontrado.', 404, status, false, error)
   return fail('META_API_ERROR', error.details || 'A Meta não conseguiu concluir a consulta.', status || 502, status, status >= 500, error)
 }
-const metaConfig = (requirePhoneNumber = false) => {
-  const wabaId = text(Deno.env.get('WABA_ID'), 80)
-  const phoneNumberId = text(Deno.env.get('PHONE_NUMBER_ID'), 80)
-  const accessToken = Deno.env.get('META_ACCESS_TOKEN') || ''
-  const version = text(Deno.env.get('GRAPH_API_VERSION'), 20)
-  if (!wabaId) return { error: fail('WABA_ID_MISSING', 'O WABA ID não foi configurado no backend.', 503) }
-  if (requirePhoneNumber && !phoneNumberId) return { error: fail('PHONE_NUMBER_ID_MISSING', 'O Phone Number ID não foi configurado no backend.', 503) }
-  if (!accessToken) return { error: fail('META_ACCESS_TOKEN_MISSING', 'A credencial da Meta não foi configurada no backend.', 503) }
-  if (!/^v\d+\.\d+$/.test(version)) return { error: fail('GRAPH_API_VERSION_INVALID', 'A versão da Graph API não foi configurada corretamente.', 503) }
-  if (!/^\d+$/.test(wabaId)) return { error: fail('WABA_ID_INVALID', 'O WABA ID configurado é inválido.', 503) }
-  if (phoneNumberId && !/^\d+$/.test(phoneNumberId)) return { error: fail('PHONE_NUMBER_ID_INVALID', 'O Phone Number ID configurado é inválido.', 503) }
-  return { wabaId, phoneNumberId, accessToken, version }
+const metaConfig = async (organizationId: string, requirePhoneNumber = false, connectionId = '') => {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') || ''
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
+  if (!supabaseUrl || !serviceKey) return { error: fail('SUPABASE_CONFIGURATION_MISSING', 'Conexões WhatsApp indisponíveis.', 503) }
+  const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } })
+  let query = admin.from('whatsapp_connections')
+    .select('id,waba_id,phone_number_id,graph_api_version,credential_reference,metadata')
+    .eq('organization_id', organizationId).in('status', ['active','degraded'])
+  if (connectionId) query = query.eq('id', connectionId)
+  const rows = await query.limit(2)
+  if (rows.error) return { error: fail('CONNECTION_REGISTRY_UNAVAILABLE', 'Falha ao consultar conexões WhatsApp.', 503) }
+  if ((rows.data || []).length !== 1) return { error: fail('CONNECTION_SELECTION_REQUIRED', 'É necessária uma conexão WhatsApp única para a operação.', 409) }
+  const connection = rows.data[0]
+  const wabaId = text(connection.waba_id, 80), phoneNumberId = text(connection.phone_number_id, 80)
+  const accessToken = resolveConnectionAccessToken(connection, (name: string) => Deno.env.get(name))
+  const version = text(connection.graph_api_version || Deno.env.get('GRAPH_API_VERSION'), 20)
+  if (!/^\d+$/.test(wabaId)) return { error: fail('WABA_ID_INVALID', 'WABA inválida nesta conexão.', 503) }
+  if (requirePhoneNumber && !/^\d+$/.test(phoneNumberId)) return { error: fail('PHONE_NUMBER_ID_INVALID', 'Número inválido nesta conexão.', 503) }
+  if (!accessToken) return { error: fail('META_ACCESS_TOKEN_MISSING', 'Credencial não configurada para esta conexão.', 503) }
+  if (!/^v\d+\.\d+$/.test(version)) return { error: fail('GRAPH_API_VERSION_INVALID', 'Versão da Graph API inválida.', 503) }
+  return { wabaId, phoneNumberId, accessToken, version, connectionId: connection.id }
 }
 const fetchMeta = async (url: string, accessToken: string, diagnostic: any = null) => {
   if(diagnostic)console.log(JSON.stringify({
@@ -645,7 +654,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       }})
     }
     if (operation === 'sync_templates' || operation === 'get_template_status') {
-      const config:any=metaConfig(false)
+      const config:any=await metaConfig(profile.organization_id,false)
       if(config.error)return config.error
       config.requestId=requestId
       config.operation=operation
@@ -696,7 +705,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       const conversation=await conversationQuery.maybeSingle()
       if(conversation.error||!conversation.data)return fail('CONVERSATION_NOT_FOUND','A conversa canônica não foi encontrada.',404)
       if(!conversation.data.service_window_expires_at||new Date(conversation.data.service_window_expires_at).getTime()<=Date.now())return fail('SERVICE_WINDOW_CLOSED','A janela de atendimento está encerrada. Use um template aprovado.',409)
-      const config:any=metaConfig(true)
+      const config:any=await metaConfig(profile.organization_id,true,conversation.data.connection_id)
       if(config.error)return config.error
       try{await persistOutboundMessage({supabaseUrl,serviceKey,organizationId:profile.organization_id,recipient,connectionId:conversation.data.connection_id,providerMessageId:null,idempotencyKey,messageType:'text',textContent:bodyText,status:'queued'})}
       catch(error){return fail('CRM_AUDIT_FAILED','Não foi possível reservar a mensagem no histórico canônico; nada foi enviado.',503,0,true,{code:text((error as any)?.code||(error as any)?.message,120)})}
@@ -764,7 +773,7 @@ const handleRequest = async (request: Request, requestId: string) => {
       // Cumprimenta quem vai receber: o contato dono do número escolhido, senão o contato principal.
       const chosenContact:any = contactRows.error ? null : (contactRows.data||[]).find((row:any)=>brazilianPhone(row.phone)===normalizedPhone)
       const safeName = text(chosenContact?.name || clientRow.contact_name || clientRow.trade_name || clientRow.company_name, 120).split(/\s+/)[0] || 'Cliente'
-      const config:any=metaConfig(true)
+      const config:any=await metaConfig(profile.organization_id,true)
       if(config.error)return config.error
       config.requestId=requestId
       let phoneCheck:any
@@ -938,7 +947,7 @@ const handleRequest = async (request: Request, requestId: string) => {
           .update({status:'queued',error_code:null,error_message:null,failed_at:null})
           .eq('organization_id',profile.organization_id).eq('idempotency_key',idempotencyKey).is('provider_message_id',null)
 
-      const homologationConfig:any=metaConfig(true)
+      const homologationConfig:any=await metaConfig(profile.organization_id,true)
       if(homologationConfig.error)return homologationConfig.error
       const homologationComponents=metaTemplateComponents(components)
       const homologationMetaPayload=buildTemplateMetaPayload(recipient,templateName,language,homologationComponents)
