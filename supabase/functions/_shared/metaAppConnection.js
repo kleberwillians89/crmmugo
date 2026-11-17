@@ -45,3 +45,20 @@ export const resolveConnectionAccessToken = (connection, getEnv) => {
   const key = metaAppEnvName(configuredAppId, 'ACCESS_TOKEN')
   return key ? safeEnv(getEnv, key) : ''
 }
+
+export const resolveMetaTransportForConnection = async (admin, organizationId, connectionId, getEnv) => {
+  if (!organizationId || !connectionId) return null
+  const result = await admin.from('whatsapp_connections')
+    .select('id,organization_id,phone_number_id,waba_id,graph_api_version,credential_reference,metadata')
+    .eq('organization_id', organizationId).eq('id', connectionId)
+    .in('status', ['active','degraded']).maybeSingle()
+  if (result.error) throw result.error
+  const connection = result.data
+  if (!connection) return null
+  const accessToken = resolveConnectionAccessToken(connection, getEnv)
+  const phoneNumberId = String(connection.phone_number_id || '')
+  const wabaId = String(connection.waba_id || '')
+  const version = String(connection.graph_api_version || getEnv('GRAPH_API_VERSION') || '')
+  if (!/^\d+$/.test(phoneNumberId) || !/^\d+$/.test(wabaId) || !/^v\d+\.\d+$/.test(version) || !accessToken) return null
+  return { phoneNumberId, wabaId, version, accessToken, connectionId: connection.id }
+}
