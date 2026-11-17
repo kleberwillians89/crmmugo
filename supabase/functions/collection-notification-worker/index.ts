@@ -24,8 +24,9 @@ async function processInstallment(admin:any,row:any){
   if(existing.data?.provider_message_id||existing.data?.status==='sending'&&existing.data?.action==='template_send_unconfirmed')return false
   if(existing.data?.status==='failed'&&new Date(existing.data.next_attempt_at||0).getTime()>Date.now())return false
   if(existing.data?.status==='sending'&&Date.now()-new Date(existing.data.updated_at||existing.data.created_at).getTime()<5*60_000)return false
-  const connection=await admin.from('whatsapp_connections').select('id,phone_number_id,waba_id').eq('organization_id',row.organization_id).in('status',['active','degraded']).order('updated_at',{ascending:false}).limit(1).maybeSingle()
-  if(connection.error||!connection.data)throw connection.error||new Error('Conexão WhatsApp indisponível.')
+  const connections=await admin.from('whatsapp_connections').select('id,phone_number_id,waba_id').eq('organization_id',row.organization_id).in('status',['active','degraded']).limit(2)
+  if(connections.error||(connections.data||[]).length!==1)throw connections.error||new Error('Seleção de conexão WhatsApp necessária para esta organização.')
+  const connection={data:connections.data[0]}
   const template=await admin.from('whatsapp_message_templates').select('id,status,is_active,components').eq('organization_id',row.organization_id).eq('waba_id',connection.data.waba_id).eq('name',TEMPLATE).eq('language',LANGUAGE).maybeSingle()
   if(template.error)throw template.error
   if(!template.data||String(template.data.status).toUpperCase()!=='APPROVED'||template.data.is_active===false)throw new Error('Template de cobrança não está aprovado e ativo.')
