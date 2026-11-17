@@ -1,5 +1,6 @@
 // Atendimento comercial estruturado. Executa fora do webhook e só em organizações opt-in.
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
+import {resolveMetaTransportForConnection} from '../_shared/metaAppConnection.js'
 import {brazilianPhoneCandidates} from '../_shared/internalCommandCore.js'
 import {getOperationalWindow} from '../_shared/operationalCalendar.js'
 import {generateStructured,transcribeAudio} from '../_shared/aiProvider.js'
@@ -48,10 +49,11 @@ async function askAI(event:any,messages:any[],qualification:any,opportunity:any,
 }
 
 async function sendMessage(admin:any,event:any,conversation:any,text:string,idempotencyKey?:string,cta?:any){
-  const token=Deno.env.get('META_ACCESS_TOKEN')||'';if(!token)throw Object.assign(new Error('Meta não configurada.'),{code:'META_CONFIGURATION_MISSING'})
-  const connection=await admin.from('whatsapp_connections').select('phone_number_id').eq('id',event.connection_id).eq('organization_id',event.organization_id).single();if(connection.error)throw connection.error
+  const connection=await resolveMetaTransportForConnection(admin,event.organization_id,event.connection_id,(key)=>Deno.env.get(key))
+  if(!connection)throw Object.assign(new Error('Meta não configurada para esta conexão.'),{code:'META_CONFIGURATION_MISSING'})
+  const token=connection.accessToken
   const key=idempotencyKey||`commercial-ai:${event.id}`,existing=await admin.from('whatsapp_messages').select('provider_message_id').eq('connection_id',event.connection_id).eq('idempotency_key',key).maybeSingle();if(existing.error)throw existing.error;if(existing.data?.provider_message_id)return existing.data.provider_message_id
-  const response=await fetch(`https://graph.facebook.com/${Deno.env.get('GRAPH_API_VERSION')||'v23.0'}/${connection.data.phone_number_id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(cta?{messaging_product:'whatsapp',recipient_type:'individual',to:conversation.wa_id,type:'interactive',interactive:interactiveCtaBody(text,cta)}:{messaging_product:'whatsapp',recipient_type:'individual',to:conversation.wa_id,type:'text',text:{preview_url:false,body:text}}),signal:AbortSignal.timeout(20_000)})
+  const response=await fetch(`https://graph.facebook.com/${connection.version}/${connection.phoneNumberId}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(cta?{messaging_product:'whatsapp',recipient_type:'individual',to:conversation.wa_id,type:'interactive',interactive:interactiveCtaBody(text,cta)}:{messaging_product:'whatsapp',recipient_type:'individual',to:conversation.wa_id,type:'text',text:{preview_url:false,body:text}}),signal:AbortSignal.timeout(20_000)})
   const body=await response.json().catch(()=>({}));if(!response.ok||!body?.messages?.[0]?.id)throw Object.assign(new Error(clean(body?.error?.message)||'Falha no envio comercial.'),{code:response.status===429||response.status>=500?'META_TEMPORARY_ERROR':'META_SEND_FAILED'})
   const saved=await admin.from('whatsapp_messages').insert({organization_id:event.organization_id,connection_id:event.connection_id,conversation_id:event.conversation_id,provider_message_id:body.messages[0].id,idempotency_key:key,direction:'out',message_type:cta?'interactive':'text',status:'accepted',media:cta?{cta}:{},text_content:cta?`${text}\n[Botão: ${cta.label}]`:text,sent_at:new Date().toISOString()});if(saved.error&&saved.error.code!=='23505')throw saved.error
   await admin.from('whatsapp_conversations').update({last_message_at:new Date().toISOString(),last_outbound_at:new Date().toISOString()}).eq('id',event.conversation_id).eq('organization_id',event.organization_id)
@@ -63,15 +65,17 @@ const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms))
 
 // Marca a mensagem do lead como lida e mostra "digitando…" (até ~25s ou até a resposta sair).
 async function markReadAndTyping(admin:any,event:any,typing:boolean){
-  const token=Deno.env.get('META_ACCESS_TOKEN')||'';if(!token||!event.provider_message_id)return
-  const connection=await admin.from('whatsapp_connections').select('phone_number_id').eq('id',event.connection_id).eq('organization_id',event.organization_id).maybeSingle();if(connection.error||!connection.data?.phone_number_id)return
+  if(!event.provider_message_id)return
+  const connection=await resolveMetaTransportForConnection(admin,event.organization_id,event.connection_id,(key)=>Deno.env.get(key));if(!connection)return
+  const token=connection.accessToken
   const body:any={messaging_product:'whatsapp',status:'read',message_id:event.provider_message_id};if(typing)body.typing_indicator={type:'text'}
-  await fetch(`https://graph.facebook.com/${graphVersion()}/${connection.data.phone_number_id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8_000)}).catch(()=>null)
+  await fetch(`https://graph.facebook.com/${connection.version}/${connection.phoneNumberId}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8_000)}).catch(()=>null)
 }
 
 // Áudios do lead viram texto antes da IA ler o histórico.
 async function transcribePendingAudio(admin:any,event:any){
-  const token=Deno.env.get('META_ACCESS_TOKEN')||''
+  const connection=await resolveMetaTransportForConnection(admin,event.organization_id,event.connection_id,(key)=>Deno.env.get(key))
+  const token=connection?.accessToken||''
   const rows=await admin.from('whatsapp_messages').select('id,media,text_content').eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).eq('direction','in').in('message_type',['audio','voice']).order('created_at',{ascending:false}).limit(3)
   if(rows.error)return
   for(const row of rows.data||[]){

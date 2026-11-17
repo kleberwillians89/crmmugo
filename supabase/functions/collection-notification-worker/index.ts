@@ -1,4 +1,5 @@
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2'
+import {resolveMetaTransportForConnection} from '../_shared/metaAppConnection.js'
 import {normalizePhoneForWhatsApp} from '../_shared/internalCommandCore.js'
 import {getOperationalWindow} from '../_shared/operationalCalendar.js'
 
@@ -23,8 +24,9 @@ async function processInstallment(admin:any,row:any){
   if(existing.data?.provider_message_id||existing.data?.status==='sending'&&existing.data?.action==='template_send_unconfirmed')return false
   if(existing.data?.status==='failed'&&new Date(existing.data.next_attempt_at||0).getTime()>Date.now())return false
   if(existing.data?.status==='sending'&&Date.now()-new Date(existing.data.updated_at||existing.data.created_at).getTime()<5*60_000)return false
-  const connection=await admin.from('whatsapp_connections').select('id,phone_number_id,waba_id').eq('organization_id',row.organization_id).in('status',['active','degraded']).order('updated_at',{ascending:false}).limit(1).maybeSingle()
-  if(connection.error||!connection.data)throw connection.error||new Error('Conexão WhatsApp indisponível.')
+  const connections=await admin.from('whatsapp_connections').select('id,phone_number_id,waba_id').eq('organization_id',row.organization_id).in('status',['active','degraded']).limit(2)
+  if(connections.error||(connections.data||[]).length!==1)throw connections.error||new Error('Seleção de conexão WhatsApp necessária para esta organização.')
+  const connection={data:connections.data[0]}
   const template=await admin.from('whatsapp_message_templates').select('id,status,is_active,components').eq('organization_id',row.organization_id).eq('waba_id',connection.data.waba_id).eq('name',TEMPLATE).eq('language',LANGUAGE).maybeSingle()
   if(template.error)throw template.error
   if(!template.data||String(template.data.status).toUpperCase()!=='APPROVED'||template.data.is_active===false)throw new Error('Template de cobrança não está aprovado e ativo.')
@@ -48,7 +50,7 @@ async function processInstallment(admin:any,row:any){
   const token=Deno.env.get('META_ACCESS_TOKEN')||''
   if(!token)throw new Error('META_ACCESS_TOKEN ausente.')
   let response:Response
-  try{response=await fetch(`https://graph.facebook.com/${Deno.env.get('GRAPH_API_VERSION')||'v23.0'}/${connection.data.phone_number_id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:phone,type:'template',template:{name:TEMPLATE,language:{code:LANGUAGE},components}}),signal:AbortSignal.timeout(20_000)})}
+  try{response=await fetch(`https://graph.facebook.com/${transport.version}/${transport.phoneNumberId}/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',recipient_type:'individual',to:phone,type:'template',template:{name:TEMPLATE,language:{code:LANGUAGE},components}}),signal:AbortSignal.timeout(20_000)})}
   catch{await admin.from('whatsapp_collection_alerts').update({action:'template_send_unconfirmed',error_code:'SEND_OUTCOME_UNKNOWN',error_message:'Envio reservado; resultado da Meta desconhecido.'}).eq('id',alert.id);throw new Error('Resultado do envio desconhecido; não reenviar automaticamente.')}
   const body=await response.json().catch(()=>({})),providerId=clean(body?.messages?.[0]?.id,240)
   if(!response.ok||!providerId){await Promise.all([admin.from('whatsapp_messages').update({status:'failed',failed_at:now,error_code:String(response.status),error_message:clean(body?.error?.message)}).eq('id',message.id),admin.from('whatsapp_collection_alerts').update({status:'failed',collection_stage:'failed',action:'template_send_failed',next_attempt_at:new Date(Date.now()+5*60_000).toISOString(),error_code:String(response.status),error_message:clean(body?.error?.message)}).eq('id',alert.id)]);return false}

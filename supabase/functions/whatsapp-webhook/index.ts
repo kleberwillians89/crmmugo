@@ -16,6 +16,7 @@ import {
   webhookText as text,
   webhookTimestamp as timestamp,
 } from '../_shared/whatsappWebhookCore.js'
+import { resolveWebhookApp, connectionMatchesWebhookApp, resolveConnectionAccessToken } from '../_shared/metaAppConnection.js'
 import { findInternalMemberByPhone } from '../_shared/internalCommandCore.js'
 import { classifyConversationKind, extractLeadAttribution } from '../_shared/commercialAgentCore.js'
 import { extractOriginTouch } from '../_shared/whatsappOrigin.js'
@@ -211,7 +212,7 @@ const handleFinanceCheckAmount = async (admin: any, connection: any, conversatio
     }
   }
   const reply = formatFinanceCheckAmountReply(items, alreadyPaid)
-  const token = Deno.env.get('META_ACCESS_TOKEN') || ''
+  const token = resolveConnectionAccessToken(connection, (name) => Deno.env.get(name))
   const now = new Date().toISOString()
   const metadata = { source: 'finance', intent: 'FINANCE_CHECK_AMOUNT', client_id: clientId, installment_id: items.length === 1 ? items[0].id : null, currency: items.length === 1 ? items[0].currency : null, amount_used: items.length === 1 ? debtAmount(items[0]) : null }
   if (!token || !phoneNumberId) {
@@ -244,7 +245,7 @@ const handleFinanceCheckAmount = async (admin: any, connection: any, conversatio
 // responde na hora com os botões da equipe (no máximo 1 vez a cada 15 min). Nunca retoma a IA.
 const sendWaitingButtons = async (admin: any, connection: any, conversation: any, waId: string, providerMessageId: string, phoneNumberId: string, inboundText: string, contactName: string | null) => {
   if (!isWaitingNudge(inboundText)) return
-  const token = Deno.env.get('META_ACCESS_TOKEN') || ''
+  const token = resolveConnectionAccessToken(connection, (name) => Deno.env.get(name))
   if (!token || !phoneNumberId) return
   const org = connection.organization_id
   const settings = await admin.from('commercial_settings').select('triage_cta_url,triage_cta_label,triage_cta_url_2,triage_cta_label_2').eq('organization_id', org).maybeSingle()
@@ -323,7 +324,7 @@ const handlePaymentClaim = async (admin: any, connection: any, conversation: any
     if (notified.error && notified.error.code !== '23505') throw notified.error
   }
   const reply = 'Obrigado. Registramos sua informação e vamos conferir o pagamento.'
-  const token = Deno.env.get('META_ACCESS_TOKEN') || ''
+  const token = resolveConnectionAccessToken(connection, (name) => Deno.env.get(name))
   const metadata = { source: 'finance', intent: 'PAYMENT_CLAIMED', client_id: clientId, installment_id: claimedItem?.id || null, currency: claimedItem?.currency || null, amount_used: claimedItem ? debtAmount(claimedItem) : null }
   if (!token || !phoneNumberId) {
     await admin.from('whatsapp_messages').insert({ organization_id: org, connection_id: connection.id, conversation_id: conversation.id, idempotency_key: idempotencyKey, direction: 'out', message_type: 'text', status: 'failed', failed_at: now, text_content: reply, error_code: 'META_CONFIGURATION_MISSING', error_message: 'Transporte Meta não configurado.', metadata })
@@ -630,19 +631,18 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
 
 const handle = async (request: Request) => {
   const url = new URL(request.url)
+  const webhookApp = resolveWebhookApp(url, (name) => Deno.env.get(name))
   if (request.method === 'GET') {
-    const verifyToken = Deno.env.get('META_WEBHOOK_VERIFY_TOKEN') || ''
-    const valid = verifyWebhookChallenge(url.searchParams, verifyToken)
+    const valid = Boolean(webhookApp) && verifyWebhookChallenge(url.searchParams, webhookApp.verifyToken)
     return valid
       ? new Response(url.searchParams.get('hub.challenge') || '', { status: 200 })
       : new Response('Forbidden', { status: 403 })
   }
   if (request.method !== 'POST') return json({ ok: false, code: 'METHOD_NOT_ALLOWED' }, 405)
 
-  const appSecret = Deno.env.get('META_APP_SECRET') || ''
-  if (!appSecret) return json({ ok: false, code: 'WEBHOOK_CONFIGURATION_MISSING' }, 503)
+  if (!webhookApp?.appSecret) return json({ ok: false, code: 'WEBHOOK_CONFIGURATION_MISSING' }, 503)
   const raw = new Uint8Array(await request.arrayBuffer())
-  if (!(await verifySignature(raw, request.headers.get('X-Hub-Signature-256') || '', appSecret))) {
+  if (!(await verifySignature(raw, request.headers.get('X-Hub-Signature-256') || '', webhookApp.appSecret))) {
     return json({ ok: false, code: 'INVALID_SIGNATURE' }, 401)
   }
   const body = JSON.parse(new TextDecoder().decode(raw))
@@ -661,12 +661,12 @@ const handle = async (request: Request) => {
       const phoneNumberId = digits(value?.metadata?.phone_number_id)
       if (!phoneNumberId) continue
       const connectionResult = await admin.from('whatsapp_connections')
-        .select('id,organization_id,workspace_id,status')
+        .select('id,organization_id,workspace_id,status,metadata,credential_reference,waba_id')
         .eq('phone_number_id', phoneNumberId)
         .in('status', ['active', 'degraded'])
         .maybeSingle()
       if (connectionResult.error) throw connectionResult.error
-      if (!connectionResult.data) { unknownConnections += 1; continue }
+      if (!connectionResult.data || !connectionMatchesWebhookApp(connectionResult.data, webhookApp) || (connectionResult.data.waba_id && String(connectionResult.data.waba_id) !== String(entry.id || ''))) { unknownConnections += 1; continue }
       const payloadHash = await hashPayload(value)
       for (const status of value?.statuses || []) {
         if (await processStatus(admin, connectionResult.data, status, payloadHash)) processed += 1
