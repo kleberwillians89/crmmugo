@@ -516,9 +516,7 @@ const handleRequest = async (request: Request, requestId: string) => {
         const linkedClient=await admin.from('clients').select('id').eq('id',clientId).eq('organization_id',profile.organization_id).maybeSingle()
         if(linkedClient.error||!linkedClient.data)return fail('CLIENT_NOT_FOUND','O cliente selecionado não pertence à organização.',404)
       }
-      const phoneNumberId=text(Deno.env.get('PHONE_NUMBER_ID'),80)
       let connectionQuery=admin.from('whatsapp_connections').select('id').eq('organization_id',profile.organization_id).eq('status','active')
-      if(phoneNumberId)connectionQuery=connectionQuery.eq('phone_number_id',phoneNumberId)
       const connections=await connectionQuery.order('updated_at',{ascending:false}).limit(2)
       if(connections.error)return fail('CONNECTION_REGISTRY_UNAVAILABLE','Não foi possível localizar a conexão WhatsApp ativa.',503)
       if((connections.data||[]).length!==1)return fail('CONNECTION_SELECTION_REQUIRED','É necessária uma única conexão WhatsApp ativa para cadastrar o contato.',409)
@@ -608,7 +606,9 @@ const handleRequest = async (request: Request, requestId: string) => {
       return json({ok:true,data:{connection}})
     }
     if (operation === 'list_templates') {
-      const wabaId=text(Deno.env.get('WABA_ID'),80)
+      const scoped:any=await metaConfig(profile.organization_id,false)
+      if(scoped.error)return scoped.error
+      const wabaId=scoped.wabaId
       if(!wabaId||!/^\d+$/.test(wabaId))return fail('WABA_ID_INVALID','O WABA ID não foi configurado corretamente no backend.',503)
       const local=await client.from('whatsapp_message_templates').select('*').eq('organization_id',profile.organization_id).eq('waba_id',wabaId).order('name')
       if(local.error)return fail('TEMPLATE_STORAGE_READ_FAILED','Não foi possível ler os templates salvos.',500)
@@ -620,7 +620,9 @@ const handleRequest = async (request: Request, requestId: string) => {
     if(operation==='get_template_test_access'){
       const recipient=brazilianPhone(payload.recipient),templateName=text(payload.template_name,100),language=text(payload.language||'pt_BR',20)
       const authorizedPhone=brazilianPhone(Deno.env.get('WHATSAPP_TEMPLATE_TEST_PHONE')),configuredTemplate=text(Deno.env.get('WHATSAPP_TEMPLATE_TEST_NAME'),100)
-      const wabaId=text(Deno.env.get('WABA_ID'),80)
+      const scoped:any=await metaConfig(profile.organization_id,false)
+      if(scoped.error)return scoped.error
+      const wabaId=scoped.wabaId
       const stored=await client.from('whatsapp_message_templates').select('name,language,status,parameter_format,components,is_active').eq('organization_id',profile.organization_id).eq('waba_id',wabaId).eq('name',templateName).eq('language',language).maybeSingle()
       const authorizedRecipient=Boolean(recipient&&authorizedPhone&&recipient===authorizedPhone)
       const authorizedTemplate=Boolean(templateName&&configuredTemplate&&templateName===configuredTemplate)
@@ -899,15 +901,15 @@ const handleRequest = async (request: Request, requestId: string) => {
       const allowedModes=['minimal','body_single','body_multiple','header_text','url','copy_code','media']
       if(!allowedModes.includes(contractMode))return fail('INVALID_CONTRACT_MODE','Modo de envio do template inválido.',422)
       if(!validateTemplateComponents(components)&&Array.isArray(components)&&components.length)return fail('TEMPLATE_PARAMETERS_INVALID','Preencha todas as variáveis obrigatórias do template.',422)
-      const wabaId=text(Deno.env.get('WABA_ID'),80)
+      const templateConfig:any=await metaConfig(profile.organization_id,true)
+      if(templateConfig.error)return templateConfig.error
+      const wabaId=templateConfig.wabaId
       const stored=await client.from('whatsapp_message_templates').select('meta_template_id,name,language,status,components,is_active').eq('organization_id',profile.organization_id).eq('waba_id',wabaId).eq('name',templateName).eq('language',language).eq('status','APPROVED').eq('is_active',true).maybeSingle()
       if(stored.error||!stored.data)return fail('TEMPLATE_NOT_APPROVED','Este template não está aprovado e ativo para esta organização.',409)
       if(!templateInputsComplete(stored.data,Array.isArray(components)?components:[]))return fail('TEMPLATE_PARAMETERS_MISSING','Preencha todas as variáveis obrigatórias do template.',422)
       if(!serviceKey)return fail('SUPABASE_SERVICE_ROLE_KEY_MISSING','O histórico canônico não está configurado; nada foi enviado.',503)
       const admin=createClient(supabaseUrl,serviceKey,{auth:{persistSession:false}})
-      const phoneNumberId=text(Deno.env.get('PHONE_NUMBER_ID'),80)
-      let tenantConnectionQuery=admin.from('whatsapp_connections').select('id').eq('organization_id',profile.organization_id).in('status',['active','degraded'])
-      if(phoneNumberId)tenantConnectionQuery=tenantConnectionQuery.eq('phone_number_id',phoneNumberId)
+      let tenantConnectionQuery=admin.from('whatsapp_connections').select('id').eq('organization_id',profile.organization_id).in('status',['active','degraded']).eq('id',templateConfig.connectionId)
       const tenantConnections=await tenantConnectionQuery.order('updated_at',{ascending:false}).limit(2)
       if(tenantConnections.error||(tenantConnections.data||[]).length!==1)return fail('CONNECTION_SELECTION_REQUIRED','Não foi possível determinar a conexão WhatsApp desta organização.',409)
       const tenantConnectionId=tenantConnections.data![0].id
@@ -947,7 +949,7 @@ const handleRequest = async (request: Request, requestId: string) => {
           .update({status:'queued',error_code:null,error_message:null,failed_at:null})
           .eq('organization_id',profile.organization_id).eq('idempotency_key',idempotencyKey).is('provider_message_id',null)
 
-      const homologationConfig:any=await metaConfig(profile.organization_id,true)
+      const homologationConfig:any=templateConfig
       if(homologationConfig.error)return homologationConfig.error
       const homologationComponents=metaTemplateComponents(components)
       const homologationMetaPayload=buildTemplateMetaPayload(recipient,templateName,language,homologationComponents)
