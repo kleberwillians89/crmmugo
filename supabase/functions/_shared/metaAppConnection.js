@@ -41,6 +41,11 @@ export const resolveConnectionAccessToken = (connection, getEnv) => {
   if (reference === 'env://legacy-default' && !configuredAppId) {
     return safeEnv(getEnv, 'META_ACCESS_TOKEN')
   }
+  // Para o mesmo aplicativo atender varias empresas, cada conexao tem token independente.
+  const connectionId = String(connection?.id || '')
+  if (reference === `env://connection/${connectionId}` && /^[0-9a-f-]{36}$/i.test(connectionId)) {
+    return safeEnv(getEnv, `WHATSAPP_CONNECTION_${connectionId.replace(/-/g, '_').toUpperCase()}_ACCESS_TOKEN`)
+  }
   if (!configuredAppId || reference !== `env://meta-app-${configuredAppId}`) return ''
   const key = metaAppEnvName(configuredAppId, 'ACCESS_TOKEN')
   return key ? safeEnv(getEnv, key) : ''
