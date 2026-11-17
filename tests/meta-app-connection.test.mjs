@@ -37,6 +37,11 @@ assert.equal(resolveConnectionAccessToken(rooveConnection, getEnv), 'roove-token
 assert.equal(resolveConnectionAccessToken({...rooveConnection, credential_reference:'env://legacy-default'}, getEnv), '')
 assert.equal(resolveConnectionAccessToken({...rooveConnection, metadata:{}}, getEnv), '')
 assert.equal(resolveConnectionAccessToken({...rooveConnection, credential_reference:'env://meta-app-999'}, getEnv), '')
+const sharedAppConnection = { ...rooveConnection, id:'12345678-1234-4123-8123-123456789abc', credential_reference:'env://connection/12345678-1234-4123-8123-123456789abc' }
+env.set('WHATSAPP_CONNECTION_12345678_1234_4123_8123_123456789ABC_ACCESS_TOKEN', 'dedicated-client-token')
+assert.equal(resolveConnectionAccessToken(sharedAppConnection, getEnv),'dedicated-client-token')
+assert.equal(resolveConnectionAccessToken({...sharedAppConnection, id:'87654321-1234-4123-8123-123456789abc'}, getEnv),'')
+
 
 const fakeAdmin = {
   from(table) {
