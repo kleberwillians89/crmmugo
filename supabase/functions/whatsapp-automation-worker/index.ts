@@ -13,6 +13,7 @@
 //   MUGOZAP_API_URL, PANEL_API_KEY   — espelho opcional de handoff
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { resolveMetaTransportForConnection } from '../_shared/metaAppConnection.js'
 import {
   deadLetterDecision,
   deriveIdempotencyKey,
@@ -475,14 +476,6 @@ const handle = async (request: Request) => {
   const mugoZapUrl = text(Deno.env.get('MUGOZAP_API_URL'), 500).replace(/\/$/, '')
   const panelKey = Deno.env.get('PANEL_API_KEY') || ''
   const mugoZap: MugoZap | null = mugoZapUrl && panelKey ? { url: mugoZapUrl, key: panelKey } : null
-  const metaVersion = text(Deno.env.get('GRAPH_API_VERSION'), 20)
-  const metaPhoneNumberId = text(Deno.env.get('PHONE_NUMBER_ID'), 80)
-  const metaWabaId = text(Deno.env.get('WABA_ID'), 80)
-  const metaAccessToken = Deno.env.get('META_ACCESS_TOKEN') || ''
-  const meta: MetaTransport | null = /^v\d+\.\d+$/.test(metaVersion) && /^\d+$/.test(metaPhoneNumberId) && /^\d+$/.test(metaWabaId) && metaAccessToken
-    ? { version: metaVersion, phoneNumberId: metaPhoneNumberId, wabaId: metaWabaId, accessToken: metaAccessToken }
-    : null
-
   const body = await request.json().catch(() => ({}))
   const limit = Math.min(Math.max(Number(body?.limit) || 20, 1), 50)
 
@@ -499,6 +492,7 @@ const handle = async (request: Request) => {
   for (const event of events) {
     try {
       const context = await buildContext(admin, event.organization_id, event)
+      let meta: MetaTransport | null = await resolveMetaTransportForConnection(admin,event.organization_id,context.connection_id,(key: string)=>Deno.env.get(key))
       let flows: any[] = []
       if (event.event_type === 'automation_resume') {
         // Retomada de um `wait`: recarrega o run e continua do índice salvo.
@@ -517,6 +511,7 @@ const handle = async (request: Request) => {
               context.conversation = conversation
               context.conversation_id = conversation.id
               context.connection_id = conversation.connection_id
+              meta = await resolveMetaTransportForConnection(admin,run.organization_id,context.connection_id,(key: string)=>Deno.env.get(key))
               context.recipient = brazilianPhone(conversation.wa_id)
               const connection = await admin.from('whatsapp_connections').select('phone_number_id')
                 .eq('id', conversation.connection_id).eq('organization_id', run.organization_id).maybeSingle()
