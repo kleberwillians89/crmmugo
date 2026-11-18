@@ -25,7 +25,7 @@
     "test:operations": "node scripts/test-sprint14-1-operations.mjs",
     "test:intelligence-causal": "node scripts/test-intelligence-causal.mjs",
     "test:pulse": "node scripts/test-sprint15-pulse.mjs",
-    "test:whatsapp": "node scripts/test-whatsapp-stability.mjs",
+    "test:whatsapp": "node scripts/test-whatsapp-stability.mjs && node tests/meta-app-connection.test.mjs",
     "test:whatsapp-templates": "node scripts/test-whatsapp-templates.mjs && node tests/whatsapp-template-send-attempt.test.mjs",
     "test:whatsapp-incremental": "node scripts/test-whatsapp-incremental.mjs",
     "test:whatsapp-contextual-templates": "node scripts/test-whatsapp-contextual-templates.mjs",

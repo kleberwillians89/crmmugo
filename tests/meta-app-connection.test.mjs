@@ -25,6 +25,13 @@ assert.equal(roove.verifyToken, 'roove-verify')
 assert.notEqual(roove.appSecret, legacy.appSecret)
 assert.equal(metaAppEnvName('../a', 'APP_SECRET'), null)
 assert.equal(resolveWebhookApp(new URL('https://example.test/?meta_app_id=999'), getEnv), null)
+assert.equal(resolveWebhookApp(new URL('https://example.test/?meta_app_id='), getEnv), null)
+const onlyVerifyEnv = (key) => key === 'META_APP_1161210926623351_WEBHOOK_VERIFY_TOKEN' ? 'roove-verify' : undefined
+const verifyOnly = resolveWebhookApp(new URL('https://example.test/?meta_app_id=1161210926623351'), onlyVerifyEnv)
+assert.equal(verifyOnly.verifyToken, 'roove-verify')
+assert.equal(verifyOnly.appSecret, '')
+assert.equal(resolveWebhookApp(new URL('https://example.test/?meta_app_id=1161210926623351'), () => undefined), null)
+
 
 const legacyConnection = { id: 'legacy-id', organization_id: 'mugo', waba_id: '111', phone_number_id: '222', credential_reference: 'env://legacy-default', metadata: {}, graph_api_version: 'v23.0' }
 const rooveConnection = { id: 'roove-id', organization_id: 'roove', waba_id: '1491824329400600', phone_number_id: '1063683626819387', credential_reference: 'env://meta-app-1161210926623351', metadata: { meta_app_id: '1161210926623351' }, graph_api_version: 'v23.0' }
