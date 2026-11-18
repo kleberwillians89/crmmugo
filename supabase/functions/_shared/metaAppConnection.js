@@ -10,8 +10,10 @@ export const metaAppEnvName = (appId, suffix) => {
 }
 
 export const resolveWebhookApp = (url, getEnv) => {
-  const appId = url.searchParams.get('meta_app_id')
-  if (!appId) {
+  // Ausencia do seletor preserva o callback legado; seletor presente mas vazio
+  // deve falhar fechado, nunca cair silenciosamente na conexao da Mugo.
+  const hasAppSelector = url.searchParams.has('meta_app_id')
+  if (!hasAppSelector) {
     return {
       appId: null,
       appSecret: safeEnv(getEnv, 'META_APP_SECRET'),
@@ -19,13 +21,15 @@ export const resolveWebhookApp = (url, getEnv) => {
       legacy: true,
     }
   }
+  const appId = url.searchParams.get('meta_app_id') || ''
   const secretKey = metaAppEnvName(appId, 'APP_SECRET')
   const verifyKey = metaAppEnvName(appId, 'WEBHOOK_VERIFY_TOKEN')
   if (!secretKey || !verifyKey) return null
-  const appSecret = safeEnv(getEnv, secretKey)
+  // GET de verificacao exige apenas verify token. App Secret e obrigatorio
+  // para POST e e validado separadamente no handler antes de ler o payload.
   const verifyToken = safeEnv(getEnv, verifyKey)
-  if (!appSecret || !verifyToken) return null
-  return { appId, appSecret, verifyToken, legacy: false }
+  if (!verifyToken) return null
+  return { appId, appSecret: safeEnv(getEnv, secretKey), verifyToken, legacy: false }
 }
 
 export const connectionMatchesWebhookApp = (connection, app) => {
