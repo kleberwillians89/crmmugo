@@ -27,12 +27,23 @@ async function dispatchTeamWorker(){
   await fetch(`${url}/functions/v1/team-notification-worker`,{method:'POST',headers:{Authorization:`Bearer ${service}`,'Content-Type':'application/json','X-Team-Notification-Worker-Key':key},body:JSON.stringify({source:'commercial-handoff'}),signal:AbortSignal.timeout(8_000)}).catch(()=>null)
 }
 
+async function approvedTemplatesForConnection(admin:any,event:any){
+  const connection=await admin.from('whatsapp_connections').select('waba_id')
+    .eq('organization_id',event.organization_id).eq('id',event.connection_id).maybeSingle()
+  const wabaId=connection.data?.waba_id
+  if(connection.error||!wabaId)return []
+  const templates=await admin.from('whatsapp_message_templates').select('name,language,category')
+    .eq('organization_id',event.organization_id).eq('waba_id',wabaId)
+    .eq('status','APPROVED').eq('is_active',true).order('name').limit(60)
+  return templates.error?[]:(templates.data||[])
+}
+
 async function askAI(event:any,messages:any[],qualification:any,opportunity:any,client:any,settings:any,attendance:any){
   const schema:any={type:'object',additionalProperties:false,properties:{conversation_kind:{type:['string','null'],enum:[...COMMERCIAL_LEAD_KINDS,null]},intents:{type:'array',items:{type:'string',enum:COMMERCIAL_INTENTS}},response:{type:'string'},contact_updates:{type:'object',additionalProperties:false,properties:{company_name:{type:['string','null']},contact_name:{type:['string','null']},email:{type:['string','null']},contact_role:{type:['string','null']}},required:['company_name','contact_name','email','contact_role']},opportunity_updates:{type:'object',additionalProperties:false,properties:{stage:{type:['string','null']},main_problem:{type:['string','null']},timeline:{type:['string','null']},urgency:{type:['string','null']},budget:{type:['number','null']},estimated_value:{type:['number','null']},next_action:{type:['string','null']},next_action_at:{type:['string','null']},service_interests:{type:'array',items:{type:'string',enum:COMMERCIAL_INTENTS}}},required:['stage','main_problem','timeline','urgency','budget','estimated_value','next_action','next_action_at','service_interests']},qualification_updates:{type:'object',additionalProperties:false,properties:{current_situation:{type:['string','null']},main_problem:{type:['string','null']},objective:{type:['string','null']},urgency:{type:['string','null']},budget:{type:['number','null']},decision_maker:{type:['boolean','null']},timeline:{type:['string','null']},qualified:{type:'boolean'},needs_human:{type:'boolean'},next_action:{type:['string','null']},reasons:{type:'array',items:{type:'string'}},missing_fields:{type:'array',items:{type:'string'}}},required:['current_situation','main_problem','objective','urgency','budget','decision_maker','timeline','qualified','needs_human','next_action','reasons','missing_fields']},summary:{type:'string'},create_task:{type:'boolean'},task:{type:['object','null'],additionalProperties:false,properties:{title:{type:'string'},priority:{type:'string',enum:['low','medium','high','critical']},due_date:{type:['string','null']},notes:{type:['string','null']}},required:['title','priority','due_date','notes']},handoff:{type:'boolean'},handoff_reason:{type:['string','null']},confidence:{type:'number',minimum:0,maximum:1}},required:['conversation_kind','intents','response','contact_updates','opportunity_updates','qualification_updates','summary','create_task','task','handoff','handoff_reason','confidence']}
   schema.properties.understanding=UNDERSTANDING_SCHEMA
   schema.required.push("understanding")
-  const context={client:{company_name:client?.company_name||null,contact_name:client?.contact_name||null,contact_role:client?.contact_role||null},qualification:qualification||{},opportunity:opportunity||{},messages:messages.map(row=>({direction:row.direction,text:clean(row.text_content,1000),at:row.created_at})),authorized_pricing:settings.authorized_pricing||{}}
-  const system=`${CONVERSATION_PRINCIPLES}\n${COMMERCIAL_SYSTEM_PROMPT}\n${clean(settings.prompt_override,3000)}\nPreencha understanding com intenções abertas. Diferencie suporte/serviço ativo de compra nova antes de abrir oportunidade. Não afirme capacidade ou serviço sem fonte autorizada.\nSe a última mensagem do lead tiver várias linhas, ele mandou mensagens seguidas: responda tudo em UMA mensagem.\n\n${buildKnowledgePrompt(attendance.knowledge,settings,{ownerFirstName:attendance.ownerFirstName,operationalOpen:attendance.operationalOpen})}`
+  const context={client:{company_name:client?.company_name||null,contact_name:client?.contact_name||null,contact_role:client?.contact_role||null},qualification:qualification||{},opportunity:opportunity||{},messages:messages.map(row=>({direction:row.direction,text:clean(row.text_content,1000),at:row.created_at})),authorized_pricing:settings.authorized_pricing||{},approved_whatsapp_templates:attendance.approvedTemplates}
+  const system=`${CONVERSATION_PRINCIPLES}\n${COMMERCIAL_SYSTEM_PROMPT}\n${clean(settings.prompt_override,3000)}\nPreencha understanding com intenções abertas. Diferencie suporte/serviço ativo de compra nova antes de abrir oportunidade. Não afirme capacidade ou serviço sem fonte autorizada. Use o catálogo de modelos aprovados somente como referência interna. Não exponha nomes de modelos ao cliente nem diga que um modelo foi enviado.\nSe a última mensagem do lead tiver várias linhas, ele mandou mensagens seguidas: responda tudo em UMA mensagem.\n\n${buildKnowledgePrompt(attendance.knowledge,settings,{ownerFirstName:attendance.ownerFirstName,operationalOpen:attendance.operationalOpen})}`
   const user=JSON.stringify(conversationModelInput("external",{state:event.conversation_state,message:pendingInboundText(messages),history:context.messages,context:{...context,active_services:event.active_services||[]}}))
   let decoded
   try{
@@ -173,11 +184,12 @@ async function processEvent(admin:any,event:any){
     // No copiloto quem lê é a pessoa do time: não marcamos como lido nem mostramos "digitando…".
     if(aiMode==='controlled_auto')await markReadAndTyping(admin,event,true)
     await transcribePendingAudio(admin,event)
-    const [knowledgeResult,attendanceWindow]=await Promise.all([
+    const [knowledgeResult,attendanceWindow,approvedTemplates]=await Promise.all([
       admin.from('ai_knowledge_entries').select('category,title,content,active,sort_order').eq('organization_id',event.organization_id).eq('active',true).order('sort_order').limit(80),
       getOperationalWindow(admin,event.organization_id),
+      approvedTemplatesForConnection(admin,event),
     ])
-    const attendance={knowledge:knowledgeResult.error?[]:(knowledgeResult.data||[]),ownerFirstName:commercialOwnerName?commercialOwnerName.split(' ')[0]:null,operationalOpen:attendanceWindow.open}
+    const attendance={knowledge:knowledgeResult.error?[]:(knowledgeResult.data||[]),ownerFirstName:commercialOwnerName?commercialOwnerName.split(' ')[0]:null,operationalOpen:attendanceWindow.open,approvedTemplates}
     const finalize=(text:string)=>stripUnauthorizedLinks(text,{meetingLink:settingsResult.data.meeting_link,knowledge:attendance.knowledge})
     const history=await admin.from('whatsapp_messages').select('direction,text_content,created_at').eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).not('message_type','in','(unsupported,unknown)').order('created_at',{ascending:false}).limit(14)
     if(history.error)throw history.error
