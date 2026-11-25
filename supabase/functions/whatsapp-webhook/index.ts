@@ -478,6 +478,12 @@ const processInbound = async (admin: any, connection: any, value: any, message: 
     if (unread.error) throw unread.error
   }
 
+  // A Meta pode registrar mensagens sem conteúdo utilizável. Preserve o histórico sem acionar atendimento.
+  if (['unsupported', 'unknown'].includes(content.type)) {
+    await completeWebhookEvent(admin, ledger.id)
+    return true
+  }
+
   const pendingFollowUps = await admin.from('whatsapp_follow_ups').select('automation_run_id')
     .eq('conversation_id', conversationResult.data.id).in('status', ['scheduled', 'failed'])
   await admin.from('whatsapp_follow_ups').update({
