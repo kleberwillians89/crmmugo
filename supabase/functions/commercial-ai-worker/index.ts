@@ -140,6 +140,15 @@ async function processEvent(admin:any,event:any){
       return true
     }
 
+    if(event.message_id){
+      const source=await admin.from('whatsapp_messages').select('message_type')
+        .eq('id',event.message_id).eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).maybeSingle()
+      if(source.error)throw source.error
+      if(['unsupported','unknown'].includes(source.data?.message_type)){
+        await admin.from('commercial_ai_events').update({status:'skipped',decision:{reason:'unsupported_message'},processed_at:new Date().toISOString()}).eq('id',event.id).eq('organization_id',event.organization_id)
+        return true
+      }
+    }
     const conversation=conversationResult.data,contact=conversation.whatsapp_contacts
     if(!contact||contact.organization_id!==event.organization_id||contact.contact_type==='internal'||contact.team_member_id){
       await admin.from('commercial_ai_events').update({status:'skipped',decision:{reason:'identity_not_external'},processed_at:new Date().toISOString()}).eq('id',event.id).eq('organization_id',event.organization_id)
@@ -170,7 +179,7 @@ async function processEvent(admin:any,event:any){
     ])
     const attendance={knowledge:knowledgeResult.error?[]:(knowledgeResult.data||[]),ownerFirstName:commercialOwnerName?commercialOwnerName.split(' ')[0]:null,operationalOpen:attendanceWindow.open}
     const finalize=(text:string)=>stripUnauthorizedLinks(text,{meetingLink:settingsResult.data.meeting_link,knowledge:attendance.knowledge})
-    const history=await admin.from('whatsapp_messages').select('direction,text_content,created_at').eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).order('created_at',{ascending:false}).limit(14)
+    const history=await admin.from('whatsapp_messages').select('direction,text_content,created_at').eq('organization_id',event.organization_id).eq('conversation_id',event.conversation_id).not('message_type','in','(unsupported,unknown)').order('created_at',{ascending:false}).limit(14)
     if(history.error)throw history.error
     const messages=(history.data||[]).reverse(),inbound=messages.filter((row:any)=>row.direction==='in').at(-1)?.text_content||''
 
